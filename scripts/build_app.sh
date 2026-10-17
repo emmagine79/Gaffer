@@ -89,11 +89,16 @@ VERSION="$(plutil -extract CFBundleShortVersionString raw "$ROOT/mac/Info.plist"
 mkdir -p "$C/MacOS" "$C/Resources" "$DISCARD"
 
 say "Python $PY_VERSION (python-build-standalone via uv)"
-PY_SRC_BIN="$(uv python find --managed-python "$PY_VERSION" 2>/dev/null)" || {
-    uv python install "$PY_VERSION"
-    PY_SRC_BIN="$(uv python find --managed-python "$PY_VERSION")"
+# Run from inside a virtual environment (uv run, an activated venv) uv would pick that venv's
+# interpreter, which is a stub without the standard library. Ask for the managed install itself.
+uv_managed() { env -u VIRTUAL_ENV uv python "$@" --managed-python --no-project; }
+PY_SRC_BIN="$(uv_managed find "$PY_VERSION" 2>/dev/null)" || {
+    env -u VIRTUAL_ENV uv python install "$PY_VERSION"
+    PY_SRC_BIN="$(uv_managed find "$PY_VERSION")"
 }
 PY_SRC="$(cd "$(dirname "$PY_SRC_BIN")/.." && pwd -P)"
+[[ ! -e "$PY_SRC/pyvenv.cfg" && -f "$PY_SRC/lib/python3.14/LICENSE.txt" ]] || {
+    echo "build_app: $PY_SRC is not a full Python $PY_VERSION install" >&2; exit 1; }
 ditto --noextattr --noqtn "$PY_SRC" "$PYDIR"
 BUNDLED_PY="$PYDIR/bin/python3.14"
 
