@@ -103,6 +103,13 @@ describe('selection and ordering survive reconnects and quick input', () => {
     expect(kinds).toEqual(['set', 'power'])
   })
 
+  it('sends a waiting slider change before an effect is started, so the change cannot cancel it', () => {
+    useStudio.getState().apply({ brightness: 62 })
+    useStudio.getState().send({ type: 'engine.start', effect: 'breathe', params: {} })
+    const kinds = sent().filter((m) => m.type === 'set' || m.type === 'engine.start').map((m) => m.type)
+    expect(kinds).toEqual(['set', 'engine.start'])
+  })
+
   it('sends a waiting change to the light it was made on, even after switching', () => {
     useStudio.getState().apply({ brightness: 61 })
     useStudio.getState().select('fill')

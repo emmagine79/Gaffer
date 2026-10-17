@@ -79,6 +79,14 @@ The contract is in `service/gaffer/drivers/base.py`: `id`, `match(advert)`, `sta
 
 A light uses the driver its model's `driver` key names. If that driver is not installed, the light shows as unreachable and takes no commands. The same holds for a light whose model is not known and whose id is not shaped like a Godox radio id (four hex digits): it is never commanded as a Godox light. A Godox-shaped unknown id is commanded generically, as lumen does.
 
+### Effects in Glass
+
+Glass reads two lists and adds no route.
+
+- Built-in effects: `caps.effects` of the selected light, from its model file. Glass shows a "Built into the light" group only when the list is not empty. Running one is `set` with `{"mode": "fx", "fx": {"symbol": ..., "speed": ..., "params": {...}}}`.
+- Gaffer's own effects: lumen's registry (`hello.effects`), started with `engine.start` and stopped with `engine.stop`. They work on any light, because the engine fits each frame to what the light can show. Glass offers three: Breathe (`breathe`), Flicker (`candle`) and Colour cycle (`rainbow`, played as warmth on a light with white only). On a fixed-daylight light only those whose brightness moves are offered.
+- These run from the Mac: they stop if the Mac sleeps and may stutter over Bluetooth. Glass says so beside them.
+
 ### Light fields
 
 The light objects in `hello`, `lights` and `/api/export` gain:
