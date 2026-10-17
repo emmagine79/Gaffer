@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type MouseEvent } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { beamOf } from '../glass/describe'
 import { Footer } from '../glass/Footer'
 import { Glass } from '../glass/Glass'
@@ -41,21 +41,15 @@ export function Shell() {
 }
 
 function ViewSwitch({ view, onChange }: { view: View; onChange: (view: View) => void }) {
-  // A mouse or touch click hands focus back to the page, so Tab still flips the view afterwards
-  // (see desk/useTabKey.ts). Enter or Space on the focused button (detail 0) keeps focus on it.
-  const pick = (e: MouseEvent<HTMLButtonElement>, next: View) => {
-    if (e.detail > 0) e.currentTarget.blur()
-    onChange(next)
-  }
   return (
     <div className="g-switch" role="group" aria-label="View">
-      <button type="button" className={view === 'glass' ? 'sel' : ''} aria-pressed={view === 'glass'} onClick={(e) => pick(e, 'glass')}>
+      <button type="button" className={view === 'glass' ? 'sel' : ''} aria-pressed={view === 'glass'} onClick={() => onChange('glass')}>
         <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
           <circle cx="7" cy="7" r="5" /><path d="M7 2a5 5 0 0 1 0 10Z" fill="currentColor" />
         </svg>
         One light
       </button>
-      <button type="button" className={view === 'desk' ? 'sel' : ''} aria-pressed={view === 'desk'} onClick={(e) => pick(e, 'desk')}>
+      <button type="button" className={view === 'desk' ? 'sel' : ''} aria-pressed={view === 'desk'} onClick={() => onChange('desk')}>
         <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
           <path d="M3 2v10M7 2v10M11 2v10" /><path d="M1.5 8h3M5.5 5h3M9.5 9h3" strokeWidth="2.2" />
         </svg>

@@ -3,6 +3,7 @@ import { Slider } from '../components/Slider'
 import type { LightView } from '../lib/types'
 import { beamOf, modelLine, readout } from '../glass/describe'
 import { useStudio } from '../state/store'
+import { scaleLevels } from './levels'
 import { useDeskLooks } from './looks'
 import './desk.css'
 
@@ -17,7 +18,12 @@ const LONG_PRESS_MS = 500
 const LONG_PRESS_DRIFT = 10
 
 /** One drag of a grouped fader: every picked light's level when it began, and the newest level asked for. */
-interface Drag { start: Record<string, number>; level: number | null; frame: number }
+interface Drag { anchor: string; start: Record<string, number>; level: number | null; frame: number }
+
+const sendMany = (d: Drag) =>
+  useStudio.getState().send({
+    type: 'set.many', anchor: d.anchor, lights: Object.keys(d.start), start_levels: d.start, brightness: d.level,
+  })
 
 /**
  * The lighting desk (design/directions/b-desk.html): one strip per light, numbered looks.
@@ -70,7 +76,6 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
   const select = useStudio((s) => s.select)
   const applyTo = useStudio((s) => s.applyTo)
   const powerOf = useStudio((s) => s.powerOf)
-  const send = useStudio((s) => s.send)
   const showLevel = useStudio((s) => s.showLevel)
   const { state, caps } = light
   const shown = readout(state, caps)
@@ -84,11 +89,13 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
 
   useEffect(() => () => {
     if (press.current) window.clearTimeout(press.current.timer)
-    if (drag.current) cancelAnimationFrame(drag.current.frame)
+    // The strip is leaving (a view switch, a refreshed list): send the move still waiting for its frame.
+    const d = drag.current
+    if (d?.frame) {
+      cancelAnimationFrame(d.frame)
+      sendMany(d)
+    }
   }, [])
-
-  const sendMany = (d: Drag) =>
-    send({ type: 'set.many', anchor: light.id, lights: group, start_levels: d.start, brightness: d.level })
 
   // A drag begins with the first pointer-down or key press on the fader and lasts until the
   // pointer lifts or the fader loses focus. The service scales from the levels at its start.
@@ -96,7 +103,7 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
     if (drag.current || !grouped) return
     const now = useStudio.getState().lights
     const start = Object.fromEntries(group.map((id) => [id, now.find((l) => l.id === id)?.state.brightness ?? 0]))
-    drag.current = { start, level: null, frame: 0 }
+    drag.current = { anchor: light.id, start, level: null, frame: 0 }
   }
   const end = () => {
     const d = drag.current
@@ -106,7 +113,11 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
       cancelAnimationFrame(d.frame)
       sendMany(d)
     }
-    if (d.level !== null) showLevel(light.id, d.level)
+    if (d.level !== null) {
+      // Show every picked light where the service will put it, so a drag started at once reads these
+      // levels and not the stale ones the service has not answered for yet.
+      for (const [id, next] of Object.entries(scaleLevels(d.start, d.anchor, d.level))) showLevel(id, next)
+    }
     setHeld(null)
   }
 

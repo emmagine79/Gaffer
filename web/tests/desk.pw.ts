@@ -134,6 +134,60 @@ test('dragging up and straight back while the service is slow to answer still en
   await expect(fader(page, 'Key light')).toHaveAttribute('aria-valuenow', '20')
 })
 
+// Round 2, finding 3: grabbing a fader again before the service has answered must start from where the lights now are.
+test('a second drag started at once, with the service silent, keeps the balance', async ({ page }) => {
+  let slow = false
+  const held: (() => void)[] = []
+  await page.routeWebSocket(/\/ws/, (ws) => {
+    const server = ws.connectToServer()
+    server.onMessage((message) => {
+      if (slow) held.push(() => ws.send(message))
+      else ws.send(message)
+    })
+  })
+  await pickTrio(page, [20, 10, 30])
+  const at20 = await faderY(page, 20)
+  const at40 = await faderY(page, 40)
+  slow = true
+  await page.mouse.move(at20.x, at20.y)
+  await page.mouse.down()
+  await page.mouse.move(at40.x, at40.y, { steps: 10 })
+  await page.mouse.up()
+  await page.mouse.move(at40.x, at40.y)
+  await page.mouse.down()
+  await page.mouse.move(at20.x, at20.y, { steps: 10 })
+  await page.mouse.up()
+  await expect.poll(async () => (await trioLevels(page)).map((n) => Math.round(n * 100) / 100)).toEqual([20, 10, 30])
+  slow = false
+  held.splice(0).forEach((release) => release())
+})
+
+// Round 2, finding 4: the last move of a drag is not lost when the desk goes away before its frame runs.
+test('leaving the desk in the middle of a drag still sends the last move', async ({ page }) => {
+  await pickTrio(page, [20, 10, 30])
+  const at20 = await faderY(page, 20)
+  const at40 = await faderY(page, 40)
+  await page.evaluate(() => { window.requestAnimationFrame = () => 1 }) // no frame ever runs
+  await page.mouse.move(at20.x, at20.y)
+  await page.mouse.down()
+  await page.mouse.move(at40.x, at40.y, { steps: 5 })
+  // A click from code, so no pointer event ends the drag first.
+  await page.evaluate(() => (document.querySelector('.g-switch button') as HTMLElement).click())
+  await expect(desk(page)).toHaveCount(0)
+  await expect.poll(async () => (await trioLevels(page)).map((n) => Math.round(n * 100) / 100)).toEqual([40, 20, 60])
+  await page.mouse.up()
+})
+
+// Round 2, finding 6: after the mouse has used a slider, Tab flips the view, as it does from the bare page.
+test('Tab flips the view after the mouse has used a fader', async ({ page }) => {
+  await open(page, 'window')
+  await page.getByRole('button', { name: 'All lights' }).click()
+  const at = await faderY(page, 50)
+  await page.mouse.click(at.x, at.y)
+  await page.keyboard.press('Tab')
+  await expect(desk(page)).toHaveCount(0)
+})
+
 // Finding 3: Tab on a control moves focus; it only flips the view from the page itself.
 test('Tab on a fader moves focus to the next control and leaves the view alone', async ({ page }) => {
   await open(page, 'window')

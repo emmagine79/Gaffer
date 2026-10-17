@@ -7,6 +7,8 @@ import { useStudio } from '../state/store'
  * The rule, so that keyboard users are never stuck: Tab flips the view only while nothing
  * has focus (the page itself). Once focus is on any control, Tab moves focus as usual, and
  * so does Shift+Tab, which is also how a keyboard user gets into the controls from the page.
+ * A mouse or touch press on a slider or button hands focus back to the page when it lifts, so
+ * Tab flips the view for pointer users; focus given by the keyboard is left alone.
  * It stays out of the way while a sheet or the command palette is open.
  */
 export function useTabKey(toggle: () => void) {
@@ -22,7 +24,15 @@ export function useTabKey(toggle: () => void) {
       e.preventDefault()
       latest.current()
     }
+    const onLift = () => {
+      const focus = document.activeElement
+      if (focus instanceof HTMLElement && focus.matches('button, [role="slider"]')) focus.blur()
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('pointerup', onLift)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerup', onLift)
+    }
   }, [])
 }
