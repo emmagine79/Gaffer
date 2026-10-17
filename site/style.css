@@ -3,7 +3,8 @@
 @media (prefers-color-scheme:dark){:root{--ink:#f3eee6;--dim:rgba(243,238,230,.66);--faint:rgba(243,238,230,.12);--line:rgba(243,238,230,.16);--accent:#ffb06e;--ok:#7bd88f;--btn-bg:#f3eee6;--btn-ink:#1d1d20;
 --glass:rgba(30,30,33,.72);--bg:radial-gradient(900px 640px at 20% 0%,#41536b 0%,transparent 62%),radial-gradient(800px 600px at 90% 40%,#6a4a33 0%,transparent 60%),#1b1f26}}
 *{box-sizing:border-box;margin:0;padding:0}
-html{background:#1b1f26}
+html{background-color:#f4f1ec}
+@media (prefers-color-scheme:dark){html{background-color:#1b1f26}}
 body{min-height:100vh;font:17px/1.55 -apple-system,"SF Pro Text",system-ui,sans-serif;color:var(--ink);background:var(--bg);background-color:#f4f1ec;overflow-wrap:anywhere}
 @media (prefers-color-scheme:dark){body{background-color:#1b1f26}}
 main,header,footer{max-width:960px;margin:0 auto;padding:0 16px}
