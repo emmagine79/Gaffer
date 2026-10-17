@@ -181,3 +181,53 @@ def test_a_slow_max_mode_write_does_not_hold_up_the_next_command(tmp_path, monke
         first = _until(ws, lambda m: m.get("rid") in (1, 2))
         assert first["rid"] == 2, "the second command waited behind the slow Max Mode write"
         assert _until(ws, lambda m: m.get("rid") == 1)["type"] == "ack"
+
+
+def _answer(command: int, payload: bytes, sequence: int) -> bytes:
+    """A frame as the G200 sends it: direction 01 00, sequence, command, payload, CRC by binascii."""
+    import binascii
+    import struct
+
+    body = b"\x01\x00" + struct.pack("<HH", sequence, command) + payload
+    return b"\x24\x3c" + struct.pack("<H", len(body)) + body + struct.pack("<H", binascii.crc_hqx(body, 0))
+
+
+def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tmp_path, monkeypatch):
+    """Captain, 18 Oct: Gaffer at 26%, Max pressed on the G200 itself; Gaffer kept showing 26% and Max off."""
+    from gaffer import hub as hub_module
+
+    monkeypatch.setattr(demo, "PACE", 0.05)
+    monkeypatch.setattr(hub_module, "SETTLE_SECONDS", 0.0)
+    unit = {"max": False}
+
+    class G200(Wire):
+        """Answers Max Mode reads the way the real light did in the 18 Oct capture."""
+
+        async def open(self, address, on_notify, on_lost):
+            writes = self.writes
+
+            class AnsweringLink(Link):
+                async def write(self, data):
+                    writes.append(bytes(data))
+                    frame = zy.parse_frame(bytes(data))
+                    if frame.command == zy.Command.MAX_MODE and frame.payload == bytes.fromhex("03800000"):
+                        on_notify(_answer(zy.Command.MAX_MODE, bytes.fromhex("038000") + bytes([unit["max"]]), frame.sequence))
+
+            return AnsweringLink(writes)
+
+    wire = G200()
+    app = create_app(demo=True, data_dir=tmp_path)
+    app.state.hub.store.update_settings({"sync_interval": 0.05})
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 26}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 26, "Gaffer at 26%")
+
+        unit["max"] = True  # Captain holds MODE and CCT on the light
+        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 100
+
+        unit["max"] = False  # and switches it off again on the light
+        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is False, "Max Mode to show as off")

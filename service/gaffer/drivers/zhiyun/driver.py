@@ -27,6 +27,8 @@ log = logging.getLogger("gaffer.drivers.zhiyun")
 # Pacing from HA-Zhiyun-Light zhiyun_ble.py (_POWER_SETTLE_DELAY, _INIT_STEP_DELAY).
 POWER_SETTLE_SECONDS = 0.1
 HANDSHAKE_STEP_SECONDS = 0.1
+#: How long a Max Mode read waits for the light's answer; the hub's Godox record reads wait the same.
+MAX_MODE_READ_SECONDS = 3.0
 # Identify pulse: brightness values and the hold time for each. Our choice, in the plan (call 10).
 IDENTIFY_LEVELS = (100.0, 15.0, 100.0, 15.0)
 IDENTIFY_HOLD_SECONDS = 0.35
@@ -88,6 +90,10 @@ class _Light:
         self.lock = asyncio.Lock()
         self.task: asyncio.Task[None] | None = None
         self.reported: dict[str, Any] = {}
+        #: The answer a Max Mode read is waiting for.
+        self.max_reply: asyncio.Future[bool] | None = None
+        #: Counts Max Mode writes, so a read that was in flight across one is thrown away.
+        self.max_writes = 0
 
     @property
     def op(self) -> int:
@@ -242,8 +248,43 @@ class ZhiyunDriver(Driver):
             if want is None or not want.power or want.brightness <= 0:
                 raise ZhiyunError("light_off", "Switch the light on first.")
             await self._sync(st, want)  # a link that came back since the last send still needs power on
+            st.max_writes += 1
             await self._write(st, p.Command.MAX_MODE, p.encode_max_mode(on, st.op))
             st.sent.max_mode = on
+
+    async def read_max_mode(self, light: Any) -> bool | None:
+        """Ask a linked light whether Max Mode is on. None when it is not linked or did not answer.
+
+        The G200 never reports a press of its own buttons, so the hub asks (capture, 18 Oct 2026). Max
+        Mode switched on at the light lifts it to full brightness, so that counts as sent too.
+        """
+        st = self._lights.get(light.id)
+        if st is None or st.model.get("max_mode") is not True:
+            return None
+        async with st.lock:
+            if st.link is None or not st.link.connected:
+                return None  # never connect just to look
+            writes = st.max_writes
+            reply: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+            st.max_reply = reply
+            try:
+                await self._write(st, p.Command.MAX_MODE, p.encode_query())
+            except (ZhiyunError, LinkError):
+                st.max_reply = None
+                return None
+        try:  # wait outside the lock, so a slow answer never holds up a slider
+            on = await asyncio.wait_for(reply, MAX_MODE_READ_SECONDS)
+        except TimeoutError:
+            return None
+        finally:
+            if st.max_reply is reply:
+                st.max_reply = None
+        if writes != st.max_writes:
+            return None  # Gaffer switched it meanwhile; this answer may predate that
+        if on and not st.sent.max_mode:
+            st.sent.brightness = 100.0
+        st.sent.max_mode = on
+        return on
 
     def max_mode(self, light: Any) -> bool:
         """Max Mode as last set by this driver; off for a light it has not set, or after a power-off."""
@@ -419,6 +460,10 @@ class ZhiyunDriver(Driver):
             p.Command.SET_COLOR_TEMP: ("kelvin", p.decode_color_temp_response),
             p.Command.POWER_STATE: ("on", p.decode_power_response),
         }
+        if resp.command == p.Command.MAX_MODE and st.max_reply is not None and not st.max_reply.done():
+            on = p.decode_max_mode_response(resp.payload)
+            if on is not None:
+                st.max_reply.set_result(on)
         if resp.command in decoders:
             key, decode = decoders[resp.command]
             value = decode(resp.payload)
