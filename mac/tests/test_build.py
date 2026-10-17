@@ -46,7 +46,7 @@ def build(checkout: Path, dist: Path, tmp: Path, home: Path, **extra_env):
 
 
 def requirement(app: Path) -> str:
-    out = sh("codesign", "-d", "-r-", app).stderr  # also prints the app's path, which differs
+    out = sh("codesign", "-d", "-r-", app).stdout  # the requirement; the app's path goes to stderr
     return next(line for line in out.splitlines() if line.startswith("designated =>"))
 
 
