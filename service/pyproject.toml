@@ -1,0 +1,26 @@
+[project]
+name = "gaffer-service"
+version = "0.1.0"
+description = "Gaffer's light service: scans for studio lights over Bluetooth and serves the web interface"
+license = { text = "MIT" }
+requires-python = ">=3.14"
+dependencies = [
+    "bleak>=3.0.2",
+    "fastapi>=0.143.3",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "gaffer_service"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
