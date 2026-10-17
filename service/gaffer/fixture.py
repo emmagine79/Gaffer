@@ -48,6 +48,7 @@ class Fixture:
         self.adopting = True  # first contact this run: read the light before writing it
         self.request_at: dict[int, float] = {}
         self.stream_source: str | None = None
+        self.own_values = False  # a look's fade is running: group mirroring leaves this light alone (looks.py)
 
     @property
     def id(self) -> str:
@@ -66,6 +67,11 @@ class Fixture:
     def reachable(self) -> bool | None:
         """True when heard from lately, False when silent, None before the first word."""
         return self.driver.status(self.light)["reachable"]
+
+    @property
+    def held(self) -> bool:
+        """True when another controller (a phone app) holds this light's one connection."""
+        return bool(self.driver.status(self.light)["held"])
 
     def use_caps(self, caps: ModelCaps) -> None:
         """The model changed (recognised or picked): refit everything to it."""
@@ -86,6 +92,7 @@ class Fixture:
             "readback": self.readback,
             "device": self.device,
             "reachable": self.reachable,
+            "held": self.held,
         }
 
 

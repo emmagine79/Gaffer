@@ -408,6 +408,23 @@ async def _import(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]
     return {"type": "ack", "of": "lights.import", "light": light.id}
 
 
+@command("lights.add")
+async def _add(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    light = await hub.add_light(client, str(m.get("address") or ""), str(m.get("name") or ""), m.get("channel"))
+    return {"type": "ack", "of": "lights.add", "light": light.id}
+
+
+@command("lights.identify")
+async def _identify(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    light = str(m.get("light") or "")
+    return {"type": "ack", "of": "lights.identify", "light": light, "driver": await hub.identify(light)}
+
+
+@command("demo.held")
+async def _demo_held(hub: Hub, client: Client, m: dict[str, Any]) -> None:
+    hub.demo_hold(str(m.get("light") or ""), bool(m.get("held")))
+
+
 @command("lights.rename")
 async def _rename(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     hub.rename(str(m.get("light") or ""), str(m.get("name") or ""))
@@ -476,6 +493,8 @@ async def _upsert(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]
     collection = str(m.get("collection"))
     if collection not in COLLECTIONS:
         raise CommandError(f"no collection {collection!r}")
+    if collection == "looks":
+        raise CommandError("save looks with looks.save")  # they are checked, and the current look kept in step (looks.py)
     item = m.get("item")
     if not isinstance(item, dict) or not str(item.get("name", "")).strip():
         raise CommandError("items need a name")
@@ -491,6 +510,8 @@ async def _delete(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     collection = str(m.get("collection"))
     if collection not in COLLECTIONS:
         raise CommandError(f"no collection {collection!r}")
+    if collection == "looks":
+        raise CommandError("delete looks with looks.delete")
     hub.store.delete(collection, str(m.get("id")))
     hub._broadcast({"type": "store", "collection": collection, "items": hub.store.items(collection)})
 

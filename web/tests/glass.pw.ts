@@ -134,7 +134,7 @@ test('a light in gel or effect mode says so instead of showing a stale Kelvin nu
 test('the Add a light sheet shows a focus ring on its input', async ({ page }) => {
   await open(page, 'window', 1280)
   await page.getByRole('button', { name: '+ Add' }).click()
-  const input = page.locator('.addlight input.input')
+  const input = page.locator('.ad-sheet input.ad-input').first()
   await input.focus()
   await expect(input).toBeFocused()
   const ring = await input.evaluate((el) => {
@@ -151,7 +151,8 @@ test('AC3: the panel renders light and dark at 360, 390 and window width', async
   await page.goto(`${base()}/?surface=window`)
   const ids = Object.fromEntries((await lights(page)).map((l) => [l.name, l.id]))
   for (const name of ['Talking head', 'Product', 'Moody']) {
-    await command(page, { type: 'store.upsert', collection: 'scenes', item: { name }, light: ids['Key light'] })
+    const saved = await page.request.post(`${base()}/api/looks`, { data: { name, fade_seconds: 0.6 } })  // SPEC-010: the cards show looks
+    expect(saved.ok()).toBe(true)
   }
   const levels: [string, number, number][] = [['Key light', 40, 5600], ['Fill', 25, 4300], ['Hair light', 60, 3200]]
   for (const [name, brightness, kelvin] of levels) {

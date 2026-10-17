@@ -288,9 +288,9 @@ class LightLibrary:
 
     def add_paired(
         self, *, network_id: str, address: str, radio_id: str, node_address: int, num_elements: int,
-        device_key: str, name: str = "",
+        device_key: str, name: str = "", channel: int | None = None,
     ) -> SavedLight:
-        """Save a light this studio just paired."""
+        """Save a light this studio just paired, or (another brand's) just added, with its channel if it has one."""
         existing = self.by_address(address)
         light = SavedLight(
             id=existing.id if existing else uuid.uuid4().hex[:10],
@@ -299,7 +299,7 @@ class LightLibrary:
             node_address=node_address, num_elements=num_elements, device_key=device_key,
             model_source="advert" if radio_id else "unknown", added=time.time(),
             x=existing.x if existing else None, y=existing.y if existing else None,
-            channel=existing.channel if existing else None,
+            channel=channel if channel is not None else (existing.channel if existing else None),
         )
         self.save_light(light)
         self.set_active(light.id)
@@ -313,7 +313,9 @@ class LightLibrary:
         saved = self.by_address(nearby.address)
         radio_id = nearby.radio_id or (saved.radio_id if saved else "")
         caps = model_caps(radio_id)
-        if nearby.state == "unpaired":
+        if nearby.state == "new":
+            relation = "saved" if saved is not None else "new"  # another brand's light: nothing to pair
+        elif nearby.state == "unpaired":
             relation = "unpaired"  # factory fresh, or a saved light that was reset
         elif saved is not None:
             relation = "saved"
@@ -325,4 +327,5 @@ class LightLibrary:
             "address": nearby.address, "name": nearby.name, "rssi": nearby.rssi, "radio_id": radio_id or None,
             "model": caps.name if caps.known else None, "kind": caps.kind if caps.known else None,
             "relation": relation, "light_id": saved.id if saved else None, "seen_at": nearby.seen_at,
+            "driver": caps.driver, "brand": caps.brand,
         }

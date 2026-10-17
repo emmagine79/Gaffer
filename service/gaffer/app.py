@@ -17,6 +17,7 @@ from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import looks
 from .commands import CommandError, dispatch
 from .guard import LOCAL_HOSTS, LOOPBACK, host_allowed, origin_allowed
 from .phone import PhoneAccess, phone_routes
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 #: Commands that can take seconds (a scan, a pairing, a move to another network).
 #: They run beside the socket's loop, so sliders keep working meanwhile, and
 #: answer by request id when they finish.
-LONG_RUNNING = frozenset({"lights.scan", "lights.pair", "lights.import", "select"})
+LONG_RUNNING = frozenset({"lights.scan", "lights.pair", "lights.import", "lights.identify", "select"})
 
 # The built web page. A built Gaffer.app carries it inside this package (scripts/build_app.sh
 # copies web/dist to gaffer/web); a source checkout serves web/dist from the repository root.
@@ -126,6 +127,12 @@ def create_app(
         # DNS rebinding: a foreign page reaching 127.0.0.1 still names its own host.
         if not host_allowed(request.headers.get("host"), allowed_now()):
             return PlainTextResponse("unknown host", status_code=421)
+        # Cross-site request forgery: SameSite does not tell one localhost port from another, so a
+        # page on another port could send our cookie with a POST. Browsers always send Origin on those;
+        # the Mac shell's URLSession sends none, so a missing Origin is let through (as /ws does).
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not origin_allowed(
+                request.headers.get("origin"), request.headers.get("host"), allowed):
+            return _error(403, "origin_not_allowed", "That page may not change Gaffer's lights.")
         return await call_next(request)
 
     @app.get("/api/health")
@@ -147,6 +154,40 @@ def create_app(
     async def lights() -> dict[str, Any]:
         """Every saved light with its abilities and current state: what the page's hello carries."""
         return hub.lights_view()
+
+    @app.get("/api/looks")
+    async def list_looks() -> dict[str, Any]:
+        """Every look in slot order (slot 1 first). The Mac shortcuts pick the Nth entry."""
+        return {"looks": [looks.view(x) for x in looks.all_looks(hub)]}
+
+    @app.post("/api/looks")
+    async def save_look(request: Request) -> Any:
+        """Add a look, or replace the one with the same id. No ``lights`` on a new look saves what the lights do now."""
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            return _error(415, "json_required", "Send the look as JSON (Content-Type: application/json).")
+        try:
+            body = await request.json()
+        except ValueError:
+            return _error(400, "body_not_json", "Send the look as JSON.")
+        try:
+            return {"ok": True, "look": looks.view(looks.save(hub, body))}
+        except CommandError as err:
+            return _error(400, "look_not_valid", str(err))
+
+    @app.post("/api/looks/{look_id}/apply")
+    async def apply_look(look_id: str) -> Any:
+        try:
+            done = looks.apply(hub, look_id)
+        except looks.LookNotFound as err:
+            return _error(404, "look_not_found", str(err))
+        except CommandError as err:
+            return _error(409, "look_has_no_lights", str(err))
+        return {"ok": True, "look": {"id": done["id"], "name": done["name"]}, "skipped": done["skipped"]}
+
+    @app.post("/api/all-off")
+    async def all_off() -> dict[str, Any]:
+        """Every light off at once (the Mac shortcut Ctrl-Option-0). ``skipped`` names lights that could not be reached."""
+        return {"ok": True, "skipped": await looks.all_off(hub)}
 
     @app.get("/api/bluetooth")
     async def bluetooth() -> dict[str, Any]:
@@ -223,6 +264,8 @@ def create_app(
         # update queued ahead of it would otherwise be overwritten by the older
         # snapshot inside the hello.
         await ws.send_text(json.dumps(hub.hello(client), separators=(",", ":")))
+        # The Mac menu bar ignores hello and reads this frame instead: the current look, as the socket opens.
+        client.push(looks.frame(hub))
         hub.clients.add(client)
 
         async def writer() -> None:

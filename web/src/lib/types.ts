@@ -81,6 +81,9 @@ export interface Caps {
   brightness_steps: number
   note: string
   known: boolean
+  /** Which driver commands this model, and what its maker is called ("Zhiyun"). */
+  driver: string
+  brand: string
   kind: LightKind
   kind_label: string
   features: Features
@@ -189,12 +192,15 @@ export interface LightView {
   readback: Readback
   device: Device
   reachable: boolean | null
+  /** Another controller (the brand's own app) holds this light's one connection. */
+  held: boolean
   online: boolean
 }
 
 export interface ModelRow { radio_id: string; name: string; kind: LightKind; kind_label: string }
 
-export type Relation = 'saved' | 'unpaired' | 'your-network' | 'elsewhere'
+/** `new` is a light of a brand with nothing to pair (Zhiyun, Yongnuo) that is not saved yet. */
+export type Relation = 'saved' | 'unpaired' | 'your-network' | 'elsewhere' | 'new'
 
 export interface Nearby {
   address: string
@@ -206,6 +212,10 @@ export interface Nearby {
   relation: Relation
   light_id: string | null
   seen_at: number
+  driver: string
+  brand: string
+  /** Adding it needs a channel (Yongnuo). Only set on `new` lights. */
+  needs_channel?: boolean
 }
 
 export interface Pairing { address: string; step: 'starting' | 'provisioning' | 'binding' | 'bound' | 'done' | 'failed'; error: string; at: number }
@@ -213,6 +223,8 @@ export interface Pairing { address: string; step: 'starting' | 'provisioning' | 
 export interface StoredItem { id: string; name: string; created?: number; updated?: number; [key: string]: unknown }
 
 export interface Scene extends StoredItem { state?: LightState; effect?: string; params?: Record<string, unknown> }
+/** A saved look (SPEC-010): a patch for each of several lights, and its own fade in seconds. */
+export interface Look extends StoredItem { fade_seconds: number; lights: Record<string, StatePatch> }
 export interface Preset extends StoredItem { effect: string; params: Record<string, unknown> }
 export interface Keyframe { t: number; state: StatePatch; ease: string }
 export interface Timeline extends StoredItem { keyframes: Keyframe[]; loop: boolean; duration: number }
@@ -234,9 +246,10 @@ export interface StoreSnapshot {
   timelines: Timeline[]
   schedules: Schedule[]
   swatches: Swatch[]
+  looks?: Look[]
 }
 
-export type Collection = 'scenes' | 'presets' | 'timelines' | 'schedules' | 'swatches'
+export type Collection = 'scenes' | 'presets' | 'timelines' | 'schedules' | 'swatches' | 'looks'
 
 export interface LogEntry { t: number; kind: string; text: string }
 
@@ -259,6 +272,9 @@ export interface Hello extends LightsView {
   nearby: Nearby[]
   scanning: boolean
   pairing: Pairing | null
+  /** The look on now: its name and id, or null (SPEC-010). */
+  look?: string | null
+  look_id?: string | null
 }
 
 export type ServerMessage =
@@ -269,11 +285,12 @@ export type ServerMessage =
   | { type: 'readback'; light: string; readback: Readback }
   | { type: 'heartbeat'; light: string; at: number }
   | { type: 'engine'; light: string; engine: EngineStatus }
-  | { type: 'stats'; stats: { pump: PumpStats; link: LinkSnapshot; clients: number }; reachable: Record<string, boolean | null> }
+  | { type: 'stats'; stats: { pump: PumpStats; link: LinkSnapshot; clients: number }; reachable: Record<string, boolean | null>; held?: Record<string, boolean> }
   | { type: 'log'; entry: LogEntry }
   | { type: 'toast'; kind: string; text: string }
   | { type: 'device'; light: string; device: Device }
   | { type: 'settings'; settings: Settings }
+  | { type: 'look'; id: string | null; name: string | null }
   | { type: 'store'; collection: Collection; items: StoredItem[] }
   | { type: 'groups'; groups: Group[] }
   | { type: 'nearby'; nearby: Nearby[]; scanning: boolean }

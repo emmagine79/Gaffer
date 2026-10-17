@@ -47,7 +47,7 @@ Every saved light with its abilities and its current state: the same `lights`, `
 }
 ```
 
-- Each light is the object `hello` gives, with `online` (reachable or on the mesh). `state` has `power`, `brightness`, `mode` (`cct`, `hsi`, `rgbw`, `gel` or `fx`) and one object per mode. `caps.features` does not change its keys.
+- Each light is the object `hello` gives, with `online` (reachable or on the mesh) and `held` (true while another controller, such as the brand's own phone app, holds the light's one connection; from the light's driver `status`). The Glass footer reads `held` and `caps.brand` to say, for example, "Wand is held by the Yongnuo app". Only a driver that can tell reports it: Yongnuo does (a refused connection), the demo stand-in does on `demo.held`, and Zhiyun always reports `false` until a live check shows how a held Zhiyun light behaves. The WebSocket `stats` message carries a `held` map (light id to boolean) beside `reachable`, so the page learns of a change within a second. `state` has `power`, `brightness`, `mode` (`cct`, `hsi`, `rgbw`, `gel` or `fx`) and one object per mode. `caps.features` does not change its keys.
 - `gel_tables` is keyed by the gel table a light uses (its `gel_key`). `network` is the mesh network name, a string, or `null` when no light is saved or the link is dropped.
 
 ### Model files
@@ -93,6 +93,17 @@ The light objects in `hello`, `lights` and `/api/export` gain:
 
 - `channel`: integer or null. The radio channel a light is set to, for brands that need one told to them (Yongnuo). Saved with the light.
 - `caps.driver`, `caps.brand`, `caps.match`, `caps.driver_data`.
+
+### Adding a light
+
+Drivers add two optional methods to the contract: `needs_channel(caps)` (true for a model whose lights must be told a radio channel when added; Yongnuo) and `check_channel(channel)` (the channel as the driver sends it, or a plain-words `ValueError`).
+
+WebSocket commands (the page sends them; each takes `rid` and is answered by an `ack` or an `error` with the same `rid`):
+
+- `lights.scan` listens for lights of every brand. Godox adverts are read as before; any other advert is offered to each driver's `match`, and the first model it names is listed by that model's name. A light is listed again only when its name or model changes, not on every advert. The `nearby` list (in the `ack`, the `nearby` message and `hello`) gains `driver`, `brand` and `needs_channel` (true only for a `new` light whose driver needs a channel; it turns false once the light is saved), and `relation` gains `new`: a light of a brand with nothing to pair, found by the scan and not yet saved. A `new` light that is already saved shows as `saved`.
+- `lights.add {address, name?, channel?}` saves a `new` light the last scan found. It answers `{type: "ack", of: "lights.add", light: <id>}`. It is refused, and nothing is saved, when the address is not a `new` light from the last scan, or when the model's driver needs a channel and `channel` is missing or not valid for that driver (Yongnuo: a whole number from 0 to 255). A second request for an address already added is refused. A Godox light is not added this way; it pairs with `lights.pair`.
+- `lights.identify {light}` flashes the light through its own driver (a brightness pulse, then the light is put back) and answers `{type: "ack", of: "lights.identify", light, driver}` when the pulse ends. It is long-running (the socket stays usable). The running effect on the light ends first, and the light goes back to the state the studio holds for it. A second request for a light already flashing returns at once. A driver that has not finished in 30 seconds is stopped, with an `error` that says the light did not answer.
+- `demo.held {light, held}` is for `--demo` only: it makes the demo stand-in driver report the light as held (or not). Outside the demo it is refused.
 
 ### Sync groups (WebSocket `/ws`)
 
@@ -145,9 +156,9 @@ never holds a path, a stack or a raw exception.
 
 | Method and path | Answer | Built by |
 |---|---|---|
-| `GET /api/looks` | `200 {"looks":[{"id":"talking-head","name":"Talking head"}, ...]}` in slot order. Slot 1 is the first entry. Empty list is valid. | SPEC-010 |
-| `POST /api/looks/{id}/apply` | `200 {"ok":true,"look":{"id":"...","name":"..."}}`. Unknown id: `404 {"error":"look_not_found"}`. No request body. `{id}` is percent-encoded. | SPEC-010 |
-| `POST /api/all-off` | `200 {"ok":true}`. Turns every light off. | No card yet. SPEC-010 puts All off on the page but does not name this route. |
+| `GET /api/looks` | Every look in slot order. Slot 1 is the first entry. Empty list is valid. Shape and errors: "Looks (SPEC-010)" below. | SPEC-010 |
+| `POST /api/looks/{id}/apply` | Applies the look. No request body. `{id}` is percent-encoded. Shape and errors: "Looks (SPEC-010)" below. | SPEC-010 |
+| `POST /api/all-off` | Turns every light off. Shape: "Looks (SPEC-010)" below. | SPEC-010 |
 | `POST /api/cues/active/go` | `200 {"ok":true,"look":{"id":"...","name":"..."}}` after stepping to the next look. No active cue list: `409 {"error":"no_active_cue"}`. | SPEC-014. Its card names `POST /api/cues/{id}/go`, so that route must also accept the id `active`. |
 
 If a route answers with an error, a shortcut press beeps once and the shell shows the
@@ -231,3 +242,38 @@ Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request 
 - A phone that is signed out (New PIN, or access switched off) has its socket closed with code 4401. The page then asks `GET /api/session` again and shows the PIN screen (or "Phone access is off").
 - The network listener takes IPv6 and IPv4 together (`::`, dual-stack), and falls back to IPv4 alone on a Mac with no IPv6.
 - Tailscale addresses come from `tailscale status --json` (`Self.TailscaleIPs`, `Self.DNSName`), found on `PATH` or in `/Applications/Tailscale.app`.
+
+## Looks (SPEC-010)
+
+A look is `{"id", "name", "fade_seconds", "lights": {"<light id>": <state patch>}}`. It is saved in the `looks` collection, so it is also in `hello.store.looks` and in `store` messages. The order of the list is the slot order: slot 1 is the first look, and keys 1 to 9 and the Mac shortcuts use it. `lights` holds one state patch per light, in the same shape `set` takes, so a look made on one model is fitted to the light it is applied to.
+
+Applying a look runs every light in it. A fade of `0` sets each light at once. Any other fade starts a transition of that many seconds on each light, ending on the look's values. The service works out every light's values first and starts the lights only after that, so one light that cannot be worked out never leaves the others half moved (a driver error while a light starts is not rolled back). Each light gets its own values, also when it is in a group: a look does not mirror one light onto another. A light the look names that is no longer saved, is not on the network the service is connected to, or whose values cannot be worked out is left alone and named in `skipped`; the others still move.
+
+| Method and path | Answer |
+| --- | --- |
+| `GET /api/looks` | `200 {"looks":[{"id","name","fade_seconds","lights"}, ...]}` in slot order. |
+| `POST /api/looks` | Body `{"name", "fade_seconds"?, "lights"?, "id"?, "capture"?}`. `200 {"ok":true,"look":{...}}`. A new look with no `lights` saves what every light is doing now. An `id` that exists replaces that look; leaving out `lights` then keeps its lights, and `"capture": true` replaces them with what the lights do now. Without an `id` one is made from the name. Refused with `400 {"error":"look_not_valid"}` (no name, a name over 80 characters or with control characters, a fade outside 0 to 60 seconds, an id with other characters than `A-Z a-z 0-9 _ -`, a light that is not saved, a patch the light cannot take) or `400 {"error":"body_not_json"}`. A refused save changes nothing. |
+| `POST /api/looks/{id}/apply` | `200 {"ok":true,"look":{"id","name"},"skipped":[<light ids>]}`. Unknown id: `404 {"error":"look_not_found"}`. None of its lights could move (saved, on the network and able to take their patch): `409 {"error":"look_has_no_lights"}`. |
+| `POST /api/all-off` | `200 {"ok":true,"skipped":[<light ids>]}`. Every light off at once. `skipped` names the lights that are not on the network: they are left as they were. No look is current afterwards, unless a skipped light is on: then the current look stays, because not every light is off. |
+
+The Mac shell calls the first, third and fourth (`ServiceClient.swift`, SPEC-016). It reads `id` and `name` of each look and sends the id percent-encoded as one path segment.
+
+WebSocket messages from the page:
+
+- `{"type":"looks.apply","id"}`: apply. Answers `{"type":"ack","of":"looks.apply","id","name","skipped"}`.
+- `{"type":"looks.save","look":{...}}`: the same body as `POST /api/looks`. Answers `{"type":"ack","of":"looks.save","look":{...}}`.
+- `{"type":"looks.delete","id"}`: delete. Deleting the current look makes no look current.
+- `{"type":"all.off"}`: all off. Answers `{"type":"ack","of":"all.off","skipped":[<light ids>]}`. The page shows a toast naming the `skipped` lights, which stayed on. The Mac shell's `POST /api/all-off` call reads the same `skipped` in the reply body but does not show it yet.
+- `store.upsert`, `store.delete` refuse the `looks` collection; use the messages above.
+
+WebSocket messages to every client:
+
+- `{"type":"look","id","name"}`: the current look. `id` and `name` are `null` when no look is on (the start, after All off, after the current look is deleted). It is sent once as the socket opens, straight after `hello`, and again each time the current look changes, including when it is renamed. The Mac shell ignores `hello` and reads this message.
+- `hello` carries `look` (the name or `null`) and `look_id`.
+- `{"type":"store","collection":"looks","items":[...]}` after every save or delete.
+
+The current look is the one last applied. It is held in memory: after a restart no look is current until one is applied.
+
+`GET /?surface=menubar|window|bare` is the page for each surface. The service serves the same page for all three; the page reads `surface` itself (`web/src/app/surface.ts`). Only `window` shows the look editor.
+
+Every HTTP request that is not a GET, HEAD or OPTIONS is refused with `403 {"error":"origin_not_allowed"}` when it carries an `Origin` header that is not the service's own origin (same check as `/ws`), because `SameSite` does not separate localhost ports. A request with no `Origin` (the Mac shell) is allowed. `POST /api/looks` also needs `Content-Type: application/json` (`415 json_required` otherwise).

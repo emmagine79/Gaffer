@@ -180,7 +180,7 @@ class _Scanner:
     def __init__(self, *nearby):
         self.devices, self.busy, self._nearby = {}, False, nearby
 
-    async def scan(self, seconds, on_found=None):
+    async def scan(self, seconds, on_found=None, on_other=None):
         for seen in self._nearby:
             on_found(seen)
         return list(self._nearby)

@@ -38,7 +38,8 @@ DEMO_MODELS: dict[str, dict[str, Any]] = {
     },
     "YN-DEMO": {
         "name": "YN150Li (demo)", "chip": "", "min_kelvin": 3200, "max_kelvin": 5600, "modes": ["cct"],
-        "driver": "demo", "brand": "Yongnuo", "match": {"name_prefix": "YN"}, "driver_data": {}, "demo": True,
+        "driver": "demo", "brand": "Yongnuo", "match": {"name_prefix": "YN"}, "driver_data": {"needs_channel": True},
+        "demo": True,
     },
 }
 #: Demo lights of the other two brands: (name, model id, Bluetooth address, x, y, channel).
@@ -46,9 +47,12 @@ DEMO_OTHER_LIGHTS: tuple[tuple[str, str, str, float, float, int | None], ...] = 
     ("Zhiyun panel", "ZY-DEMO", "DE:MO:00:00:00:21", 0.82, 0.62, None),
     ("Yongnuo wand", "YN-DEMO", "DE:MO:00:00:00:22", 0.40, 0.78, 1),
 )
-#: What a scan finds: a factory-fresh tube light, and a light on someone else's mesh.
+#: What a scan finds: a factory-fresh tube light, a light on someone else's mesh, and one new light of each
+#: other brand (state ``"new"``: not saved, nothing to pair). Their model ids are the demo stand-ins above.
 DEMO_NEARBY: tuple[Nearby, ...] = (
     Nearby("DE:MO:00:00:00:10", "GD_LED", -58, "unpaired", "0001"),   # TL60
+    Nearby("DE:MO:00:00:00:30", "PL109_DEMO", -63, "new", "ZY-DEMO"),
+    Nearby("DE:MO:00:00:00:31", "YN150_DEMO", -70, "new", "YN-DEMO"),
     Nearby("DE:MO:00:00:00:11", "GD_LED", -81, "mesh", "0066", "0000000000000000"),  # ML100Bi, elsewhere
 )
 
@@ -88,7 +92,8 @@ class DemoScanner:
         self.devices: dict[str, Any] = {}
         self.busy = False
 
-    async def scan(self, seconds: float, on_found: Callable[[Nearby], None] | None = None) -> list[Nearby]:
+    async def scan(self, seconds: float, on_found: Callable[[Nearby], None] | None = None,
+                   on_other: Callable[[Any, Any], None] | None = None) -> list[Nearby]:
         self.busy = True
         try:
             found = []

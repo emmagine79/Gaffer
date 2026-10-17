@@ -7,7 +7,7 @@ import { useStudio } from '../state/store'
 import { Effects } from '../effects/Effects'
 import { beamOf, heldBy, modelLine, readout, runningEffect, sentence } from './describe'
 import { Lamp } from './Lamp'
-import { LookCards } from './LookCards'
+import { LookCards } from '../looks/LookCards'
 
 /**
  * Glass: one light at a time (design/directions/a-glass.html, design/round4/d-switch.html).
