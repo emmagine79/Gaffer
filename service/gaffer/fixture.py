@@ -68,6 +68,11 @@ class Fixture:
         """True when heard from lately, False when silent, None before the first word."""
         return self.driver.status(self.light)["reachable"]
 
+    @property
+    def held(self) -> bool:
+        """True when another controller (a phone app) holds this light's one connection."""
+        return bool(self.driver.status(self.light)["held"])
+
     def use_caps(self, caps: ModelCaps) -> None:
         """The model changed (recognised or picked): refit everything to it."""
         self.caps = caps
@@ -87,6 +92,7 @@ class Fixture:
             "readback": self.readback,
             "device": self.device,
             "reachable": self.reachable,
+            "held": self.held,
         }
 
 

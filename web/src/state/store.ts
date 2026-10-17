@@ -433,8 +433,9 @@ function handle(m: ServerMessage) {
     case 'stats': {
       set({ pump: m.stats.pump, link: m.stats.link })
       const lights = useStudio.getState().lights
-      const changed = lights.some((l) => (m.reachable[l.id] ?? null) !== l.reachable)
-      if (changed) set((s) => withLights(s.selected, s.lights.map((l) => ({ ...l, reachable: m.reachable[l.id] ?? null }))))
+      const heldNow = (id: string) => m.held?.[id] ?? false
+      const changed = lights.some((l) => (m.reachable[l.id] ?? null) !== l.reachable || heldNow(l.id) !== l.held)
+      if (changed) set((s) => withLights(s.selected, s.lights.map((l) => ({ ...l, reachable: m.reachable[l.id] ?? null, held: heldNow(l.id) }))))
       break
     }
     case 'log':

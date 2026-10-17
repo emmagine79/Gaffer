@@ -408,6 +408,23 @@ async def _import(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]
     return {"type": "ack", "of": "lights.import", "light": light.id}
 
 
+@command("lights.add")
+async def _add(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    light = await hub.add_light(client, str(m.get("address") or ""), str(m.get("name") or ""), m.get("channel"))
+    return {"type": "ack", "of": "lights.add", "light": light.id}
+
+
+@command("lights.identify")
+async def _identify(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    light = str(m.get("light") or "")
+    return {"type": "ack", "of": "lights.identify", "light": light, "driver": await hub.identify(light)}
+
+
+@command("demo.held")
+async def _demo_held(hub: Hub, client: Client, m: dict[str, Any]) -> None:
+    hub.demo_hold(str(m.get("light") or ""), bool(m.get("held")))
+
+
 @command("lights.rename")
 async def _rename(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     hub.rename(str(m.get("light") or ""), str(m.get("name") or ""))
