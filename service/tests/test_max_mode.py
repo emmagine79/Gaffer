@@ -238,6 +238,7 @@ def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tm
         unit["max"] = True  # Captain holds MODE and CCT on the light
         _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
         assert _light(client, "Zhiyun panel")["state"]["brightness"] == 100
+        assert _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 4300  # the light's own Max Mode kelvin
 
         # The link drops and comes back: Gaffer re-sends what it wants, which must be 100, not the old 26.
         before = len(wire.writes)
@@ -392,6 +393,8 @@ def test_max_on_from_gaffer_keeps_gaffers_colour_temperature_over_the_lights_430
         cct_at = max(i for i, w in enumerate(wire.writes[before:]) if zy.parse_frame(w).command == zy.Command.SET_COLOR_TEMP)
         assert cct_at > max_at  # after the light's own 4300 K, not before it
 
+        ws.send_json({"type": "set", "light": light, "patch": {"cct": {"kelvin": 6500}}})  # changed while in Max
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 6500, "Gaffer at 6500 K")
         assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
         state = _light(client, "Zhiyun panel")["state"]
-        assert (state["brightness"], state["cct"]["kelvin"]) == (51, 5700)
+        assert (state["brightness"], state["cct"]["kelvin"]) == (51, 6500)  # back to 51%; the new kelvin stays

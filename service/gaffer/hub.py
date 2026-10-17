@@ -998,10 +998,11 @@ class Hub:
             if fixture.state is asked:  # never over a level set while the write was on its way
                 self._max_mode_came_on(fixture, "app", keep_kelvin=True)
             else:
-                fixture.before_max = (fixture.state.brightness, fixture.state.cct.kelvin)  # the newest level
+                fixture.before_max = (fixture.state.brightness, None)  # the newest level; Gaffer keeps its kelvin
         elif not on and was_on and fixture.before_max is not None:
             (brightness, kelvin), fixture.before_max = fixture.before_max, None
             state = fixture.state
+            kelvin = state.cct.kelvin if kelvin is None else kelvin  # a kelvin set during Max Mode stays
             self.set_state(fixture, state.model_copy(
                 update={"brightness": brightness, "cct": state.cct.model_copy(update={"kelvin": kelvin})}), "app")
         self._broadcast_lights()
@@ -1016,7 +1017,7 @@ class Hub:
         that is Gaffer's own colour temperature, sent straight back over the light's 4300 K (Captain, 18 Oct).
         """
         state = fixture.state
-        fixture.before_max = (state.brightness, state.cct.kelvin)
+        fixture.before_max = (state.brightness, None if keep_kelvin else state.cct.kelvin)
         update: dict[str, Any] = {"brightness": 100.0}
         if fixture.caps.max_mode_kelvin is not None and not keep_kelvin:
             update["cct"] = state.cct.model_copy(update={"kelvin": fixture.caps.max_mode_kelvin})
