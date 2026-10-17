@@ -215,6 +215,47 @@ def test_only_gaffers_own_window_can_use_the_service(gaffer):
     assert status == 401 and body["error"] == "link_not_valid"
 
 
+def cpu_seconds(pid):
+    """CPU time a process has used so far, from ps ([[dd-]hh:]mm:ss.cc)."""
+    total = 0.0
+    for part in run("ps", "-o", "time=", "-p", str(pid)).strip().replace("-", ":").split(":"):
+        total = total * 60 + float(part)
+    return total
+
+
+def test_gaffer_stays_idle_after_its_service_stops(tmp_path):
+    """Regression (verifier, 18 Oct 2026): once the service had gone, Gaffer's stdout
+    handler fired again and again at end of file and kept about 2.8 cores busy.
+
+    Runs the real Gaffer binary from a copy of the bundle whose Python is a stand-in
+    that announces a port and exits. The stand-in never touches Bluetooth, so macOS
+    shows no permission prompt.
+    """
+    app = tmp_path / "Gaffer.app"
+    subprocess.run(["ditto", str(BUILT_APP), str(app)], check=True)
+    resources = app / "Contents/Resources"
+    (resources / "python/bin/python3.14").write_text(
+        "#!/bin/sh\nread secret\necho GAFFER_SERVICE_READY port=9\n: > stand-in-ran\n")
+    subprocess.run(["open", "-n", "-g", str(app)], check=True)
+    pattern = re.escape(f"{tmp_path.name}/Gaffer.app/Contents/MacOS/Gaffer")
+    gaffer = wait_for(lambda: (lambda found: found[0] if len(found) == 1 else None)(pids_matching(pattern)),
+                      "Gaffer to start")
+    try:
+        wait_for(lambda: (resources / "stand-in-ran").exists() and not run("pgrep", "-P", str(gaffer)).strip(),
+                 "the stand-in service to exit")
+        before, start = cpu_seconds(gaffer), time.monotonic()
+        # The fault spun from the moment the service went, so any window shows it; 2 s
+        # gives ps (10 ms resolution) a clear reading.
+        time.sleep(2)
+        used, elapsed = cpu_seconds(gaffer) - before, time.monotonic() - start
+        assert alive(gaffer), "Gaffer should stay open and say its service stopped"
+        # A spinning thread uses a whole core, so less than one core on average means none spins.
+        assert used < elapsed, f"Gaffer used {used:.2f} s of CPU in {elapsed:.2f} s after its service stopped"
+    finally:
+        if alive(gaffer):
+            os.kill(gaffer, signal.SIGKILL)
+
+
 @pytest.mark.parametrize("how", ["quit", "SIGINT", "SIGTERM", "SIGKILL"])
 def test_quitting_gaffer_leaves_no_service(tmp_path, how):
     """Criterion 4: however Gaffer ends, its Python service ends too."""

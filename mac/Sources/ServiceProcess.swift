@@ -55,6 +55,12 @@ final class ServiceProcess {
 
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
+            guard !chunk.isEmpty else {
+                // End of file: the service has gone. Without this the handler fires
+                // again at once, forever, and Gaffer keeps several cores busy.
+                handle.readabilityHandler = nil
+                return
+            }
             DispatchQueue.main.async { self?.consume(chunk) }
         }
         process.terminationHandler = { [weak self] proc in
