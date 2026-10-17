@@ -1,8 +1,8 @@
-"""Where Lumen Studio keeps its files.
+"""Where Gaffer keeps its files.
 
 Mesh keys are live crypto material and scenes are personal, so neither lives
 in the source tree: they go in the platform's per-user data folder, or wherever
-``LUMEN_HOME`` points. The catalogue data the code reads ships inside the
+``GAFFER_HOME`` points. The catalogue data the code reads ships inside the
 package.
 """
 
@@ -14,21 +14,21 @@ from pathlib import Path
 
 PACKAGE_DATA = Path(__file__).resolve().parent / "data"
 LOCK_FILE = "studio.lock"
-APP_DIR_NAME = "Lumen Studio"
+APP_DIR_NAME = "Gaffer"
 
 
 def data_home(env: dict[str, str] | None = None, platform: str | None = None) -> Path:
     """The per-user folder for keys, lights, scenes and settings."""
     env = dict(os.environ) if env is None else env
     platform = sys.platform if platform is None else platform
-    if env.get("LUMEN_HOME"):
-        return Path(env["LUMEN_HOME"]).expanduser()
+    if env.get("GAFFER_HOME"):
+        return Path(env["GAFFER_HOME"]).expanduser()
     home = Path(env.get("USERPROFILE") or env.get("HOME") or Path.home())
     if platform == "win32":
         return Path(env.get("APPDATA") or home / "AppData" / "Roaming") / APP_DIR_NAME
     if platform == "darwin":
         return home / "Library" / "Application Support" / APP_DIR_NAME
-    return Path(env.get("XDG_DATA_HOME") or home / ".local" / "share") / "lumen-studio"
+    return Path(env.get("XDG_DATA_HOME") or home / ".local" / "share") / "gaffer"
 
 
 class AlreadyRunning(RuntimeError):
@@ -56,7 +56,7 @@ def hold_data_folder(root: Path) -> object:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as err:
         handle.close()
-        raise AlreadyRunning(f"another Lumen Studio is already using {root}") from err
+        raise AlreadyRunning(f"another Gaffer is already using {root}") from err
     return handle
 
 

@@ -9,10 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from lumen_studio import demo
-from lumen_studio.app import create_app
-from lumen_studio.guard import LOCAL_HOSTS, hostname, origin_allowed
-from lumen_studio.store import Store
+from gaffer import demo
+from gaffer.app import create_app
+from gaffer.guard import LOCAL_HOSTS, hostname, origin_allowed
+from gaffer.store import Store
 
 # -- the rules ----------------------------------------------------------------------------
 

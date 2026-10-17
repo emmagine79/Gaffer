@@ -7,18 +7,21 @@ import json
 import logging
 import os
 import secrets
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from .commands import CommandError, dispatch
 from .guard import LOCAL_HOSTS, LOOPBACK, host_allowed, origin_allowed
 from .hub import Client, Hub
 from .lights import LightLibrary
+from .scan import DEFAULT_SCAN_SECONDS, MAX_SCAN_SECONDS, MIN_SCAN_SECONDS, DemoScanner as DemoAdvertScanner, Scanner as AdvertScanner
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -28,8 +31,35 @@ logger = logging.getLogger(__name__)
 #: answer by request id when they finish.
 LONG_RUNNING = frozenset({"lights.scan", "lights.pair", "lights.import", "select"})
 
+# The built web page. A built Gaffer.app carries it inside this package (scripts/build_app.sh
+# copies web/dist to gaffer/web); a source checkout serves web/dist from the repository root.
 STUDIO_ROOT = Path(__file__).resolve().parents[2]
-WEB_DIST = STUDIO_ROOT / "web" / "dist"
+_BUNDLED_WEB = Path(__file__).resolve().parent / "web"
+WEB_DIST = _BUNDLED_WEB if _BUNDLED_WEB.is_dir() else STUDIO_ROOT / "web" / "dist"
+
+# CBManagerAuthorization values (Apple CoreBluetooth): 0 not determined, 1 restricted, 2 denied, 3 allowed always.
+_PERMISSION = {0: "not_determined", 1: "restricted", 2: "denied", 3: "allowed"}
+
+# Plain-words answers for each way Bluetooth can be unavailable. Never include paths or raw errors.
+_BLUETOOTH_ERRORS = {
+    "DENIED_BY_USER": (403, "bluetooth_denied", "Gaffer isn't allowed to use Bluetooth. Turn it on in System Settings, Privacy & Security, Bluetooth."),
+    "DENIED_BY_SYSTEM": (403, "bluetooth_restricted", "Bluetooth is blocked on this Mac by a restriction. Ask whoever manages the Mac."),
+    "DENIED_BY_UNKNOWN": (403, "bluetooth_denied", "Gaffer isn't allowed to use Bluetooth. Turn it on in System Settings, Privacy & Security, Bluetooth."),
+    "POWERED_OFF": (503, "bluetooth_off", "Bluetooth is turned off. Turn it on in Control Centre and scan again."),
+    "NO_BLUETOOTH": (503, "no_bluetooth", "This Mac has no Bluetooth."),
+}
+_BLUETOOTH_UNAVAILABLE = (503, "bluetooth_unavailable", "Bluetooth isn't ready. Wait a moment and scan again.")
+
+
+def bluetooth_permission() -> str:
+    """Whether macOS lets this app use Bluetooth. Reading it never shows the prompt."""
+    from CoreBluetooth import CBManager
+
+    return _PERMISSION.get(int(CBManager.authorization()), "unknown")
+
+
+def _error(status: int, code: str, message: str) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": code, "message": message})
 
 
 def create_app(
@@ -41,8 +71,14 @@ def create_app(
     pairer: Any = None,
     fps: float = 60.0,
     hosts: tuple[str, ...] = (),
+    advert_scanner: Any = None,
+    on_shutdown: Callable[[], None] | None = None,
 ) -> FastAPI:
-    """The studio app. ``hosts`` adds names it may be reached by (the LAN address with --lan)."""
+    """The studio app. ``hosts`` adds names it may be reached by.
+
+    ``advert_scanner`` answers /api/scan (the Bluetooth scan that tags brand families); demo mode
+    uses canned adverts so it never starts a Bluetooth scan. ``on_shutdown`` runs when the app stops.
+    """
     allowed = LOCAL_HOSTS | frozenset(h.lower() for h in hosts)
     store = Store(data_dir)
     library = LightLibrary(data_dir)
@@ -52,6 +88,7 @@ def create_app(
         seed(library)
         scanner = scanner or DemoScanner()
     hub = Hub(store, library, demo=demo, scanner=scanner, pairer=pairer, fps=fps)
+    advert_scanner = advert_scanner or (DemoAdvertScanner() if demo else AdvertScanner())
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
@@ -60,8 +97,10 @@ def create_app(
             yield
         finally:
             await hub.stop()
+            if on_shutdown is not None:
+                on_shutdown()
 
-    app = FastAPI(title="Lumen Studio", lifespan=lifespan)
+    app = FastAPI(title="Gaffer light service", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.hub = hub
 
     def authorised(supplied: str | None) -> bool:
@@ -80,7 +119,36 @@ def create_app(
         if not local and not authorised(t):
             return JSONResponse({"error": "token required"}, status_code=401)
         return {"ok": True, "demo": demo, "link": hub.link.snapshot(), "lights": len(hub.fixtures),
-                "pid": os.getpid(), "app": "lumen-studio", "data": str(Path(data_dir).resolve())}
+                "pid": os.getpid(), "app": "gaffer", "service": "gaffer", "data": str(Path(data_dir).resolve())}
+
+    @app.get("/api/bluetooth")
+    async def bluetooth() -> dict[str, Any]:
+        return {"permission": bluetooth_permission()}
+
+    @app.get("/api/scan")
+    async def scan(seconds: float = Query(DEFAULT_SCAN_SECONDS)) -> Any:
+        """Listen for nearby lights and tag each one's brand family. Listens only; never connects."""
+        seconds = max(MIN_SCAN_SECONDS, min(MAX_SCAN_SECONDS, seconds))
+        from bleak.exc import BleakBluetoothNotAvailableError
+
+        try:
+            result = await advert_scanner.scan(seconds)
+        except BleakBluetoothNotAvailableError as err:
+            reason = getattr(getattr(err, "reason", None), "name", "")
+            logger.warning("bluetooth unavailable: %s (%r)", reason, err)
+            return _error(*_BLUETOOTH_ERRORS.get(reason, _BLUETOOTH_UNAVAILABLE))
+        except Exception:
+            logger.exception("scan failed")
+            return _error(500, "scan_failed", "The scan failed. Try again.")
+        result["permission"] = bluetooth_permission()
+        return result
+
+    scan_page = files("gaffer").joinpath("static/index.html").read_text(encoding="utf-8")
+
+    @app.get("/scan", response_class=HTMLResponse)
+    async def scan_proof_page() -> str:
+        """SPEC-001's Bluetooth proof page: lists what a scan hears."""
+        return scan_page
 
     @app.get("/api/export")
     async def export(t: str | None = None) -> JSONResponse:
@@ -144,8 +212,9 @@ def create_app(
                 reply = {"type": "error", "of": message.get("type") if isinstance(message, dict) else None,
                          "text": str(err) or type(err).__name__}
             except Exception as err:
+                # The page gets the error's kind, never its message: that can carry a path on this Mac.
                 logger.exception("command failed")
-                reply = {"type": "error", "text": f"{type(err).__name__}: {err}"}
+                reply = {"type": "error", "text": f"Something went wrong ({type(err).__name__}). Try again."}
             if reply is not None:
                 if isinstance(message, dict) and "rid" in message:
                     reply["rid"] = message["rid"]

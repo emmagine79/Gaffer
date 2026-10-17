@@ -57,7 +57,7 @@ export function GelsTab() {
         <div className="adapt-note">
           <Info size={16} />
           <p>
-            The <b>{caps?.name}</b> takes no gel commands over Bluetooth, so Lumen recreates each gel from its measured colour:
+            The <b>{caps?.name}</b> takes no gel commands over Bluetooth, so Gaffer recreates each gel from its measured colour:
             correction gels such as CTO, CTB and plus or minus green become the light's own white at the matching temperature
             {caps?.features.tint ? ' and tint' : ''}, and coloured gels become that colour.
           </p>

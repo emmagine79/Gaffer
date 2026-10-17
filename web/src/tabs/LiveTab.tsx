@@ -79,7 +79,7 @@ export function LiveTab() {
   const send = useStudio((s) => s.send)
   const upsert = useStudio((s) => s.upsert)
   const toast = useStudio((s) => s.toast)
-  const [subject, setSubject] = useState(() => localStorage.getItem('lumen.subject') ?? 'bookshelf')
+  const [subject, setSubject] = useState(() => localStorage.getItem('gaffer.subject') ?? 'bookshelf')
   const [fade, setFade] = useState(0.6)
   const [, tick] = useState(0)
   const recent = useHistory((s) => s.looks)
@@ -87,7 +87,7 @@ export function LiveTab() {
   const effects = useStudio((s) => s.effects)
 
   useEffect(() => {
-    try { localStorage.setItem('lumen.subject', subject) } catch { /* private mode */ }
+    try { localStorage.setItem('gaffer.subject', subject) } catch { /* private mode */ }
   }, [subject])
   useEffect(() => {
     const t = window.setInterval(() => tick((n) => n + 1), 1000)

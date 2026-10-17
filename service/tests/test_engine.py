@@ -7,12 +7,12 @@ import random
 import pytest
 from godox_mesh_bt.protocol import build_v2_command
 
-from lumen_studio.blend import blend
-from lumen_studio.catalog import model_caps
-from lumen_studio.effects import REGISTRY
-from lumen_studio.engine import Engine
-from lumen_studio.state import LightState, apply_patch
-from lumen_studio.sync import CctRecord, HsiRecord, SyncTracker, parse_onoff, parse_record
+from gaffer.blend import blend
+from gaffer.catalog import model_caps
+from gaffer.effects import REGISTRY
+from gaffer.engine import Engine
+from gaffer.state import LightState, apply_patch
+from gaffer.sync import CctRecord, HsiRecord, SyncTracker, parse_onoff, parse_record
 
 
 @pytest.fixture(scope="module")
@@ -111,8 +111,8 @@ def test_tracker_ignores_stale_and_echoes_but_adopts_outside_changes(caps):
 def test_effect_frames_are_echoes_not_outside_changes(caps):
     """Regression, seen on hardware: an effect's last HSI frame was adopted as a
     panel change after the effect stopped, flipping the app into HSI mode."""
-    from lumen_studio.frames import mode_frame
-    from lumen_studio.sync import expected_record
+    from gaffer.frames import mode_frame
+    from gaffer.sync import expected_record
 
     tracker = SyncTracker()
     cct_state = apply_patch(LightState(), {"brightness": 25, "cct": {"kelvin": 3000}}, caps)
@@ -123,8 +123,8 @@ def test_effect_frames_are_echoes_not_outside_changes(caps):
 
 
 def test_expected_record_decodes_both_command_kinds(caps):
-    from lumen_studio.frames import mode_frame
-    from lumen_studio.sync import expected_record
+    from gaffer.frames import mode_frame
+    from gaffer.sync import expected_record
 
     cct = apply_patch(LightState(), {"brightness": 40, "cct": {"kelvin": 3200, "gm": -20}}, caps)
     hsi = apply_patch(LightState(), {"mode": "hsi", "brightness": 60, "hsi": {"hue": 300, "sat": 80}}, caps)
@@ -134,7 +134,7 @@ def test_expected_record_decodes_both_command_kinds(caps):
 
 
 def test_demo_light_records_mirror_real_command_layout(caps):
-    from lumen_studio.frames import mode_frame
+    from gaffer.frames import mode_frame
     hsi = apply_patch(LightState(), {"mode": "hsi", "brightness": 60, "hsi": {"hue": 200, "sat": 80}}, caps)
     frame = mode_frame(hsi, caps)
     record = build_v2_command(0xA1, 0x00, bytes([frame[1], frame[2], frame[3], frame[4], 0xFF]))
@@ -204,7 +204,7 @@ def test_timeline_interpolates_between_keyframes(caps):
 def test_schedule_fires_in_its_minute_on_its_days():
     from datetime import UTC, datetime
 
-    from lumen_studio.scheduler import due
+    from gaffer.scheduler import due
     monday_7 = datetime(2026, 10, 5, 7, 0, 30, tzinfo=UTC)  # a Monday
     alarm = {"enabled": True, "at": "07:00", "days": [0, 1, 2, 3, 4]}
     assert due(alarm, monday_7)
@@ -215,7 +215,7 @@ def test_schedule_fires_in_its_minute_on_its_days():
 
 
 def test_morse_timeline_spells_sos():
-    from lumen_studio.effects.signature import morse_timeline
+    from gaffer.effects.signature import morse_timeline
     on = [u for is_on, u in morse_timeline("SOS") if is_on]
     assert on == [1, 1, 1, 3, 3, 3, 1, 1, 1]
 
@@ -239,7 +239,7 @@ def test_scan_accepts_long_palettes():
 
 
 def test_a_silent_stream_ends_but_keeps_its_last_look(caps):
-    from lumen_studio.effects.base import hsi
+    from gaffer.effects.base import hsi
     clock = Clock()
     eng, box, _ = _engine(caps, clock)
     eng.push_stream(hsi(270, 90, 40), "audio")

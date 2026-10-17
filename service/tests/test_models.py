@@ -7,14 +7,14 @@ import random
 import pytest
 from godox_mesh_bt.protocol import FX_V3
 
-from lumen_studio.adapt import adapt_frame, adapt_state
-from lumen_studio.catalog import gels, model_caps, models_index
-from lumen_studio.effects import REGISTRY
-from lumen_studio.effects.base import Frame
-from lumen_studio.effects.profile import effect_profile
-from lumen_studio.engine import frame_to_state
-from lumen_studio.frames import mode_frame
-from lumen_studio.state import Cct, Fx, Gel, Hsi, LightState, Rgbw, validate
+from gaffer.adapt import adapt_frame, adapt_state
+from gaffer.catalog import gels, model_caps, models_index
+from gaffer.effects import REGISTRY
+from gaffer.effects.base import Frame
+from gaffer.effects.profile import effect_profile
+from gaffer.engine import frame_to_state
+from gaffer.frames import mode_frame
+from gaffer.state import Cct, Fx, Gel, Hsi, LightState, Rgbw, validate
 
 ML100R, SL60IIBI, SL100D, CL10, RF1, LT1, TL60, ML60IIBI = (
     "008F", "003A", "000E", "0007", "0025", "00CF", "0001", "0065",

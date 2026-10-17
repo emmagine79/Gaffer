@@ -4,7 +4,7 @@
 #   scripts/build_app.sh            build dist/Gaffer.app and install it to ~/Applications/Gaffer.app
 #   scripts/build_app.sh --no-install   build dist/Gaffer.app only
 #
-# Needs: Xcode command line tools (swiftc, codesign, iconutil) and uv.
+# Needs: Xcode command line tools (swiftc, codesign, iconutil), uv, and node with npm (builds web/).
 # The interpreter is python-build-standalone, installed and found by uv, so the app
 # never uses a system or Homebrew Python.
 #
@@ -35,6 +35,7 @@ to_trash() {  # move a path to the Trash with a unique name
 }
 
 command -v uv >/dev/null || { echo "uv is needed: https://docs.astral.sh/uv/" >&2; exit 1; }
+command -v npm >/dev/null || { echo "node and npm are needed to build web/: https://nodejs.org/" >&2; exit 1; }
 command -v swiftc >/dev/null || { echo "swiftc is needed: xcode-select --install" >&2; exit 1; }
 
 mkdir -p "$C/MacOS" "$C/Resources"
@@ -48,13 +49,24 @@ PY_SRC="$(cd "$(dirname "$PY_SRC_BIN")/.." && pwd -P)"
 ditto "$PY_SRC" "$PYDIR"
 BUNDLED_PY="$PYDIR/bin/python3.14"
 
+say "Web page (web/ -> web/dist)"
+(cd "$ROOT/web" && npm ci --no-audit --no-fund --silent && npm run build --silent)
+
 say "Light service and its locked dependencies"
 REQS="$WORK/requirements.txt"
-uv export --project "$ROOT/service" --frozen --no-dev --no-emit-project --quiet -o "$REQS"
+# Workspace members (godox-mesh-bt) are left out of the export and installed from source below.
+uv export --project "$ROOT/service" --frozen --no-dev --no-emit-project --no-emit-workspace --quiet -o "$REQS"
 # --break-system-packages: the bundled copy carries python-build-standalone's
 # EXTERNALLY-MANAGED marker; this installs into that private copy only.
 uv pip install --quiet --python "$BUNDLED_PY" --break-system-packages --require-hashes -r "$REQS"
-uv pip install --quiet --python "$BUNDLED_PY" --break-system-packages --no-deps "$ROOT/service"
+uv pip install --quiet --python "$BUNDLED_PY" --break-system-packages --no-deps \
+    "$ROOT/service/packages/godox-mesh-bt" "$ROOT/service"
+# The built web page goes inside the service package, where gaffer/app.py looks first.
+SITE="$("$BUNDLED_PY" -I -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+ditto "$ROOT/web/dist" "$SITE/gaffer/web"
+# Licences travel with the app (MIT requires it): lumen-studio's NOTICE, the others' LICENSE files.
+cp "$ROOT/NOTICE" "$C/Resources/NOTICE"
+ditto "$ROOT/THIRD-PARTY" "$C/Resources/THIRD-PARTY"
 # Compile once now; the app runs Python with -B so it never writes into the signed bundle.
 "$BUNDLED_PY" -I -m compileall -q -j 0 "$PYDIR/lib/python3.14/site-packages" >/dev/null
 

@@ -94,7 +94,7 @@ export function GuideTab() {
         <div className="guide-hero-text">
           <p className="guide-kicker">Getting started</p>
           <h2>From a light in the box to a light in the studio, in three steps.</h2>
-          <p className="muted">Lumen Studio talks to Godox lights over Bluetooth Mesh, the same way the Godox app does. A light can belong to one mesh at a time, so it is paired once, here, and from then on the studio finds it by itself.</p>
+          <p className="muted">Gaffer talks to Godox lights over Bluetooth Mesh, the same way the Godox app does. A light can belong to one mesh at a time, so it is paired once, here, and from then on the studio finds it by itself.</p>
           <Key kind="primary" onClick={() => setAddLight(true)}><Plus /> Add a light</Key>
         </div>
         <div className="guide-steps">
@@ -126,7 +126,7 @@ export function GuideTab() {
             <li>Open <b>Add a light</b> and find the light under <b>Paired with something else</b>.</li>
             <li>Press <b>Import keys</b> and choose the file.</li>
           </ol>
-          <p className="muted">From a terminal: <code>uv run lumen --import-keys mesh_state.json --address AA:BB:CC:DD:EE:FF</code>. Imported keys get a source address of their own, so the other tool can keep using them too.</p>
+          <p className="muted">From a terminal: <code>python -m gaffer --import-keys mesh_state.json --address AA:BB:CC:DD:EE:FF</code>. Imported keys get a source address of their own, so the other tool can keep using them too.</p>
         </section>
       </div>
 
@@ -206,17 +206,17 @@ export function GuideTab() {
             <p>In <b>Sync</b>, set the zone to the part of the screen the light should follow, and turn on <b>Use true white for neutral scenes</b> so pale scenes give a clean white instead of a tinted one. On a bi-colour light the screen's colour becomes warmth, which is the nearest it can do.</p>
           </Faq>
           <Faq q="The page says the studio is offline">
-            <p>The page is served by the studio program on this computer. Start it again with the desktop shortcut or <code>uv run lumen</code>; the page reconnects by itself. Closing its window stops it and frees the lights for other apps.</p>
+            <p>The page is served by Gaffer on this computer. Open Gaffer again from the Applications folder; the page reconnects by itself. Quitting Gaffer frees the lights for other apps.</p>
           </Faq>
           <Faq q="Can I use it from my phone?">
-            <p>Start it with <code>uv run lumen --lan</code>. It prints a link with a one-time token for any device on the same Wi-Fi. The Bluetooth stays on this computer; the phone only drives the page.</p>
+            <p>Phone access with a PIN is not in this version yet. The Bluetooth stays on this computer; a phone would only drive the page.</p>
           </Faq>
         </div>
       </section>
 
       <footer className="guide-credits">
         <p>
-          Lumen Studio builds on <a href="https://github.com/mattharrison/godox-ul60bi-bt" target="_blank" rel="noreferrer">godox-ul60bi-bt</a> by
+          Gaffer builds on <a href="https://github.com/Rkcr7/lumen-studio" target="_blank" rel="noreferrer">lumen-studio</a> by Ritik (Rkcr7), which in turn builds on <a href="https://github.com/mattharrison/godox-ul60bi-bt" target="_blank" rel="noreferrer">godox-ul60bi-bt</a> by
           Matt Harrison, the library that first spoke this protocol, and Simon Cheng's <a href="https://github.com/binary-person/ha-godox-mesh" target="_blank" rel="noreferrer">ha-godox-mesh</a>,
           which extended it to the whole Godox range. Not affiliated with Godox.
         </p>

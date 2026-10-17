@@ -8,7 +8,7 @@ Version 1 supports:
 - Zhiyun ZY Vega lights (including the MOLUS G200)
 - Yongnuo Bluetooth lights (including the YN150Li)
 
-Gaffer is being built. Today it scans for nearby lights and shows them by brand. It never sends anything to a light yet.
+Gaffer is being built. Today it scans for nearby lights and shows them by brand, and it carries the Godox studio from lumen-studio (colour, white, effects, scenes, schedules). That control has been tested in demo mode and with the library's own tests, not yet on real lights, and Zhiyun and Yongnuo control is not built yet.
 
 ## Open Gaffer
 
@@ -20,7 +20,7 @@ To quit, choose Quit Gaffer from the menu-bar icon. The light service stops with
 
 ## Build the app
 
-You need the Xcode command line tools and [uv](https://docs.astral.sh/uv/).
+You need the Xcode command line tools, [uv](https://docs.astral.sh/uv/) and [Node](https://nodejs.org/) with npm (the build compiles `web/`).
 
 ```sh
 scripts/build_app.sh               # builds dist/Gaffer.app and copies it to ~/Applications
@@ -34,7 +34,9 @@ The app carries its own Python 3.14 ([python-build-standalone](https://github.co
 | Folder | What it is |
 | --- | --- |
 | `mac/` | Swift shell: menu-bar item and a window with a web view (`mac/Sources`), `Info.plist`, icon drawing (`mac/Icon`), app tests (`mac/tests`) |
-| `service/` | Python light service (FastAPI and bleak): Bluetooth scan, brand tagging, HTTP API and the web page |
+| `service/` | Python light service (FastAPI and bleak), the `gaffer` package: Bluetooth scan and brand tagging, the lights engine (from lumen-studio), HTTP API and WebSocket. `service/packages/godox-mesh-bt` is the Godox mesh library |
+| `web/` | The web interface (React and Vite, from lumen-studio). The build puts `web/dist` inside the app and the service serves it |
+| `THIRD-PARTY/` | Licences and notices for code taken from other projects |
 | `scripts/build_app.sh` | Builds `dist/Gaffer.app` |
 
 The Swift shell starts the bundled Python service as its child process on `127.0.0.1` and shows its page. Because Gaffer starts the service, macOS treats Gaffer as the responsible app and asks for Bluetooth in Gaffer's name. The same Python started from Terminal is checked against Terminal instead. The service reads its stdin from a pipe only Gaffer holds, and exits when that pipe closes, so it stops however Gaffer ends, even if Gaffer crashes. Service logs go to `~/Library/Logs/Gaffer/service.log`.
@@ -49,14 +51,19 @@ All routes need the session cookie.
 
 | Route | What it returns |
 | --- | --- |
-| `GET /api/health` | `{"ok": true}` when the service is running |
+| `GET /api/health` | `{"ok": true, "service": "gaffer", "demo": false, ...}` when the service is running |
 | `GET /api/bluetooth` | Bluetooth permission: `not_determined`, `allowed`, `denied` or `restricted` |
 | `GET /api/scan?seconds=6` | Nearby devices with name, signal, brand family and the advert data that matched. Scans 2 to 20 seconds |
+| `GET /scan` | A plain page that runs the scan and lists what it hears |
+| `GET /` | The web interface |
+| `/ws` | The WebSocket the web interface uses to drive lights. Needs the session cookie and the page's own Origin |
+
+`python -m gaffer --demo` runs simulated lights and starts no Bluetooth scan, for development and tests.
 
 ## Tests
 
 ```sh
-cd service && uv run --frozen pytest                         # brand tagging
+cd service && uv run --frozen pytest                         # the service: lumen-studio's suite and the scan tagging
 scripts/build_app.sh --no-install
 uv run --project service --frozen pytest mac/tests           # launches the built app
 ```
@@ -67,12 +74,12 @@ The app tests launch Gaffer from a folder with a space in its path, and need Blu
 
 Gaffer builds on these MIT-licensed projects:
 
-- [Rkcr7/lumen-studio](https://github.com/Rkcr7/lumen-studio): Godox driver, model table, effects, scenes, schedules and cues. Gaffer's Godox advert reader comes from it (`service/src/gaffer_service/godox_advert.py`)
+- [Rkcr7/lumen-studio](https://github.com/Rkcr7/lumen-studio): Godox driver, model table, effects, scenes, schedules and cues. The service and web interface start from a copy of it (see [NOTICE](NOTICE))
 - [didim99/HA-Zhiyun-Light](https://github.com/didim99/HA-Zhiyun-Light): Zhiyun protocol, and the Zhiyun light name prefixes used by the scan
 - [aaditagrawal/zhiyun-light-control](https://github.com/aaditagrawal/zhiyun-light-control): Zhiyun protocol
 - [asidjwiaijd/yongnuo-light-control](https://github.com/asidjwiaijd/yongnuo-light-control): Yongnuo protocol, and the Yongnuo name rule used by the scan
 
-Each one's licence is kept with the code taken from it, in `service/third_party/`.
+Each one's licence is kept with the code taken from it, in `THIRD-PARTY/`. [NOTICE](NOTICE) lists the credits, including godox-ul60bi-bt and ha-godox-mesh, which lumen-studio is built on.
 
 ## Licence
 

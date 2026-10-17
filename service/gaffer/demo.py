@@ -1,6 +1,6 @@
 """A studio with no hardware: saved lights of every kind, and a light waiting to be paired.
 
-``lumen --demo`` runs against this, so the whole app can be tried, developed
+``python -m gaffer --demo`` runs against this, so the whole app can be tried, developed
 and photographed without a Godox light in the room. The lights are real
 catalogue models, so every tab adapts exactly as it would for real ones.
 """

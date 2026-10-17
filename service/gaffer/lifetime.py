@@ -56,7 +56,7 @@ def watch_console(
     def run() -> None:
         while exists(handle):
             time.sleep(poll)
-        logger.warning("console window closed; stopping Lumen Studio")
+        logger.warning("console window closed; stopping Gaffer")
         on_gone()
         time.sleep(grace)
         hard_exit(0)  # a clean stop did not finish in time; never linger holding the light

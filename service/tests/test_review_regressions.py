@@ -6,13 +6,13 @@ import asyncio
 
 import pytest
 
-from lumen_studio.blend import blend
-from lumen_studio.catalog import model_caps
-from lumen_studio.engine import Engine
-from lumen_studio.frames import mode_frame
-from lumen_studio.pump import CommandPump
-from lumen_studio.state import LightState, apply_patch
-from lumen_studio.sync import CctRecord, SyncTracker, expected_record
+from gaffer.blend import blend
+from gaffer.catalog import model_caps
+from gaffer.engine import Engine
+from gaffer.frames import mode_frame
+from gaffer.pump import CommandPump
+from gaffer.state import LightState, apply_patch
+from gaffer.sync import CctRecord, SyncTracker, expected_record
 
 
 @pytest.fixture(scope="module")
@@ -61,7 +61,7 @@ def test_fading_between_two_off_states_never_switches_on(caps):
 
 
 def test_bad_colour_parameters_fall_back_to_defaults():
-    from lumen_studio.effects import REGISTRY
+    from gaffer.effects import REGISTRY
     p = REGISTRY["breathe"].resolve({"color": "not-a-colour"})
     assert p["color"] == REGISTRY["breathe"].defaults()["color"]
     assert REGISTRY["palette"].resolve({"colors": ["#ff0000", "nope"]})["colors"] == ["#ff0000"]
@@ -79,7 +79,7 @@ def test_a_failing_effect_stops_instead_of_killing_the_clock(caps):
 def test_vault_sessions_start_above_anything_possibly_used(tmp_path):
     from godox_mesh_bt.state import MeshState
 
-    from lumen_studio.link import SequenceVault
+    from gaffer.link import SequenceVault
     path = tmp_path / "mesh.json"
     MeshState("00" * 16, "11" * 16, 1, 2, 100, 0).save(path)
     vault = SequenceVault(path, reserve=50)
@@ -95,7 +95,7 @@ def test_vault_ignores_writes_from_a_rotated_away_source(tmp_path):
 
     from godox_mesh_bt.state import MeshState
 
-    from lumen_studio.link import SequenceVault
+    from gaffer.link import SequenceVault
     path = tmp_path / "mesh.json"
     MeshState("00" * 16, "11" * 16, 1, 2, 100, 0).save(path)
     vault = SequenceVault(path, reserve=50)
@@ -105,7 +105,7 @@ def test_vault_ignores_writes_from_a_rotated_away_source(tmp_path):
 
 
 def test_a_change_during_a_fade_builds_on_where_the_fade_was_going(caps):
-    from lumen_studio.commands import _patched
+    from gaffer.commands import _patched
 
     class FakeHub:
         pass
@@ -119,7 +119,7 @@ def test_a_change_during_a_fade_builds_on_where_the_fade_was_going(caps):
 
 
 def test_an_unencodable_effect_parameter_is_rejected_at_the_door(caps):
-    from lumen_studio.commands import CommandError, _patched
+    from gaffer.commands import CommandError, _patched
 
     hub = type("H", (), {})()
     hub.caps = caps
@@ -137,7 +137,7 @@ async def test_studio_controller_segments_long_frames(tmp_path):
     from godox_mesh_bt.protocol import build_color_chip_command, build_hsi_command
     from godox_mesh_bt.state import MeshState
 
-    from lumen_studio.transport import StudioController
+    from gaffer.transport import StudioController
 
     state = MeshState("98b2e7ef8211c6deca2401adbe52e715", "fa0a2c615756eca3f896ce061ed4d890", 1, 2, 700, 0)
     client = MagicMock()

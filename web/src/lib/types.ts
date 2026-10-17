@@ -1,4 +1,4 @@
-// Mirrors src/lumen_studio: state.py, catalog.py, effects/base.py, fixture.py, hub.py.
+// Mirrors service/gaffer: state.py, catalog.py, effects/base.py, fixture.py, hub.py.
 
 export type Mode = 'cct' | 'hsi' | 'rgbw' | 'gel' | 'fx'
 

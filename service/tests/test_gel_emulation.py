@@ -11,10 +11,10 @@ from __future__ import annotations
 import pytest
 from godox_mesh_bt.protocol import SUB_COLOR_CHIP_EX, SUB_HSI, SUB_SET_CCT
 
-from lumen_studio.catalog import gels, model_caps
-from lumen_studio.frames import mode_frame
-from lumen_studio.gel_emulation import emulate
-from lumen_studio.state import LightState, apply_patch
+from gaffer.catalog import gels, model_caps
+from gaffer.frames import mode_frame
+from gaffer.gel_emulation import emulate
+from gaffer.state import LightState, apply_patch
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +66,7 @@ def test_every_ml100r_gel_produces_a_frame_the_light_takes(caps):
 
 
 def test_lights_with_a_gel_mode_still_get_native_gels():
-    from lumen_studio.catalog import _caps_table
+    from gaffer.catalog import _caps_table
 
     rid = next(r for r, row in _caps_table().items() if isinstance(row, dict) and "color_chip" in row.get("modes", []))
     native = model_caps(rid)

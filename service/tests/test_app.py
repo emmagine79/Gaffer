@@ -7,8 +7,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from lumen_studio import demo
-from lumen_studio.app import create_app
+from gaffer import demo
+from gaffer.app import create_app
 
 
 @pytest.fixture

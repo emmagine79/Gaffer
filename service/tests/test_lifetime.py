@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from lumen_studio.lifetime import watch_console
+from gaffer.lifetime import watch_console
 
 
 def test_no_console_means_no_watcher():
@@ -33,7 +33,7 @@ def test_closing_the_window_stops_cleanly_then_forces_exit():
 def test_only_the_expected_beacon_warning_is_hidden():
     import logging
 
-    from lumen_studio.__main__ import _QuietExpectedNoise
+    from gaffer.__main__ import _QuietExpectedNoise
 
     quiet = _QuietExpectedNoise()
     record = lambda msg: logging.LogRecord("godox_mesh_bt.controller", logging.WARNING, __file__, 1, msg, None, None)

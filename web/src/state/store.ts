@@ -13,7 +13,7 @@ export type TabId =
 export interface Toast { id: number; text: string; kind: 'info' | 'error' | 'sync' | 'ok' }
 
 const LEASE_MS = 350
-const SELECTED_KEY = 'lumen.selected'
+const SELECTED_KEY = 'gaffer.selected'
 
 /**
  * A stable empty list for selectors. Zustand compares selector results by

@@ -32,7 +32,7 @@ export function ScenesTab() {
     const blob = new Blob([JSON.stringify({ lumen: 1, scenes }, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = 'lumen-scenes.json'
+    a.download = 'gaffer-scenes.json'
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -44,7 +44,7 @@ export function ScenesTab() {
       for (const s of list) await upsert('scenes', { name: s.name, state: s.state, effect: s.effect, params: s.params })
       toast(`Imported ${list.length} scene${list.length === 1 ? '' : 's'}`, 'ok')
     } catch {
-      toast('That file is not a Lumen scenes export', 'error')
+      toast('That file is not a Gaffer scenes export', 'error')
     }
   }
 

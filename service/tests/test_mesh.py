@@ -6,10 +6,10 @@ import asyncio
 
 import pytest
 
-from lumen_studio.catalog import model_caps
-from lumen_studio.mirror import ALL_PROPS, mirror
-from lumen_studio.pump import CommandPump
-from lumen_studio.state import Cct, Fx, Hsi, LightState, validate
+from gaffer.catalog import model_caps
+from gaffer.mirror import ALL_PROPS, mirror
+from gaffer.pump import CommandPump
+from gaffer.state import Cct, Fx, Hsi, LightState, validate
 
 RGB = model_caps("008F")  # ML100R
 BI = model_caps("003A")  # SL60IIBi, 2800-6500 K, no colour

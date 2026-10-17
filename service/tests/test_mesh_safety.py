@@ -7,16 +7,16 @@ import asyncio
 import pytest
 from godox_mesh_bt.state import MeshState
 
-from lumen_studio import demo
-from lumen_studio.catalog import model_caps
-from lumen_studio.demo import DemoScanner, seed
-from lumen_studio.discovery import Nearby
-from lumen_studio.hub import Client, Hub
-from lumen_studio.lights import LightLibrary
-from lumen_studio.paths import AlreadyRunning, hold_data_folder
-from lumen_studio.pump import CommandPump
-from lumen_studio.state import Cct, LightState
-from lumen_studio.store import Store
+from gaffer import demo
+from gaffer.catalog import model_caps
+from gaffer.demo import DemoScanner, seed
+from gaffer.discovery import Nearby
+from gaffer.hub import Client, Hub
+from gaffer.lights import LightLibrary
+from gaffer.paths import AlreadyRunning, hold_data_folder
+from gaffer.pump import CommandPump
+from gaffer.state import Cct, LightState
+from gaffer.store import Store
 
 KEYS = {"network_key": "ab" * 16, "app_key": "cd" * 16, "provisioner_address": 1, "node_address": 2,
         "sequence_number": 10, "iv_index": 0, "device_key": "ef" * 16}

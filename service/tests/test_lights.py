@@ -9,9 +9,9 @@ import pytest
 from godox_mesh_bt.crypto import k3
 from godox_mesh_bt.state import MeshState
 
-from lumen_studio.discovery import MESH_PROV, MESH_PROXY, radio_id_from_manufacturer, read_advert
-from lumen_studio.lights import LightLibrary
-from lumen_studio.link import ROTATION_BASE
+from gaffer.discovery import MESH_PROV, MESH_PROXY, radio_id_from_manufacturer, read_advert
+from gaffer.lights import LightLibrary
+from gaffer.link import ROTATION_BASE
 
 NET = "11" * 16
 APP = "22" * 16

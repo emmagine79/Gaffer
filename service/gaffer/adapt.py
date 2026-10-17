@@ -113,7 +113,7 @@ def adapt_state(state: LightState, caps: ModelCaps) -> LightState:
     """``state`` as this light can take it: same power and brightness, nearest look.
 
     Total for every controllable model: the result always passes
-    :func:`lumen_studio.state.validate`. A model the studio cannot drive at
+    :func:`gaffer.state.validate`. A model the studio cannot drive at
     all is returned the state unchanged.
     """
     if caps.kind == "unsupported":

@@ -9,8 +9,10 @@ pages open in a browser on this Mac. Two checks close that:
 * Session secret. Gaffer makes a random secret at each launch and hands it to the
   service on stdin. Its window opens /session?key=<secret> once; that sets the
   secret as an HttpOnly, SameSite=Strict cookie and the link stops working. Every
-  other route needs the cookie, so another site's page can't use the API even
-  through 127.0.0.1.
+  other route, and the /ws socket that drives the lights, needs the cookie, so another
+  site's page can't use the API even through 127.0.0.1.
+* Origin. On top of the cookie, lumen-studio's guard.py (kept as is) makes /ws accept
+  only the studio's own page.
 
 Phone access comes later, with a PIN (SPEC-015). Until then this is loopback only.
 """
@@ -23,7 +25,7 @@ import os
 from pathlib import Path
 
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -47,6 +49,14 @@ class SessionGate:
         return bool(value) and hmac.compare_digest(value.encode(), self.secret.encode())
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "websocket":
+            # A socket is refused before it is accepted: the browser sees a failed handshake.
+            if not self._matches(HTTPConnection(scope).cookies.get(COOKIE)):
+                await receive()  # websocket.connect
+                await send({"type": "websocket.close", "code": 4401})
+                return
+            await self.app(scope, receive, send)
+            return
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return

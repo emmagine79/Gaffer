@@ -17,7 +17,7 @@ export function Rail() {
     <nav className="rail" aria-label="Sections">
       <div className="rail-brand">
         <span className="rail-mark" aria-hidden="true" />
-        <span className="rail-word">Lumen</span>
+        <span className="rail-word">Gaffer</span>
         {demo && <span className="rail-demo" title="Simulated lights: started with --demo">Demo</span>}
       </div>
 

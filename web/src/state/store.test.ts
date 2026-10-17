@@ -89,7 +89,7 @@ describe('selection and ordering survive reconnects and quick input', () => {
 
   it('keeps this tab on its own light when the studio says hello again', () => {
     useStudio.getState().select('fill')
-    localStorage.setItem('lumen.selected', 'key') // another tab chose the key light meanwhile
+    localStorage.setItem('gaffer.selected', 'key') // another tab chose the key light meanwhile
     const hello = { type: 'hello', selected: 'key', lights: [light('key', 10), light('fill', 30)], gel_tables: {}, network: 'n',
       effects: [], models: [], groups: [], link: null, store: null, log: [], demo: true, nearby: [], scanning: false, pairing: null }
     ws().onmessage?.({ data: JSON.stringify(hello) } as MessageEvent)

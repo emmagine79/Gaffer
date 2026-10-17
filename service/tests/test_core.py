@@ -12,10 +12,10 @@ from godox_mesh_bt.protocol import (
     build_rgb_wide_command,
 )
 
-from lumen_studio.catalog import gels, model_caps
-from lumen_studio.frames import POWER_OFF, POWER_ON, mode_frame
-from lumen_studio.pump import CommandPump, plan_frames
-from lumen_studio.state import LightState, StateError, apply_patch
+from gaffer.catalog import gels, model_caps
+from gaffer.frames import POWER_OFF, POWER_ON, mode_frame
+from gaffer.pump import CommandPump, plan_frames
+from gaffer.state import LightState, StateError, apply_patch
 
 
 @pytest.fixture(scope="module")
@@ -187,7 +187,7 @@ def _mesh_state(path, seq, src=1):
 def test_vault_persists_ahead_and_never_behind(tmp_path):
     from godox_mesh_bt.state import MeshState
 
-    from lumen_studio.link import SequenceVault
+    from gaffer.link import SequenceVault
     path = tmp_path / "mesh.json"
     _mesh_state(path, 500)
     vault = SequenceVault(path, reserve=100)
@@ -200,7 +200,7 @@ def test_vault_persists_ahead_and_never_behind(tmp_path):
 def test_vault_rotates_to_a_fresh_source_when_spent(tmp_path):
     from godox_mesh_bt.state import MeshState
 
-    from lumen_studio.link import ROTATE_AT, ROTATION_BASE, SequenceVault
+    from gaffer.link import ROTATE_AT, ROTATION_BASE, SequenceVault
     path = tmp_path / "mesh.json"
     _mesh_state(path, ROTATE_AT + 5)
     vault = SequenceVault(path, reserve=10)

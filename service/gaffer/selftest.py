@@ -1,4 +1,4 @@
-"""Prove an installation works: ``uv run lumen --self-test``.
+"""Prove an installation works: ``python -m gaffer --self-test``.
 
 The installers run this last. It needs no Bluetooth and touches none of the
 user's data: it starts a demo studio on a free port with a throwaway data
@@ -68,7 +68,7 @@ def run_self_test(report: Report = print, *, require_web: bool = True) -> bool:
     from .app import create_app
 
     pace, demo.PACE = demo.PACE, 0.05
-    with tempfile.TemporaryDirectory(prefix="lumen-selftest-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="gaffer-selftest-") as tmp:
         port = _free_port()
         server = uvicorn.Server(uvicorn.Config(create_app(demo=True, data_dir=Path(tmp)), host="127.0.0.1",
                                                port=port, log_level="error"))
@@ -106,7 +106,7 @@ def run_self_test(report: Report = print, *, require_web: bool = True) -> bool:
 
 
 def main() -> int:
-    print("Lumen Studio self-test")
+    print("Gaffer self-test")
     ok = run_self_test()
     print("All good." if ok else "Something is not right; see FAIL above.")
     return 0 if ok else 1

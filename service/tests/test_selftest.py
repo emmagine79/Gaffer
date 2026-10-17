@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lumen_studio.selftest import run_self_test
+from gaffer.selftest import run_self_test
 
 
 def test_the_self_test_boots_a_demo_studio_and_talks_to_it(tmp_path):
@@ -15,7 +15,7 @@ def test_the_self_test_boots_a_demo_studio_and_talks_to_it(tmp_path):
 
 
 def test_a_missing_web_build_is_reported_not_crashed(monkeypatch, tmp_path):
-    from lumen_studio import app as app_module
+    from gaffer import app as app_module
 
     monkeypatch.setattr(app_module, "WEB_DIST", tmp_path / "no-dist")
     lines: list[str] = []

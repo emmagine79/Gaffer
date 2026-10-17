@@ -61,11 +61,11 @@ export function ConnectionScreen() {
   let headline = 'Finding your lights'
   let body = 'Make sure they are switched on and within a few metres of this computer.'
   if (noLight) {
-    headline = 'Welcome to Lumen Studio'
+    headline = 'Welcome to Gaffer'
     body = 'Add your first Godox light: pair one that is factory fresh or reset, or bring in one you paired with another tool.'
   } else if (!socketOpen) {
     headline = 'The studio is not running'
-    body = 'Start it from the studio folder with "uv run lumen", then this page reconnects by itself.'
+    body = 'Open Gaffer from the menu bar, then this page reconnects by itself.'
   } else if (!ready) {
     headline = 'Opening the studio'
     body = ''

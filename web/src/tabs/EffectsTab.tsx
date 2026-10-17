@@ -49,7 +49,7 @@ export function EffectsTab() {
       <div className="effects-switch">
         {builtin > 0 && (
           <Segmented label="Effect source" value={source} onChange={setSource} options={[
-            { value: 'engine', label: `Rendered live (${usableEffects(effects, caps).length})`, title: 'Computed by Lumen and streamed to the light up to 80 times a second' },
+            { value: 'engine', label: `Rendered live (${usableEffects(effects, caps).length})`, title: 'Computed by Gaffer and streamed to the light up to 80 times a second' },
             { value: 'builtin', label: `Built into the light (${builtin})`, title: 'Run by the light itself; nothing is streamed' },
           ]} />
         )}

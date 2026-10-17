@@ -9,7 +9,7 @@ hands to summarize().
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
-from gaffer_service.scan import summarize
+from gaffer.scan import summarize
 
 MESH_PROXY = "00001828-0000-1000-8000-00805f9b34fb"
 MESH_PROV = "00001827-0000-1000-8000-00805f9b34fb"

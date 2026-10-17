@@ -11,7 +11,7 @@ import asyncio
 import logging
 from typing import Any
 
-from .godox_advert import MESH_PROV, MESH_PROXY, read_godox_advert
+from .discovery import MESH_PROV, MESH_PROXY, read_advert
 
 log = logging.getLogger("gaffer.scan")
 
@@ -20,12 +20,12 @@ ZHIYUN_SERVICE = "0000fee9-0000-1000-8000-00805f9b34fb"  # ZY Vega, 0xFEE9
 YONGNUO_SERVICE = "f000aa60-0451-4000-b000-000000000000"  # TI UART service F000AA60
 
 # Zhiyun local-name prefixes: didim99/HA-Zhiyun-Light (MIT), custom_components/zhiyun_ble/manifest.json
-# at commit 7ca51ea, licence in service/third_party/HA-Zhiyun-Light/LICENSE.
+# at commit 7ca51ea, licence in THIRD-PARTY/HA-Zhiyun-Light/LICENSE.
 # Needed because a real MOLUS G200 advertises as "PL109_C75E" with the mesh proxy
 # service 0x1828 and no 0xFEE9 (Gaffer scan, 18 Oct 2026).
 ZHIYUN_NAME_PREFIXES = ("PL0", "PL1", "PLB", "PLG", "PLM", "PLX")
 
-# Scan length in seconds: lumen-studio's default and clamp (src/lumen_studio/commands.py, lights.scan).
+# Scan length in seconds: lumen-studio's default and clamp (service/gaffer/commands.py, lights.scan).
 DEFAULT_SCAN_SECONDS = 6.0
 MIN_SCAN_SECONDS = 2.0
 MAX_SCAN_SECONDS = 20.0
@@ -41,7 +41,7 @@ FAMILY_LABELS = {
 def yongnuo_name(name: str | None) -> bool:
     """Yongnuo's name rule, from asidjwiaijd/yongnuo-light-control (MIT),
     yn_light_control/lib/light_controller.dart _looksLikeYongnuoDevice at commit 970a2f0,
-    licence in service/third_party/yongnuo-light-control/LICENSE.
+    licence in THIRD-PARTY/yongnuo-light-control/LICENSE.
 
     Needed because a real YN150Li advertises service 0xFEFF, not F000AA60 (Gaffer scan, 18 Oct 2026).
     """
@@ -73,9 +73,11 @@ def classify(name: str | None, adv: Any) -> dict[str, Any]:
     elif yongnuo_name(name):
         family, match = "yongnuo", "Yongnuo name"
     elif MESH_PROV in advertised or MESH_PROXY in advertised:
-        godox = read_godox_advert(name, service_uuids, service_data, manufacturer_data)
+        # lumen-studio's reader (discovery.read_advert): the model id and mesh network id from the advert alone.
+        godox = read_advert("", name, None, service_uuids, service_data, manufacturer_data)
         if godox is not None:
-            family, match, detail = "godox_mesh", "mesh service with Godox model id or name", godox
+            family, match = "godox_mesh", "mesh service with Godox model id or name"
+            detail = {"state": godox.state, "radio_id": godox.radio_id, "network_id": godox.network_id}
         else:
             family, match = "bluetooth_mesh", "mesh service, no Godox model id"
 
@@ -150,5 +152,33 @@ class Scanner:
             async with BleakScanner(detection_callback=on_advert):
                 await asyncio.sleep(seconds)
         result = summarize(seen)
+        result["seconds"] = seconds
+        return result
+
+
+class DemoScanner:
+    """Demo mode's stand-in for Scanner: a fixed set of adverts, no Bluetooth.
+
+    The adverts are made-up lookalikes of the three brands' (invented names; Godox's public model id), run through the
+    same summarize() as a real scan, so demo mode shows the real tagging without starting a scan.
+    """
+
+    async def scan(self, seconds: float) -> dict[str, Any]:
+        from bleak.backends.device import BLEDevice
+        from bleak.backends.scanner import AdvertisementData
+
+        def advert(name: str, uuids: list[str], service_data: dict[str, bytes], manufacturer: dict[int, bytes],
+                   rssi: int) -> AdvertisementData:
+            return AdvertisementData(local_name=name, manufacturer_data=manufacturer, service_data=service_data,
+                                     service_uuids=uuids, tx_power=None, rssi=rssi, platform_data=())
+
+        adverts = {
+            "DEMO-GODOX": advert("GD_LED", [MESH_PROXY], {MESH_PROXY: bytes.fromhex("0011223344556677aa")},
+                                 {40644: bytes.fromhex("0938c1a4220002000000ffff00000000000000")}, -48),
+            "DEMO-YONGNUO": advert("YN-DEMO", ["0000feff-0000-1000-8000-00805f9b34fb"], {}, {}, -61),
+            "DEMO-ZHIYUN": advert("PL000_DEMO", [MESH_PROXY], {}, {}, -67),
+            "DEMO-OTHER": advert("Someone's phone", [], {}, {}, -80),
+        }
+        result = summarize({k: (BLEDevice(k, v.local_name, None), v) for k, v in adverts.items()})
         result["seconds"] = seconds
         return result

@@ -152,7 +152,8 @@ def test_double_click_starts_bundled_python_service(gaffer):
     # The service's executable file is the Python inside this copy of the bundle.
     exe = run("lsof", "-a", "-p", str(gaffer.child), "-d", "txt", "-Fn").split("\nn", 1)[1].splitlines()[0]
     assert Path(exe).resolve() == (contents / "Resources/python/bin/python3.14").resolve()
-    assert gaffer.get("/api/health") == (200, {"ok": True, "service": "gaffer"})
+    status, health = gaffer.get("/api/health")
+    assert status == 200 and health["ok"] is True and health["service"] == "gaffer" and health["demo"] is False
 
 
 def test_bluetooth_permission_is_asked_as_gaffer(gaffer):
@@ -185,13 +186,20 @@ def test_scan_lists_and_tags_nearby_devices(gaffer):
     assert body["devices"], "no Bluetooth devices heard"
     for device in body["devices"]:
         assert {"id", "name", "rssi", "family", "family_label"} <= device.keys()
-    # The page the window shows is served by the same service.
+    # The window's page and the scan proof page are served by the same service.
     status, page = gaffer.get("/")
+    assert status == 200 and "<title>Gaffer</title>" in page
+    status, page = gaffer.get("/scan")
     assert status == 200 and "/api/scan" in page
 
 
 def test_service_has_no_way_to_write_to_a_light(gaffer):
-    """Criterion 5: the service's whole API is read-only, and its errors carry no server paths."""
+    """Criterion 5: every HTTP route is a read (GET) and errors carry no server paths.
+
+    Since SPEC-002 the lights are driven over the /ws socket, which needs the session cookie
+    and the page's own Origin; the scan route listens only. Sending to a light stays behind
+    Captain's go-ahead (AGENTS.md).
+    """
     status, spec = gaffer.get("/openapi.json")
     methods = {m for ops in spec["paths"].values() for m in ops}
     assert methods == {"get"}, methods

@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import socket
 
-from lumen_studio.paths import clear_runtime, read_runtime, write_runtime
-from lumen_studio.ports import bind_free_port
+from gaffer.paths import clear_runtime, read_runtime, write_runtime
+from gaffer.ports import bind_free_port
 
 
 def _occupy(port: int) -> socket.socket:
