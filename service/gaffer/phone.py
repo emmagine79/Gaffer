@@ -37,6 +37,7 @@ from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp
 
 from .guard import origin_allowed
+from .listener import guarded_config
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +211,7 @@ class PhoneListener:
             logger.warning("phone listener could not bind port %s: %r", self.port, err)
             raise PhoneUnavailable("Gaffer could not open its port to the network. Try again.") from err
         try:
-            config = uvicorn.Config(self.app, lifespan="off", log_level="warning", access_log=False,
+            config = guarded_config(self.app, lifespan="off", log_level="warning", access_log=False,
                                     timeout_graceful_shutdown=self.graceful_seconds)
             server = uvicorn.Server(config)
             config.load()

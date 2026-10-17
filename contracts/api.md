@@ -194,14 +194,23 @@ reconnects with back-off until the service process ends.
 
 ## Phone access
 
-Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback and `Host` is `127.0.0.1` or `localhost`; needs the launch secret cookie, no PIN) and a **phone** (anything else; needs the PIN cookie).
+Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie).
+
+What is guaranteed:
+
+* A loopback connection is the Mac window only, and it still needs the launch secret cookie. It is never a phone: a loopback connection with another `Host`, or with an `X-Forwarded-*`, `Forwarded` or `Tailscale-*` header, is refused.
+* The service takes the peer address from the TCP connection only, never from `X-Forwarded-For`.
+* A proxy on the Mac that sends no forwarding header we list (for example `X-Real-IP`, `X-Client-IP` or `Cf-Connecting-Ip`) and rewrites `Host` to `127.0.0.1` is handled as a Mac window request without the cookie, so it is refused with `401 not_signed_in`. The launch secret cookie is the safety net here, not the header check.
+* `tailscale serve` and Funnel are not a supported way in; neither is `ssh -L` or a dev proxy. A phone uses the Wi-Fi or Tailscale address shown in the Mac window's phone access panel.
+* The supported Tailscale setup is Tailscale.app (the network extension), which delivers a tailnet peer's connection with its own `100.x` or `fd7a:` address. Userspace-networking `tailscaled`, which delivers tailnet connections from loopback, is not supported: its phone gets `403 network_not_allowed`.
 
 A phone's request is refused when:
 
 | Case | Answer |
 | --- | --- |
 | Phone access is off | `403 phone_access_off` (socket closed with code 4403) |
-| The connection comes from a public address: not loopback, private IPv4 (RFC 1918), link-local (RFC 3927, RFC 4291), unique local IPv6 (RFC 4193) or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48). An IPv4-mapped IPv6 address counts as its IPv4 address. Checked before the Host and the PIN | `403 network_not_allowed` (socket 4403) |
+| A loopback connection carries an `X-Forwarded-*`, `Forwarded` or `Tailscale-*` header, whatever its `Host` and cookie | `403 network_not_allowed` (socket 4403) |
+| The connection does not come from a private IPv4 (RFC 1918), link-local (RFC 3927, RFC 4291), unique local IPv6 (RFC 4193) or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48) address. That includes a public address and, since SPEC-024, loopback with a `Host` other than `127.0.0.1` or `localhost` (while phone access is off, that case is `400 Invalid host header`, as before). An IPv4-mapped IPv6 address counts as its IPv4 address. Checked before the Host and the PIN | `403 network_not_allowed` (socket 4403) |
 | `Host` is not an address phone access listed (the Wi-Fi address, the Tailscale addresses and MagicDNS name) | `400 Invalid host header` (socket 4403) |
 | No valid PIN cookie, and the route is not one of the open ones below | `401 pin_required` (socket closed with code 4401 before it opens) |
 

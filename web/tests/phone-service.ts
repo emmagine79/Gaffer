@@ -2,6 +2,9 @@
  * Starts the real light service in --demo for the phone access tests (SPEC-015), with a fake
  * `tailscale` tool first on its PATH. The real Tailscale tool is never run.
  *
+ * The phone's connection is made to come from a non-loopback address by phone_service_main.py (see
+ * there for why a real one is not possible on one machine without touching the Mac's Wi-Fi address).
+ *
  * Like service.ts: the secret goes in on stdin and ending stdin stops the service; the process
  * group is killed as well in case it does not stop in time.
  */
@@ -13,6 +16,9 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SERVICE = resolve(HERE, '../../service')
+/** The service with a test-only layer in front of its gate that makes the phone's connection come from a
+ *  non-loopback address (SPEC-024: the gate refuses loopback connections that name another host). */
+const LAUNCHER = join(HERE, 'phone_service_main.py')
 const RESULTS = join(HERE, '../test-results')
 
 export const TAILNET_NAME = 'studio-mac.tail1234.ts.net'
@@ -40,7 +46,7 @@ export async function startPhoneService(): Promise<PhoneService> {
   const secret = randomBytes(24).toString('base64url')
   const child = spawn(
     'uv',
-    ['run', '--project', SERVICE, '--frozen', 'python', '-m', 'gaffer', '--demo', '--port', '0', '--data', join(folder, 'data'), '--session-from-stdin'],
+    ['run', '--project', SERVICE, '--frozen', 'python', LAUNCHER, '--demo', '--port', '0', '--data', join(folder, 'data'), '--session-from-stdin'],
     { cwd: SERVICE, stdio: ['pipe', 'pipe', 'ignore'], detached: true, env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
   )
   const killGroup = () => {

@@ -35,6 +35,7 @@ import uvicorn
 
 from .app import create_app
 from .hub import LINK_STOP_SECONDS
+from .listener import guarded_config
 from .paths import AlreadyRunning, data_home, hold_data_folder
 from .phone import PhoneAccess
 from .session import protect, runtime_file, write_runtime_file
@@ -179,8 +180,8 @@ def main(argv: list[str] | None = None) -> None:
     guarded = protect(app, secret, phone)
     phone.bind_listener(guarded, CONNECTIONS_SECONDS)
     # No access log: the one-time sign-in link carries the secret in its query string.
-    server = uvicorn.Server(uvicorn.Config(guarded, log_level="info", access_log=False,
-                                            timeout_graceful_shutdown=CONNECTIONS_SECONDS))
+    server = uvicorn.Server(guarded_config(guarded, log_level="info", access_log=False,
+                                           timeout_graceful_shutdown=CONNECTIONS_SECONDS))
     if args.session_from_stdin:
         _stop_when_stdin_closes(server)  # an end of file that came earlier is seen at once
     else:

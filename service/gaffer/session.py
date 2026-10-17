@@ -16,7 +16,12 @@ pages open in a browser on this Mac. Two checks close that:
 
 Phone access (SPEC-015, phone.py) adds a second kind of caller. A request is the Mac window's
 own only when it comes from this Mac AND names this Mac (127.0.0.1 or localhost) in its Host
-header. Everything else is a phone: it is refused while phone access is off, its Host must be
+header, and carries no forwarding header. A proxy on this Mac connects from loopback for visitors
+who are not on it, so a loopback connection is never a phone (SPEC-024): with another Host it is
+refused as ``network_not_allowed`` once phone access is on, and as a bad Host while it is off.
+A proxy that sends no forwarding header we list and rewrites Host to 127.0.0.1 looks like the Mac
+window; the launch secret cookie is what stops it.
+Everything else is a phone: it is refused while phone access is off, its Host must be
 one of the addresses phone access listed, and it needs the cookie that the right PIN earns
 instead of the launch secret. The launch secret never goes to a phone, and a phone's cookie is
 worth nothing to the Mac-only routes.
@@ -35,7 +40,7 @@ from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .guard import hostname, is_loopback_client, is_phone_source
+from .guard import has_forwarding_headers, hostname, is_loopback_client, is_phone_source
 from .phone import PHONE_COOKIE, PhoneAccess
 
 COOKIE = "gaffer_session"
@@ -72,7 +77,12 @@ class SessionGate:
         client = scope.get("client")
         loopback = is_loopback_client(client[0] if client else None)
         phone = self.phone
-        if host in LOCAL_HOSTS and loopback:
+        if loopback and has_forwarding_headers(conn.headers.keys()):
+            # A proxy on this Mac (tailscale serve, ssh -L, a dev proxy) is passing on someone who may be anywhere.
+            # Only a direct connection is the Mac window; a phone does not come through loopback (SPEC-024).
+            await self._deny(scope, receive, send, _refuse(
+                403, "network_not_allowed", "Gaffer does not answer requests forwarded by a proxy on this Mac."), 4403)
+        elif host in LOCAL_HOSTS and loopback:
             await self._mac_window(scope, receive, send, conn)
         elif phone is None or not phone.enabled:
             # A foreign Host from this Mac is a web page trying DNS rebinding; from elsewhere it is a phone
