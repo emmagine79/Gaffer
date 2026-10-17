@@ -7,6 +7,7 @@ right brand with commands that driver already sends. Nothing opens Bluetooth.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -233,3 +234,42 @@ async def test_a_light_that_advertises_over_and_over_is_listed_to_the_page_once(
     lists = [m for m in messages if m["type"] == "nearby" and m["scanning"] and m["nearby"]]
     assert len(lists) == 2  # one for each light, not one for each advert
     assert {n["model"]: n["rssi"] for n in messages[-1]["nearby"]} == {"MOLUS G200": -60, "YN150": -79}  # the last word on strength
+
+
+class GatedScanner:
+    """A scan that hears a Yongnuo light, waits for the test, then hears it again, as a long scan does."""
+
+    devices = {}
+    busy = False
+
+    def __init__(self):
+        self.gate = asyncio.Event()
+
+    async def scan(self, seconds, on_found=None, on_other=None):
+        light = SimpleNamespace(address="00000000-0000-0000-0000-0000000000a2", name="YN150Li")
+        advert = SimpleNamespace(local_name="YN150Li", rssi=-60, service_uuids=[], manufacturer_data={})
+        on_other(light, advert)
+        await self.gate.wait()
+        on_other(light, advert)
+        return []
+
+
+async def test_a_light_added_and_then_forgotten_during_the_scan_can_be_added_again(tmp_path):
+    scanner = GatedScanner()
+    hub = Hub(Store(tmp_path), LightLibrary(tmp_path), demo=False, scanner=scanner)
+    yongnuo = hub.registry.drivers["yongnuo"] = YongnuoDriver(DriverContext(), transport_factory=YongnuoWire, sleep=_nosleep)
+    try:
+        scan = asyncio.create_task(hub.scan(8))
+        while not hub.nearby:
+            await asyncio.sleep(0)
+        address = next(iter(hub.nearby))
+        light = await hub.add_light(Client(), address, "Fill", 5)
+        assert hub.nearby[address]["relation"] == "saved"
+        await hub.forget(light.id)  # "Not this one", while the scan is still listening
+        scanner.gate.set()  # the light advertises again
+        await scan
+        assert (hub.nearby[address]["relation"], hub.nearby[address]["needs_channel"]) == ("new", True)
+        again = await hub.add_light(Client(), address, "Fill", 5)  # refused with "scan first" before the fix
+        assert again.address == address.upper()
+    finally:
+        await yongnuo.stop()

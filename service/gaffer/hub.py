@@ -1094,7 +1094,18 @@ class Hub:
                 await self._relink(nxt)
         self._broadcast({"type": "groups", "groups": groups})
         self._broadcast_lights()
+        self._relist_forgotten(light_id)
         self._log("lights", f"forgot {fixture.light.name}")
+
+    def _relist_forgotten(self, light_id: str) -> None:
+        """A Zhiyun or Yongnuo light added from this scan and then forgotten is a new light again, so the
+        page can add it again at once (its adverts are not re-listed, so nothing else would reset it)."""
+        for entry in self.nearby.values():
+            if entry.get("light_id") == light_id and entry.get("driver") != "godox":
+                caps = model_caps(entry["radio_id"])
+                entry["relation"], entry["light_id"] = "new", None
+                entry["needs_channel"] = self.driver_for(caps).needs_channel(caps)
+                self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": self.scanning})
 
     async def power_all(self, on: bool, fade: float = 0.0) -> None:
         for fixture in self.fixtures.values():
