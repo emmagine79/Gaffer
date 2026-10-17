@@ -186,7 +186,7 @@ async def test_flashing_a_scanned_light_reaches_its_own_driver_with_commands_tha
     YongnuoWire.sent = []
     zhiyun_wire = ZhiyunWire()
     hub = Hub(Store(tmp_path), LightLibrary(tmp_path), demo=False, scanner=HeardScanner())
-    zhiyun = hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=zhiyun_wire, sleep=_nosleep)
+    zhiyun = hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=zhiyun_wire, sleep=_nosleep, reply_timeout=0)
     yongnuo = hub.registry.drivers["yongnuo"] = YongnuoDriver(DriverContext(), transport_factory=YongnuoWire, sleep=_nosleep)
     try:
         listed = {n["brand"]: n for n in await hub.scan(2)}

@@ -60,7 +60,7 @@ def studio(tmp_path, monkeypatch):
     monkeypatch.setattr(demo, "PACE", 0.05)
     wire = Wire()
     app = create_app(demo=True, data_dir=tmp_path)
-    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
     with TestClient(app) as client:
         yield client, wire
 
@@ -177,7 +177,7 @@ def test_a_slow_max_mode_write_does_not_hold_up_the_next_command(tmp_path, monke
 
     wire = SlowWire()
     app = create_app(demo=True, data_dir=tmp_path)
-    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         _until(ws, lambda m: m["type"] == "hello")
         light = _molus(client, ws, wire)
@@ -228,7 +228,7 @@ def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tm
     app.state.hub.store.update_settings({"sync_interval": 0.05})
     app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(
         DriverContext(), transport=wire, sleep=_nosleep, backoff_sleep=_nosleep
-    )
+    , reply_timeout=0)
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         _until(ws, lambda m: m["type"] == "hello")
         light = _molus(client, ws, wire)
@@ -279,7 +279,7 @@ def test_a_slider_move_while_the_light_answers_is_not_overwritten_by_max_mode(tm
     wire = SlowG200()
     app = create_app(demo=True, data_dir=tmp_path)
     app.state.hub.store.update_settings({"sync_interval": 0.05})
-    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         _until(ws, lambda m: m["type"] == "hello")
         light = _molus(client, ws, wire)
@@ -353,7 +353,7 @@ def test_a_slider_move_during_a_slow_max_on_write_is_kept(tmp_path, monkeypatch)
 
     wire = SlowWire()
     app = create_app(demo=True, data_dir=tmp_path)
-    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         _until(ws, lambda m: m["type"] == "hello")
         light = _molus(client, ws, wire)
@@ -427,7 +427,7 @@ def test_max_from_the_light_then_a_new_kelvin_in_gaffer_keeps_that_kelvin_at_max
     wire = G200()
     app = create_app(demo=True, data_dir=tmp_path)
     app.state.hub.store.update_settings({"sync_interval": 0.05})
-    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         _until(ws, lambda m: m["type"] == "hello")
         light = _molus(client, ws, wire)
@@ -440,3 +440,55 @@ def test_max_from_the_light_then_a_new_kelvin_in_gaffer_keeps_that_kelvin_at_max
         assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 1)["type"] == "ack"
         state = _light(client, "Zhiyun panel")["state"]
         assert (state["brightness"], state["cct"]["kelvin"]) == (51, 6500)
+
+
+def test_a_fast_mix_of_controls_sends_the_g200_one_command_at_a_time(tmp_path, monkeypatch):
+    """Captain, 18 Oct: after fast brightness, colour temperature and Max Mode changes the G200 stopped
+    taking Bluetooth commands until he power-cycled it. Gaffer had written to it back to back. Now each
+    write waits for the light's answer before the next goes out, and the latest setting still arrives."""
+    import asyncio
+    import random
+
+    monkeypatch.setattr(demo, "PACE", 0.05)
+    in_flight = {"now": 0, "most": 0}
+
+    class AnsweringG200(Wire):
+        """Answers every frame 20 ms after it arrives, echoing its sequence, as the real light does."""
+
+        async def open(self, address, on_notify, on_lost):
+            writes = self.writes
+            loop = asyncio.get_running_loop()
+
+            def answer(frame):
+                in_flight["now"] -= 1
+                on_notify(_answer(frame.command, frame.payload, frame.sequence))
+
+            class Link_(Link):
+                async def write(self, data):
+                    writes.append(bytes(data))
+                    in_flight["now"] += 1
+                    in_flight["most"] = max(in_flight["most"], in_flight["now"])
+                    loop.call_later(0.02, answer, zy.parse_frame(bytes(data)))
+
+            return Link_(writes)
+
+    wire = AnsweringG200()
+    app = create_app(demo=True, data_dir=tmp_path)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    rng = random.Random(18)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        for i in range(60):
+            choice = i % 3
+            if choice == 0:
+                ws.send_json({"type": "set", "light": light, "patch": {"brightness": rng.randint(5, 100)}})
+            elif choice == 1:
+                ws.send_json({"type": "set", "light": light, "patch": {"cct": {"kelvin": rng.randrange(2700, 6500, 100)}}})
+            else:
+                ws.send_json({"type": "light.max_mode", "light": light, "on": i % 2 == 0, "rid": i})
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 42, "cct": {"kelvin": 3300}}, "fade": 0})
+        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_COLOR_TEMP
+                          and int.from_bytes(zy.parse_frame(w).payload[3:5], "little") == 3300 for w in wire.writes),
+              "the last colour temperature to reach the light", seconds=15)
+        assert in_flight["most"] == 1, f"{in_flight['most']} commands were sent before the light answered"
