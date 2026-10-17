@@ -358,6 +358,10 @@ async def _pair(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
 
 @command("lights.import")
 async def _import(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    if "meshJson" in m or "db" in m:  # the Godox app's own export: every light in it at once
+        lights, skipped = await hub.import_godox(client, m)
+        return {"type": "ack", "of": "lights.import", "light": lights[0].id,
+                "lights": [light.id for light in lights], "skipped": skipped}
     light = await hub.import_keys(client, m.get("keys"), str(m.get("address") or ""), str(m.get("name") or ""),
                                   str(m.get("radio_id") or ""))
     return {"type": "ack", "of": "lights.import", "light": light.id}
