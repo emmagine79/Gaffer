@@ -1,0 +1,48 @@
+Gaffer
+Copyright (c) 2026 Captain Awesome (Geekception)
+
+Licensed under the MIT Licence; see LICENSE.
+
+WHERE THIS COMES FROM
+---------------------
+
+Gaffer is built on the work of other open-source projects, all MIT licensed.
+Each one's licence is kept in THIRD-PARTY/, and travels inside Gaffer.app.
+
+* lumen-studio, by Ritik (Rkcr7). Gaffer's light service and web interface
+  start from a copy of it: the Godox driver, model and gel tables, effects,
+  scenes, schedules, cues and the web studio.
+  https://github.com/Rkcr7/lumen-studio
+  Copied from commit 8175526 into service/gaffer/ (renamed from
+  src/lumen_studio), web/ and service/tests/. The first commit of the copy
+  holds it unmodified; later commits show every change made here.
+  Its own NOTICE, which asks for the credits below, is in
+  THIRD-PARTY/lumen-studio/NOTICE.
+
+* godox-ul60bi-bt, by Matt Harrison. The Python library and CLI that first
+  spoke the Godox Bluetooth Mesh protocol: provisioning, keys, encryption and
+  the vendor command set.
+  https://github.com/mattharrison/godox-ul60bi-bt
+
+* ha-godox-mesh, by Simon Cheng. The Home Assistant fork that extended that
+  library from one light to the whole Godox mesh range and generated the
+  per-model capability and gel tables. service/packages/godox-mesh-bt/ is
+  that library at v0.2.8, as lumen-studio carries it, unchanged.
+  https://github.com/binary-person/ha-godox-mesh
+
+* HA-Zhiyun-Light, by didim99. Zhiyun light name prefixes used by the scan.
+  https://github.com/didim99/HA-Zhiyun-Light
+
+* zhiyun-light-control, by aaditagrawal. Zhiyun protocol.
+  https://github.com/aaditagrawal/zhiyun-light-control
+
+* yongnuo-light-control, by asidjwiaijd. The Yongnuo name rule used by the scan.
+  https://github.com/asidjwiaijd/yongnuo-light-control
+
+TRADEMARKS
+----------
+
+"Godox", "Zhiyun" and "Yongnuo" are trademarks of their owners. Gaffer is not
+affiliated with, endorsed by, or sponsored by any of them. Product names are
+used only to identify compatible hardware. No brand logos or assets are
+included.

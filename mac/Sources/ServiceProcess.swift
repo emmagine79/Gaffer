@@ -10,7 +10,7 @@ import Security
 ///
 /// The child's stdin is a pipe whose write end only Gaffer holds. Its first line is
 /// a random session secret made at each launch; the window signs in with it once
-/// (see service/src/gaffer_service/session.py). The service exits when that pipe
+/// (see service/gaffer/session.py). The service exits when that pipe
 /// closes, and the kernel closes it however Gaffer ends (Quit, crash, SIGINT,
 /// SIGKILL), so the service can't be left running.
 final class ServiceProcess {
@@ -46,7 +46,7 @@ final class ServiceProcess {
         process.executableURL = python
         // -I: ignore PYTHON* variables and the user's site-packages. -B: never write
         // .pyc files into the signed bundle.
-        process.arguments = ["-I", "-B", "-m", "gaffer_service", "--session-from-stdin"]
+        process.arguments = ["-I", "-B", "-m", "gaffer", "--session-from-stdin"]
         process.environment = Self.cleanEnvironment()
         process.currentDirectoryURL = resources
         process.standardInput = stdinPipe

@@ -1,0 +1,1670 @@
+"""Build and parse Godox vendor payloads.
+
+Examples
+--------
+>>> build_v2_command(0xFE, 0xFF, bytes([0x00])).hex()
+'fe00ffffffffff7f'
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Final
+
+from godox_mesh_bt.crypto import checksum
+
+logger = logging.getLogger(__name__)
+
+# V2 sub-commands, taken from the receive dispatch of a UL150Bi II firmware
+# image. These are the only values the light tests for; anything else falls
+# through unhandled. See docs/state-readback-investigation.md.
+SUB_ACK: Final = 0xE0
+"""Acknowledges an unsolicited 0xB0 notification and clears its retry counter."""
+
+SUB_SET_CCT: Final = 0xF0
+"""Brightness and colour temperature, with green/magenta tint."""
+
+SUB_HSI: Final = 0xF1
+"""Hue, saturation and intensity -- the app's HSI mode."""
+
+SUB_RGBW: Final = 0xF2
+"""Direct red/green/blue/white channels, one byte each."""
+
+SUB_EFFECT: Final = 0xF3
+"""Lighting effect, with its own brightness."""
+
+SUB_COLOR_CHIP: Final = 0xF4
+"""Colour chip (gel) selection by brand and number.
+
+Previously recorded here as ``SUB_UNKNOWN_F4``, "dispatched but its handler
+only touches unidentified state". It is the vendor app's ``changeLightCard``.
+"""
+
+SUB_FAN: Final = 0xF5
+"""Fan or cooling mode, four states."""
+
+SUB_XY: Final = 0xFA
+"""CIE 1931 xy chromaticity, as a V3 frame.
+
+Previously recorded here as ``SUB_UNKNOWN_FA``, "dispatched to the same stub as
+0xF4". It is the vendor app's ``changeLightXY``.
+"""
+
+#: Retained under their old names so existing callers keep working. Both are
+#: now identified; prefer :data:`SUB_COLOR_CHIP` and :data:`SUB_XY`.
+SUB_UNKNOWN_F4: Final = SUB_COLOR_CHIP
+SUB_UNKNOWN_FA: Final = SUB_XY
+
+SUB_FX_PARAMS: Final = 0xF7
+"""Parameterised effects (V3): flash, lightning, fireworks, welding and so on."""
+
+SUB_COLOR_CHIP_EX: Final = 0xF8
+"""Colour chip for catalogue versions 2 and 3 (V3 frame)."""
+
+SUB_RGB_EX: Final = 0xF9
+"""Extended colour channels (V3): RGBWW and RGB+amber/cyan/lime."""
+
+SUB_STATUS_REQUEST: Final = 0xFD
+"""Asks the light to report its state. The reply arrives on RESPONSE_OPCODE."""
+
+SUB_POWER: Final = 0xFE
+"""Power. Polarity is reversed: data byte 0x00 turns the light on."""
+
+# Sub-commands the light sends back.
+SUB_STATUS_CCT: Final = 0xA0
+"""Status reply while in colour-temperature mode."""
+
+SUB_STATUS_EFFECT: Final = 0xA3
+"""Status reply while an effect is running."""
+
+SUB_STATUS_ECHO: Final = 0xAD
+"""Reply to a status request whose first data byte is zero."""
+
+SUB_STATUS_BATTERY: Final = 0xA6
+"""Battery/power reply, sent when a status request carries the 0xA6 end byte."""
+
+SUB_STATUS_ACK: Final = 0xE0
+"""Acknowledges a status reply so the light stops retransmitting it."""
+
+SUB_STATUS_VERSION: Final = 0xAF
+"""Version reply family. Sub-type 0x20 carries the BLE firmware version."""
+
+SUB_EVENT: Final = 0xB0
+"""Unsolicited notification of a locally-made change, retried until acked."""
+
+#: A small fallback effect set for models with no catalogue data. These values
+#: are the SL200III Bi's own symbols, kept only because something must be
+#: offered when the model is unknown. It is **not** a universal
+#: list: Godox publishes a per-model effect set (16 distinct sets across the
+#: supported range, symbols spanning 0-19), so prefer the model's own list.
+EFFECT_IDS: Final = (1, 3, 4, 5, 6, 7, 8)
+
+#: Fan or cooling mode codes accepted by the 0xF5 handler. Code 4 was missing
+#: here until it was read back out of the vendor app, which maps its own
+#: (mode, speed) pair onto these five codes.
+FAN_MODES: Final = (0, 1, 2, 3, 4)
+
+#: Human names for :data:`FAN_MODES`. The order is not monotonic in speed --
+#: 4 sits between 2 and 3 -- which is why the firmware appears to "permute" the
+#: values. Code 0 is *silent*, not off: the vendor catalogue's English label
+#: reads "OFF" but its Chinese (the source language), Korean, German, Spanish,
+#: French, Italian and Japanese all say "mute".
+#:
+#: The Home Assistant integration builds its own per-model list from the
+#: capability table; this is for direct library users.
+FAN_MODE_NAMES: Final = {
+    0: "Silent",
+    1: "Automatic",
+    2: "Low",
+    4: "Medium",
+    3: "High",
+}
+
+#: Data byte the light returns in the unused positions of a status reply.
+_STATUS_PAD: Final = 0xFF
+
+
+
+@dataclass(frozen=True)
+class BatteryPower:
+    """Parsed battery and power status fields.
+
+    Parameters
+    ----------
+    state
+        Raw power-state byte reported by the light.
+    hour
+        Remaining runtime hours reported by the light.
+    minute
+        Remaining runtime minutes reported by the light.
+    option
+        Battery option bit extracted from the response.
+    power_percent
+        Battery power percentage.
+
+    Examples
+    --------
+    >>> parse_battery_power_response(bytes.fromhex("a600000040000000")).power_percent
+    64
+    """
+
+    state: int
+    hour: int
+    minute: int
+    option: int
+    power_percent: int
+
+
+@dataclass(frozen=True)
+class GodoxV2Payload:
+    """Decoded fixed-width Godox V2 command payload.
+
+    Parameters
+    ----------
+    model
+        Godox model or command family byte.
+    data
+        Five command data bytes.
+    end_byte
+        Command terminator or brightness decimal byte.
+    checksum
+        CRC-8 checksum byte.
+
+    Examples
+    --------
+    >>> parse_v2_payload(bytes.fromhex("fe00ffffffffff7f")).model
+    254
+    """
+
+    model: int
+    data: bytes
+    end_byte: int
+    checksum: int
+
+
+def validate_brightness(value: int) -> int:
+    """Validate a Godox brightness percentage.
+
+    Parameters
+    ----------
+    value
+        Brightness percentage from 0 through 100.
+
+    Returns
+    -------
+    int
+        The validated brightness value.
+
+    Examples
+    --------
+    >>> validate_brightness(50)
+    50
+    >>> validate_brightness(101)
+    Traceback (most recent call last):
+    ...
+    ValueError: brightness must be between 0 and 100
+    """
+
+    if not 0 <= value <= 100:
+        raise ValueError("brightness must be between 0 and 100")
+    return value
+
+
+#: What the wire can carry: colour temperature travels as one byte of hundreds
+#: of Kelvin. These are *protocol* limits, deliberately not any one light's
+#: limits -- Godox mesh models range from 1800 K to 10000 K, and hardcoding the
+#: 2800-6500 K of the lights this library was developed against rejected valid
+#: commands for half the range.
+CCT_MIN_KELVIN: Final = 100
+CCT_MAX_KELVIN: Final = 25500
+
+
+def validate_cct(
+    value: int,
+    *,
+    min_kelvin: int = CCT_MIN_KELVIN,
+    max_kelvin: int = CCT_MAX_KELVIN,
+) -> int:
+    """Validate a Godox correlated color temperature value.
+
+    Parameters
+    ----------
+    value
+        Color temperature in Kelvin.
+    min_kelvin, max_kelvin
+        The accepted range. Defaults to what the protocol can encode; pass the
+        model's own range (from the capability table) to reject values that
+        particular light will not honour.
+
+    Returns
+    -------
+    int
+        The validated color temperature.
+
+    Examples
+    --------
+    >>> validate_cct(5600)
+    5600
+    >>> validate_cct(1800)          # a 1800-10000 K light, rejected before
+    1800
+    >>> validate_cct(2700, min_kelvin=2800, max_kelvin=6500)
+    Traceback (most recent call last):
+    ...
+    ValueError: CCT must be between 2800K and 6500K
+    """
+
+    if not min_kelvin <= value <= max_kelvin:
+        raise ValueError(f"CCT must be between {min_kelvin}K and {max_kelvin}K")
+    return value
+
+
+def build_v2_command(model: int, end_byte: int, data: bytes) -> bytes:
+    """Build an 8-byte Godox V2 command payload.
+
+    Parameters
+    ----------
+    model
+        Godox model or command family byte.
+    end_byte
+        End byte to place before the checksum.
+    data
+        Up to five command data bytes; shorter values are padded with ``0xFF``.
+
+    Returns
+    -------
+    bytes
+        Packed V2 payload as ``model + padded data + end_byte + checksum``.
+
+    Examples
+    --------
+    >>> build_v2_command(0xFE, 0xFF, bytes([0x00])).hex()
+    'fe00ffffffffff7f'
+    """
+    if len(data) > 5:
+        raise ValueError("V2 command data must be at most 5 bytes")
+
+    # Pad data with 0xFF up to 5 bytes
+    padded_data = data + b"\xFF" * (5 - len(data))
+    payload = bytes([model]) + padded_data + bytes([end_byte])
+    crc = checksum(payload)
+    command = payload + bytes([crc])
+    logger.debug("built V2 command model=0x%02x len=%d", model, len(command))
+    return command
+
+
+def parse_v2_payload(payload: bytes) -> GodoxV2Payload:
+    """Parse and validate an 8-byte Godox V2 command payload.
+
+    Parameters
+    ----------
+    payload
+        Full V2 payload including checksum.
+
+    Returns
+    -------
+    GodoxV2Payload
+        Parsed payload fields.
+
+    Examples
+    --------
+    >>> parsed = parse_v2_payload(bytes.fromhex("f032383200000032"))
+    >>> parsed.data.hex()
+    '3238320000'
+    """
+
+    if len(payload) != 8:
+        raise ValueError("V2 payload must be exactly 8 bytes")
+
+    expected = checksum(payload[:7])
+    actual = payload[7]
+    if actual != expected:
+        raise ValueError("invalid V2 payload checksum")
+
+    parsed = GodoxV2Payload(
+        model=payload[0],
+        data=payload[1:6],
+        end_byte=payload[6],
+        checksum=actual,
+    )
+    logger.debug("parsed V2 payload model=0x%02x", parsed.model)
+    return parsed
+
+
+def build_v3_command(cmd: int, data: bytes) -> bytes:
+    """Build a variable-length Godox V3 command payload.
+
+    Parameters
+    ----------
+    cmd
+        V3 command byte.
+    data
+        Command data bytes.
+
+    Returns
+    -------
+    bytes
+        Packed V3 payload with length and checksum bytes.
+
+    Examples
+    --------
+    >>> build_v3_command(0xA6, b"\\x01").hex()
+    'a6040142'
+    """
+    length = len(data) + 3
+    payload = bytes([cmd, length]) + data
+    crc = checksum(payload)
+    command = payload + bytes([crc])
+    logger.debug("built V3 command cmd=0x%02x len=%d", cmd, len(command))
+    return command
+
+
+def parse_battery_power_response(data: bytes) -> BatteryPower:
+    """Parse a Godox V3 battery/power response.
+
+    Parameters
+    ----------
+    data
+        Raw response bytes beginning with ``0xA6``.
+
+    Returns
+    -------
+    BatteryPower
+        Parsed power status.
+
+    Examples
+    --------
+    >>> parse_battery_power_response(bytes.fromhex("a600000040000000"))
+    BatteryPower(state=0, hour=0, minute=0, option=0, power_percent=64)
+    """
+
+    if len(data) < 8:
+        raise ValueError("battery response must be at least 8 bytes")
+    if data[0] != 0xA6:
+        raise ValueError("battery response must start with 0xA6")
+
+    parsed = BatteryPower(
+        state=data[1],
+        hour=data[2],
+        minute=data[3],
+        option=data[4] >> 7,
+        power_percent=data[4] & 0x7F,
+    )
+    logger.debug("parsed battery response percent=%d", parsed.power_percent)
+    return parsed
+
+
+
+
+@dataclass(frozen=True)
+class StatusResponse:
+    """A status reply from the light.
+
+    Sent in answer to :func:`build_status_request`, on the response opcode
+    rather than the request opcode. Which fields are populated depends on what
+    the light is doing: colour temperature mode reports ``cct``, effect mode
+    reports ``effect``.
+
+    Parameters
+    ----------
+    sub_command
+        ``SUB_STATUS_CCT`` or ``SUB_STATUS_EFFECT``.
+    brightness
+        Brightness percentage the light reports.
+    cct
+        Colour temperature in Kelvin, or ``None`` in effect mode.
+    effect
+        Effect identifier, or ``None`` in colour temperature mode.
+    extra
+        The third data byte. In colour temperature mode this mirrors the value
+        sent as the third byte of a ``0xF0`` command.
+    raw
+        The complete eight-byte reply, checksum included.
+
+    Examples
+    --------
+    >>> parse_status_response(bytes.fromhex("a00a1b32ffff01f9")).cct
+    2700
+    """
+
+    sub_command: int
+    brightness: int
+    cct: int | None
+    effect: int | None
+    extra: int
+    raw: bytes
+
+
+def build_status_request(
+    data_byte: int = 0x01, record: int = SUB_STATUS_CCT
+) -> bytes:
+    """Build a request asking the light to report its state.
+
+    The end byte selects *which* record the light reports, and this matters: a
+    request padded with 0xFF gets no reply at all on real hardware, while
+    selecting the ``0xA0`` record returns live brightness. Verified on an
+    SL200III Bi.
+
+    Parameters
+    ----------
+    data_byte
+        First data byte. Must be non-zero: the firmware treats zero as a
+        request for an echo reply rather than a status report.
+    record
+        Which status record to ask for. Defaults to the brightness/colour
+        record, :data:`SUB_STATUS_CCT`.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame. Send it with the request opcode; the answer comes
+        back on the response opcode.
+
+    Examples
+    --------
+    >>> build_status_request().hex()
+    'fd01ffffffffa095'
+    """
+
+    if not 0 < data_byte <= 0xFF:
+        raise ValueError("status request data byte must be between 1 and 255")
+    return build_v2_command(SUB_STATUS_REQUEST, record, bytes([data_byte]))
+
+
+def build_battery_request() -> bytes:
+    """Build a request asking a battery-powered light to report its charge.
+
+    Mirrors the Godox app's ``getBatteryPower``: sub-command ``0xFD``, first data
+    byte ``0x01``, and the end byte ``0xA6`` which selects the battery record.
+    The reply is a ``0xA6`` frame parsed by :func:`parse_battery_power_response`,
+    and arrives on the response opcode.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame.
+
+    Examples
+    --------
+    >>> build_battery_request().hex()
+    'fd01ffffffffa648'
+    """
+
+    return build_v2_command(SUB_STATUS_REQUEST, SUB_STATUS_BATTERY, bytes([0x01]))
+
+
+def build_version_request() -> bytes:
+    """Build a request asking a light for its BLE firmware version.
+
+    Mirrors the Godox app's ``getFirmwareVersion``: sub-command ``0xFD`` with
+    data byte ``0x02``. The reply is an ``0xAF 0x20`` frame; parse it with
+    :func:`parse_version_response`. The readback firmware patch makes a light
+    report version ``1``, which is how the patch is detected.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame.
+
+    Examples
+    --------
+    >>> build_version_request().hex()
+    'fd02ffffffffff56'
+    """
+
+    return build_v2_command(SUB_STATUS_REQUEST, 0xFF, bytes([0x02]))
+
+
+def parse_version_response(payload: bytes) -> int:
+    """Return the BLE firmware version from an ``0xAF 0x20`` reply.
+
+    Parameters
+    ----------
+    payload
+        The V2 frame carried by a response-opcode message.
+
+    Returns
+    -------
+    int
+        The reported version. Stock Godox firmware reports a value like 102
+        (``0x66``); the readback patch reports ``1``.
+
+    Raises
+    ------
+    ValueError
+        If the frame is not an ``0xAF 0x20`` version reply.
+
+    Examples
+    --------
+    >>> parse_version_response(bytes.fromhex("af20000066ffff00"))
+    102
+    """
+
+    if len(payload) < 5 or payload[0] != SUB_STATUS_VERSION or payload[1] != 0x20:
+        raise ValueError("not a version reply (expected 0xAF 0x20)")
+    return payload[4]
+
+
+def build_status_ack(record: int = SUB_STATUS_CCT) -> bytes:
+    """Build an acknowledgement that stops the light retransmitting a reply.
+
+    The light repeats a status reply until it is acknowledged, so an unacked
+    answer keeps arriving and can be mistaken for the answer to a later query.
+
+    Examples
+    --------
+    >>> build_status_ack(0xA0).hex()
+    'e0a0ffffffffffa7'
+    """
+
+    return build_v2_command(SUB_STATUS_ACK, _STATUS_PAD, bytes([record]))
+
+
+def parse_status_response(payload: bytes) -> StatusResponse:
+    """Parse a status reply from the light.
+
+    Parameters
+    ----------
+    payload
+        The eight-byte V2 frame carried by a response-opcode message.
+
+    Returns
+    -------
+    StatusResponse
+        Parsed reply.
+
+    Raises
+    ------
+    ValueError
+        If the frame is malformed, the checksum is wrong, or the sub-command is
+        not one the light uses for status.
+
+    Examples
+    --------
+    >>> reply = parse_status_response(bytes.fromhex("a00a1b32ffff01f9"))
+    >>> reply.brightness, reply.cct
+    (10, 2700)
+    """
+
+    parsed = parse_v2_payload(payload)
+    if parsed.model not in (SUB_STATUS_CCT, SUB_STATUS_EFFECT):
+        raise ValueError(
+            f"0x{parsed.model:02x} is not a status response sub-command"
+        )
+
+    brightness = parsed.data[0]
+    second = parsed.data[1]
+    is_cct = parsed.model == SUB_STATUS_CCT
+    response = StatusResponse(
+        sub_command=parsed.model,
+        brightness=brightness,
+        # The light reports colour temperature in hundreds of Kelvin. It is
+        # deliberately not range-checked here: a light may report a value
+        # outside the range it accepts in commands, and a status reading should
+        # be reported as received rather than rejected.
+        cct=second * 100 if is_cct else None,
+        effect=None if is_cct else second,
+        extra=parsed.data[2],
+        raw=bytes(payload),
+    )
+    logger.debug("parsed status response sub=0x%02x", parsed.model)
+    return response
+
+
+def build_effect_command(effect: int, brightness: int, speed: int = 0) -> bytes:
+    """Build a lighting effect command.
+
+    Parameters
+    ----------
+    effect
+        Effect symbol. Which symbols a light dispatches is model-specific; an
+        unrecognised one is silently ignored by the firmware. Note that the
+        vendor app derives this from the catalogue's effect id, subtracting one
+        on newer models -- see :func:`godox_mesh_bt.protocol.EFFECT_IDS`.
+    brightness
+        Brightness percentage from 0 through 100.
+    speed
+        Effect speed. The number of usable steps is per-effect (the catalogue
+        calls it ``gear``); 0 is always valid.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame.
+
+    Examples
+    --------
+    >>> build_effect_command(4, brightness=80).hex()
+    'f3500400ffffff54'
+    >>> build_effect_command(4, brightness=80, speed=2).hex()
+    'f3500402ffffff53'
+    """
+
+    if not 0 <= effect <= 0xFF:
+        raise ValueError(f"effect must be 0-255, got {effect}")
+    if not 0 <= speed <= 0xFF:
+        raise ValueError(f"speed must be 0-255, got {speed}")
+    validate_brightness(brightness)
+    # Data byte 0 is brightness, byte 1 the effect symbol and byte 2 the speed.
+    # An earlier version of this function repeated the effect in byte 2, which
+    # happened to look right because the two are equal for some effects; the
+    # vendor app sends [brightness, symbol, speed, 0xFF, 0xFF].
+    return build_v2_command(
+        SUB_EFFECT, _STATUS_PAD, bytes([brightness, effect, speed])
+    )
+
+
+def build_fan_command(mode: int) -> bytes:
+    """Build a fan or cooling mode command.
+
+    Parameters
+    ----------
+    mode
+        One of :data:`FAN_MODES`. The firmware maps these through a permutation
+        internally, so the meaning of each value is not necessarily ordered.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame.
+
+    Examples
+    --------
+    >>> build_fan_command(2).hex()
+    'f502ffffffffffa7'
+    """
+
+    if mode not in FAN_MODES:
+        raise ValueError(f"fan mode must be one of {FAN_MODES}, got {mode}")
+    return build_v2_command(SUB_FAN, _STATUS_PAD, bytes([mode]))
+
+
+def split_brightness(brightness: float) -> tuple[int, int]:
+    """Split a brightness percentage into its whole and tenth parts.
+
+    Every light command carries brightness as two fields: the whole percent in
+    a data byte, and the tenth in the V2 end byte (V3 frames carry it as the
+    second data byte). Models whose catalogue ``luminance`` is 1000 honour the
+    tenth; the rest ignore it, so sending it is harmless either way.
+
+    Parameters
+    ----------
+    brightness
+        Percentage from 0 through 100.
+
+    Returns
+    -------
+    tuple[int, int]
+        ``(percent, tenths)``, with tenths in 0-9.
+
+    Examples
+    --------
+    >>> split_brightness(42.7)
+    (42, 7)
+    >>> split_brightness(100)
+    (100, 0)
+    """
+
+    percent = int(brightness)
+    validate_brightness(percent)
+    tenths = int(round((brightness - percent) * 10))
+    return percent, max(0, min(9, tenths))
+
+
+#: Green/magenta tint the wire can carry. The catalogue gives each model its own
+#: range -- 0 (no tint control), +/-50 or +/-100.
+GM_MIN: Final = -100
+GM_MAX: Final = 100
+
+#: Hue in degrees, and saturation as a percentage, exactly as the vendor app's
+#: HSI screen presents them.
+HUE_MAX: Final = 360
+SAT_MAX: Final = 100
+
+#: Channel value ranges. ``rgbDisplay`` 0 models take one byte per channel;
+#: 1 and 2 take a 16-bit value scaled to 0-1000, which is why they need the V3
+#: frame rather than :func:`build_rgbw_command`.
+RGB8_MAX: Final = 255
+RGB16_MAX: Final = 1000
+
+#: CIE 1931 xy, sent as integers of ten-thousandths.
+XY_SCALE: Final = 10000
+
+#: ``rgbJson.type`` in the vendor app: which extra channels the RGB frame
+#: carries after red, green and blue.
+RGB_TYPE_RGBW: Final = 0
+RGB_TYPE_RGBWW: Final = 1
+RGB_TYPE_RGBACL: Final = 2
+
+
+def build_cct_command(
+    brightness: float,
+    kelvin: int,
+    *,
+    gm: int = 0,
+    supports_gm: bool = False,
+    circle: int = 0,
+    min_kelvin: int = CCT_MIN_KELVIN,
+    max_kelvin: int = CCT_MAX_KELVIN,
+) -> bytes:
+    """Build a brightness / colour-temperature command, with green-magenta tint.
+
+    Mirrors the vendor app's ``changeLightCCT``. The tint is sent twice: data
+    byte 2 carries the legacy form, an unsigned value centred on 50, and data
+    byte 4 carries the signed value that models with a +/-100 range need. A
+    model without tint control sends 50 and 0, which is what this library sent
+    before the tint was implemented -- so the frame is unchanged for those.
+
+    Parameters
+    ----------
+    brightness
+        Percentage from 0 through 100; tenths are carried in the end byte.
+    kelvin
+        Colour temperature. Encoded as hundreds of Kelvin in one byte.
+    gm
+        Green/magenta tint. Negative is green, positive magenta.
+    supports_gm
+        Whether this model has a tint range at all. When false the signed
+        field is zeroed, matching the app's own branch on ``isSupportGM``.
+    circle
+        The app's ``circleMode``. Values outside 0-3 are sent as ``0xFF``.
+    min_kelvin, max_kelvin
+        The model's accepted range, used to reject impossible commands.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame.
+
+    Examples
+    --------
+    >>> build_cct_command(75, 5600).hex()
+    'f04b38320000003c'
+    >>> build_cct_command(75, 5600, gm=-20, supports_gm=True).hex()
+    'f04b381e00ec0066'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    validate_cct(kelvin, min_kelvin=min_kelvin, max_kelvin=max_kelvin)
+    if not GM_MIN <= gm <= GM_MAX:
+        raise ValueError(f"gm must be between {GM_MIN} and {GM_MAX}, got {gm}")
+    circle_byte = circle if 0 <= circle < 4 else _STATUS_PAD
+    return build_v2_command(
+        SUB_SET_CCT,
+        tenths,
+        bytes(
+            [
+                percent,
+                kelvin // 100,
+                (gm + 50) & 0xFF,
+                circle_byte,
+                (gm & 0xFF) if supports_gm else 0,
+            ]
+        ),
+    )
+
+
+def build_hsi_command(
+    brightness: float, hue: int, saturation: int, *, mode: int = 0
+) -> bytes:
+    """Build an HSI (hue / saturation / intensity) command.
+
+    Mirrors the vendor app's ``changeLightHSI``. Hue and saturation are in the
+    same units Home Assistant's ``hs_color`` uses, so no conversion is needed:
+    degrees 0-360 and percent 0-100.
+
+    Parameters
+    ----------
+    brightness
+        Percentage from 0 through 100; tenths are carried in the end byte.
+    hue
+        Hue in degrees, 0 through 360. Sent little-endian across two bytes.
+    saturation
+        Saturation percentage, 0 through 100.
+    mode
+        The app's HSI sub-mode. It sends 0 from the main control screen and 2
+        from its scene player; 0 is the right default.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame.
+
+    Examples
+    --------
+    >>> build_hsi_command(100, 240, 100).hex()
+    'f164f000640000fb'
+    >>> build_hsi_command(50, 0, 0).hex()
+    'f1320000000000fa'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    if not 0 <= hue <= HUE_MAX:
+        raise ValueError(f"hue must be 0-{HUE_MAX}, got {hue}")
+    if not 0 <= saturation <= SAT_MAX:
+        raise ValueError(f"saturation must be 0-{SAT_MAX}, got {saturation}")
+    return build_v2_command(
+        SUB_HSI,
+        tenths,
+        # Little-endian here, unlike the V3 frames below, which are big-endian.
+        bytes([percent, hue & 0xFF, (hue >> 8) & 0xFF, saturation, mode]),
+    )
+
+
+def build_rgbw_command(
+    brightness: float, red: int, green: int, blue: int, white: int = 0
+) -> bytes:
+    """Build a direct red/green/blue/white channel command.
+
+    Mirrors the vendor app's ``changeLightRGBW``, used for models whose
+    catalogue ``rgbDisplay`` is 0 -- one byte per channel, 0-255. Models with
+    ``rgbDisplay`` 1 or 2 take sixteen-bit channels instead; use
+    :func:`build_rgb_wide_command` for those.
+
+    Parameters
+    ----------
+    brightness
+        Percentage from 0 through 100; tenths are carried in the end byte.
+    red, green, blue, white
+        Channel values, 0 through 255.
+
+    Returns
+    -------
+    bytes
+        Eight-byte V2 frame.
+
+    Examples
+    --------
+    >>> build_rgbw_command(100, 255, 0, 0).hex()
+    'f264ff00000000e8'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    channels = (red, green, blue, white)
+    if any(not 0 <= c <= RGB8_MAX for c in channels):
+        raise ValueError(f"channel values must be 0-{RGB8_MAX}, got {channels}")
+    return build_v2_command(SUB_RGBW, tenths, bytes([percent, *channels]))
+
+
+def build_rgb_wide_command(
+    brightness: float,
+    red: int,
+    green: int,
+    blue: int,
+    *,
+    rgb_type: int = RGB_TYPE_RGBW,
+    extra: tuple[int, int, int] = (0, 0, 0),
+) -> bytes:
+    """Build a sixteen-bit RGB command for ``rgbDisplay`` 1 and 2 models.
+
+    Mirrors the vendor app's ``changeLightRGBWEx2``. Channels go on the wire as
+    0-1000 regardless of how the app's own slider is labelled: a model that
+    shows 0-100 has its value multiplied by ten before sending.
+
+    Parameters
+    ----------
+    brightness
+        Percentage from 0 through 100; tenths are the second data byte.
+    red, green, blue
+        Channel values, 0 through 1000.
+    rgb_type
+        Which extra channels follow -- :data:`RGB_TYPE_RGBW` (white),
+        :data:`RGB_TYPE_RGBWW` (white, warm white) or
+        :data:`RGB_TYPE_RGBACL` (amber, cyan, lime).
+    extra
+        The three trailing channel values, 0 through 1000. Which of them the
+        light reads depends on *rgb_type*.
+
+    Returns
+    -------
+    bytes
+        Variable-length V3 frame.
+
+    Examples
+    --------
+    >>> build_rgb_wide_command(100, 1000, 0, 0).hex()
+    'f91264000003e80000000000000000000080'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    channels = (red, green, blue, *extra)
+    if any(not 0 <= c <= RGB16_MAX for c in channels):
+        raise ValueError(f"channel values must be 0-{RGB16_MAX}, got {channels}")
+    body = bytearray([percent, tenths, rgb_type])
+    for channel in channels:
+        # Big-endian, unlike the V2 HSI frame.
+        body += channel.to_bytes(2, "big")
+    return build_v3_command(SUB_RGB_EX, bytes(body))
+
+
+def build_xy_command(
+    brightness: float, x: float, y: float, *, color_gamut: int | None = None
+) -> bytes:
+    """Build a CIE 1931 xy chromaticity command.
+
+    Mirrors the vendor app's ``changeLightXY`` (and ``changeLightXYEx`` when a
+    gamut is given). Coordinates are the 0-1 floats Home Assistant's
+    ``xy_color`` uses; they go on the wire as ten-thousandths.
+
+    Parameters
+    ----------
+    brightness
+        Percentage from 0 through 100; tenths are the second data byte.
+    x, y
+        Chromaticity coordinates, 0 through 1.
+    color_gamut
+        Optional gamut selector. Omitted entirely when ``None``, which is the
+        shorter frame the app sends by default.
+
+    Returns
+    -------
+    bytes
+        Variable-length V3 frame.
+
+    Examples
+    --------
+    >>> build_xy_command(100, 0.3127, 0.3290).hex()
+    'fa0964000c370cda8a'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    for name, value in (("x", x), ("y", y)):
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be between 0 and 1, got {value}")
+    body = bytearray([percent, tenths])
+    body += int(round(x * XY_SCALE)).to_bytes(2, "big")
+    body += int(round(y * XY_SCALE)).to_bytes(2, "big")
+    if color_gamut is not None:
+        body.append(color_gamut)
+    return build_v3_command(SUB_XY, bytes(body))
+
+
+#: Effect speed for the newer effect generation is a 0-100 slider in the V3
+#: frame, not the small step count ``gear`` gives for the older one. Every
+#: ``effectVersion`` 1 model in the catalogue reports ``gear: 0``, which is the
+#: clearest sign that field does not apply to them.
+FX_V3_SPEED_MAX: Final = 100
+
+#: The newer effect generation, keyed by the same symbol the older one uses.
+#:
+#: Two things differ from ``0xF3`` and both matter. The frame is V3 on
+#: sub-command :data:`SUB_FX_PARAMS`, and the third data byte is a **selector
+#: that is not the symbol** -- Flash is symbol 5 but selector 0, Police Car is
+#: symbol 15 but selector 10. Sending the symbol there would run the wrong
+#: effect.
+#:
+#: The values are ``(selector, parameter names in wire order)``. The names are
+#: the vendor app's own, and their defaults come from its model classes; see
+#: :data:`FX_V3_DEFAULTS`.
+FX_V3: Final[dict[int, tuple[int, tuple[str, ...]]]] = {
+    # The three colour-block effects are not in this table: their frame is a
+    # fixed-width header followed by a variable list of colour blocks, and the
+    # app sends the full header even when the list is empty. See
+    # :data:`FX_V3_COLOR_BLOCK` and :func:`build_fx_color_block_command`.
+    3: (12, ("speed", "sat")),  # RGB Cycle
+    4: (13, ("speed", "sat")),  # Party / laser
+    5: (0, ("speed", "trigger", "mode", "option", "option_value", "gm")),  # Flash
+    6: (1, ("frequency", "trigger", "twinkling", "temperature")),  # Lightning
+    7: (2, ("speed", "light_dark")),  # Cloudy
+    8: (3, ("speed", "option", "option_value", "gm")),  # Broken Bulb
+    9: (4, ("speed", "option")),  # TV
+    10: (5, ("speed",)),  # Candle
+    11: (6, ("speed",)),  # Fire
+    12: (7, ("speed", "ember")),  # Firework
+    13: (8, ("speed", "ember", "trigger", "option", "option_value", "gm")),  # Explosion
+    14: (9, ("speed", "option", "option_value", "gm")),  # Welding
+    15: (10, ("mode", "color")),  # Police Car
+    16: (11, ("option", "option_value", "gm")),  # SOS
+    17: (17, ("gear",)),  # Music
+    18: (19, ("tone_mode", "speed")),  # Pixel Candle
+    19: (18, ("tone_mode", "speed")),  # Pixel Fire
+}
+
+#: Defaults for every :data:`FX_V3` parameter, taken from the vendor app's own
+#: effect model classes so an effect this library sends looks like one the app
+#: sent. ``option`` 0 selects the colour-temperature form of an effect's colour
+#: and 1 the hue form, which is why ``gm`` -- the scale of ``option_value`` --
+#: follows it.
+FX_V3_DEFAULTS: Final[dict[str, int]] = {
+    "speed": 50,
+    "sat": 50,
+    "direction": 0,
+    "color_length": 1,
+    "mode": 0,
+    "trigger": 0,
+    "option": 0,
+    "option_value": 50,
+    "gm": 50,
+    "frequency": 17,
+    "twinkling": 7,
+    "temperature": 65,
+    "light_dark": 30,
+    "ember": 50,
+    "color": 0,
+    "gear": 0,
+    "tone_mode": 1,
+    # RGB Fade's background colour, in the same option/value/saturation shape
+    # as a colour block.
+    "bg_option": 0,
+    "bg_value_high": 50,
+    "bg_value_low": 0xFF,
+    "bg_sat": 50,
+}
+
+#: The colour-block effects, which have a shape of their own: a fixed header,
+#: then four bytes per colour block. The header is sent at full width even with
+#: no blocks -- the app builds it, checks whether the list is empty, and sends
+#: it unchanged if so. An earlier version of this module derived their frames
+#: from :data:`FX_V3` like every other effect and emitted six or seven data
+#: bytes where the light expects thirteen or seventeen.
+#:
+#: Values are ``(selector, header after [brightness, tenths, selector])``, with
+#: ``None`` standing for a ``0xFF`` pad and ``"blocks"`` for the block count,
+#: which is always the last header byte.
+FX_V3_COLOR_BLOCK: Final[dict[int, tuple[int, tuple[str | None, ...]]]] = {
+    # RGB Fade also carries a background colour after the block count.
+    0: (
+        14,
+        (
+            "speed", "direction", "color_length",
+            None, None, None, None, None, None,
+            "blocks",
+            "bg_option", "bg_value_high", "bg_value_low", "bg_sat",
+        ),
+    ),
+    1: (
+        15,
+        (
+            "speed", "direction", "color_length",
+            None, None, None, None, None, None,
+            "blocks",
+        ),
+    ),
+    # Chase puts its mode where Flow has the first pad byte.
+    2: (
+        16,
+        (
+            "speed", "direction", "color_length", "mode",
+            None, None, None, None, None,
+            "blocks",
+        ),
+    ),
+}
+
+
+@dataclass(frozen=True)
+class ColorBlock:
+    """One colour in a chase, flow or fade effect's sequence.
+
+    Parameters
+    ----------
+    option
+        0 selects the colour-temperature form of the colour, 1 the hue form.
+        2 marks the block unused, which the app sends as four ``0xFF`` bytes.
+    value
+        Colour temperature or hue, depending on *option*. The hue form is sent
+        across two bytes.
+    saturation
+        Saturation percentage.
+
+    Examples
+    --------
+    >>> ColorBlock(option=1, value=240, saturation=100).option
+    1
+    """
+
+    option: int = 0
+    value: int = 50
+    saturation: int = 50
+
+    def to_bytes(self) -> bytes:
+        """Pack the block as the four bytes the wire carries."""
+        if self.option == 2:
+            return bytes([_STATUS_PAD] * 4)
+        if self.option == 1:
+            high, low = (self.value >> 8) & 0xFF, self.value & 0xFF
+        else:
+            high, low = self.value & 0xFF, _STATUS_PAD
+        return bytes([self.option, high, low, self.saturation])
+
+
+def build_fx_color_block_command(
+    symbol: int,
+    brightness: float,
+    *,
+    blocks: "tuple[ColorBlock, ...] | None" = None,
+    **params: int,
+) -> bytes:
+    """Build one of the three colour-block effects (fade, flow, chase).
+
+    Parameters
+    ----------
+    symbol
+        0 for RGB Fade, 1 for RGB Flow, 2 for RGB Chase.
+    brightness
+        Percentage from 0 through 100.
+    blocks
+        The colour sequence. An empty or omitted list sends the header alone,
+        which is what the vendor app does when the user has not set one -- the
+        light then runs the effect on its own defaults.
+    **params
+        Header fields, named as in :data:`FX_V3_COLOR_BLOCK`; anything omitted
+        falls back to :data:`FX_V3_DEFAULTS`.
+
+    Returns
+    -------
+    bytes
+        A V3 frame on :data:`SUB_FX_PARAMS`.
+
+    Examples
+    --------
+    >>> build_fx_color_block_command(1, 80).hex()
+    'f71050000f320001ffffffffffff0041'
+    """
+
+    if symbol not in FX_V3_COLOR_BLOCK:
+        raise ValueError(f"effect {symbol} is not a colour-block effect")
+    selector, header = FX_V3_COLOR_BLOCK[symbol]
+    values = dict(FX_V3_DEFAULTS)
+    values.update(params)
+    blocks = blocks or ()
+
+    percent, tenths = split_brightness(brightness)
+    body = bytearray([percent, tenths, selector])
+    for name in header:
+        if name is None:
+            body.append(_STATUS_PAD)
+        elif name == "blocks":
+            body.append(len(blocks))
+        else:
+            body.append(values[name] & 0xFF)
+    for block in blocks:
+        body += block.to_bytes()
+    return build_v3_command(SUB_FX_PARAMS, bytes(body))
+
+
+#: Parameters that carry a two-byte value when ``option`` is 1 -- the hue form.
+#: The app writes the high byte in the value's own position and the low byte in
+#: the one after it, and ``0xFF`` in that second position otherwise.
+_FX_V3_WIDE_WHEN_HUE: Final = "option_value"
+
+
+def build_fx_command(
+    symbol: int,
+    brightness: float,
+    *,
+    speed: int | None = None,
+    effect_version: int = 0,
+    **params: int,
+) -> bytes:
+    """Build a lighting effect command in whichever form the model takes.
+
+    Godox has two effect generations and they are not interchangeable. Models
+    whose catalogue ``effectVersion`` is 0 take the eight-byte ``0xF3`` frame,
+    with the speed as a small step index. Models whose ``effectVersion`` is 1
+    -- 122 of the 177 that have effects -- take a V3 frame on ``0xF7``, with a
+    per-effect selector, a 0-100 speed and a handful of effect-specific
+    parameters. Sending ``0xF3`` to one of those is what this library did
+    until the app's own dispatch was read properly.
+
+    Parameters
+    ----------
+    symbol
+        Effect symbol, the catalogue id minus one. The same value identifies
+        the effect in both generations.
+    brightness
+        Percentage from 0 through 100.
+    speed
+        Effect speed. 0 through ``gears - 1`` on the older generation, 0
+        through :data:`FX_V3_SPEED_MAX` on the newer. Defaults to the app's own
+        starting value for the generation.
+    effect_version
+        0 for the older frame, 1 for the newer.
+    **params
+        Further parameters for the newer generation, named as in
+        :data:`FX_V3`. Anything not given falls back to
+        :data:`FX_V3_DEFAULTS`.
+
+    Returns
+    -------
+    bytes
+        A V2 frame for the older generation, a V3 frame for the newer.
+
+    Raises
+    ------
+    ValueError
+        If a newer-generation symbol has no entry in :data:`FX_V3`, or a named
+        parameter is not one that effect takes.
+
+    Examples
+    --------
+    >>> build_fx_command(4, 80, speed=2).hex()
+    'f3500402ffffff53'
+    >>> build_fx_command(10, 80, speed=60, effect_version=1).hex()
+    'f7075000053c9c'
+    """
+
+    if effect_version != 1:
+        return build_effect_command(symbol, int(brightness), speed or 0)
+
+    if symbol in FX_V3_COLOR_BLOCK:
+        return build_fx_color_block_command(
+            symbol, brightness, **({"speed": speed} if speed is not None else {}), **params
+        )
+    if symbol not in FX_V3:
+        raise ValueError(f"no V3 effect frame is known for symbol {symbol}")
+    selector, names = FX_V3[symbol]
+    unknown = set(params) - set(names)
+    if unknown:
+        raise ValueError(
+            f"effect {symbol} takes {names}, not {sorted(unknown)}"
+        )
+
+    values = dict(FX_V3_DEFAULTS)
+    values.update(params)
+    if speed is not None and "speed" in names:
+        if not 0 <= speed <= FX_V3_SPEED_MAX:
+            raise ValueError(f"speed must be 0-{FX_V3_SPEED_MAX}, got {speed}")
+        values["speed"] = speed
+
+    percent, tenths = split_brightness(brightness)
+    body = bytearray([percent, tenths, selector])
+    for name in names:
+        value = values[name]
+        if name == _FX_V3_WIDE_WHEN_HUE and "option" in names:
+            # Hue needs two bytes; a colour temperature fits in one and the
+            # app pads the second with 0xFF rather than shortening the frame.
+            if values["option"] == 1:
+                body += int(value).to_bytes(2, "big")
+            else:
+                body += bytes([value & 0xFF, _STATUS_PAD])
+            continue
+        body.append(value & 0xFF)
+    return build_v3_command(SUB_FX_PARAMS, bytes(body))
+
+
+#: Colour-chip (gel) catalogue versions, as the vendor app numbers them. The
+#: version decides both the frame and how a brand is named: up to V2 a brand is
+#: its series alone, from V3 it is ``series/referenceType``.
+COLOR_CHIP_V1: Final = 0
+COLOR_CHIP_V2: Final = 1
+COLOR_CHIP_V3: Final = 2
+
+#: Reference-type names to the sub-brand code the V3+ frame carries, decoded
+#: from ``ColorChipJson.getSubBrandCommand``. ``COR.`` is absent from that
+#: switch and so falls to 0, which matches it being the app's default.
+COLOR_CHIP_SUB_BRAND: Final[dict[str, int]] = {
+    "COR.": 0,
+    "CAL.": 1,
+    "COLOR.": 1,
+    "SPC.": 2,
+    "600": 2,
+    "CINE.": 3,
+    "COS.": 3,
+    "700": 4,
+}
+
+#: Brand-series names to the brand code. Anything that is not the L series is
+#: sent as 0, matching ``ColorChipJson.getBrandCommand``.
+COLOR_CHIP_BRAND_LGEL: Final = "L-GEL"
+
+
+def color_chip_brand_code(brand_series: str) -> int:
+    """Return the wire code for a gel brand series.
+
+    Examples
+    --------
+    >>> color_chip_brand_code("L-GEL"), color_chip_brand_code("R-GEL")
+    (1, 0)
+    """
+    return 1 if brand_series.split("/")[0] == COLOR_CHIP_BRAND_LGEL else 0
+
+
+def color_chip_sub_brand_code(reference_type: str) -> int:
+    """Return the wire code for a gel reference type.
+
+    Examples
+    --------
+    >>> color_chip_sub_brand_code("CINE."), color_chip_sub_brand_code("COR.")
+    (3, 0)
+    """
+    return COLOR_CHIP_SUB_BRAND.get(reference_type, 0)
+
+
+def build_color_chip_command(
+    brightness: float,
+    *,
+    brand: int,
+    number: int,
+    version: int = COLOR_CHIP_V3,
+    temp_mode: int = 0,
+    hue: int = 0,
+    saturation: int = 0,
+    sub_brand: int = 0,
+) -> bytes:
+    """Build a colour-chip (gel) selection command.
+
+    Godox lights can emulate a lighting gel from a built-in catalogue, and the
+    command names the gel by brand and number rather than by colour. Which
+    frame a model takes is its catalogue ``colorChipVersion``: V1 uses the
+    eight-byte ``0xF4`` command, V2 a short V3 frame on ``0xF8``, and V3 and V4
+    the same sub-command with a wider frame carrying the reference type and
+    hue/saturation offsets.
+
+    Parameters
+    ----------
+    brightness
+        Percentage from 0 through 100.
+    brand
+        Brand code from :func:`color_chip_brand_code`.
+    number
+        The gel's ``sortNum`` within its brand, which is what the app's own
+        lookup uses as the number.
+    version
+        The model's ``colorChipVersion``.
+    temp_mode
+        Colour-temperature base the gel is applied over. V1 has no such field.
+    hue, saturation
+        Offsets applied to the catalogue colour. V1 sends the app's fixed 20/20
+        in these positions instead.
+    sub_brand
+        Reference-type code from :func:`color_chip_sub_brand_code`. Only the
+        V3+ frame carries it.
+
+    Returns
+    -------
+    bytes
+        A V2 frame for V1 catalogues, a V3 frame otherwise.
+
+    Examples
+    --------
+    >>> build_color_chip_command(80, brand=1, number=7, version=COLOR_CHIP_V1).hex()
+    'f4500107141400d6'
+    >>> build_color_chip_command(80, brand=1, number=7, version=COLOR_CHIP_V2).hex()
+    'f80b500001000007000071'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    if version == COLOR_CHIP_V1:
+        # The V1 frame has no temperature field and the app sends a fixed 20
+        # in both the saturation and hue positions.
+        return build_v2_command(
+            SUB_COLOR_CHIP, tenths, bytes([percent, brand, number, 20, 20])
+        )
+
+    body = bytearray([percent, tenths, brand, temp_mode])
+    body += number.to_bytes(2, "big")
+    body += bytes([saturation, hue])
+    if version >= COLOR_CHIP_V3:
+        body += bytes([sub_brand, number & 0xFF])
+    return build_v3_command(SUB_COLOR_CHIP_EX, bytes(body))
+
+
+# ---------------------------------------------------------------------------
+# Structured orders
+#
+# A second command family, distinct from the V2 and V3 light commands above.
+# It rides sub-command 0xFC and addresses a register inside the light rather
+# than naming an operation: ``[order type][register][read/write][length][...]``.
+# The vendor app calls it ``sendGodoxMeshAgreementData`` and uses it for the
+# settings on its "more" screen -- control mode, dimming smoothness, motion
+# recognition -- plus selfie colour temperature and the accessory surface.
+# ---------------------------------------------------------------------------
+
+SUB_STRUCTURED: Final = 0xFC
+"""Register-addressed orders. ``GodoxOrder.Send`` in the vendor app."""
+
+#: Which subsystem a structured order is addressed to.
+ORDER_PITCH_AND_SOFT: Final = 2
+ORDER_LIGHT: Final = 3
+ORDER_SPECIAL: Final = 5
+ORDER_ELECTRONIC: Final = 7
+
+#: Registers under :data:`ORDER_LIGHT`.
+REG_CONTROL_MODE: Final = 1
+REG_SMOOTHNESS: Final = 4
+REG_MOTION_RECOGNIZE: Final = 7
+
+#: Registers under :data:`ORDER_SPECIAL`.
+SPECIAL_SELFIE: Final = 0
+SPECIAL_PIXEL: Final = 1
+
+RW_READ: Final = 0
+RW_WRITE: Final = 1
+
+
+def build_structured_command(
+    order_type: int,
+    register: int,
+    payload: bytes = b"",
+    *,
+    write: bool = True,
+    declared_length: int | None = None,
+) -> bytes:
+    """Build a register-addressed order.
+
+    Parameters
+    ----------
+    order_type
+        Which subsystem -- :data:`ORDER_LIGHT`, :data:`ORDER_SPECIAL` and so on.
+    register
+        The register within that subsystem.
+    payload
+        The value bytes. Empty for a read.
+    write
+        False to read the register instead of setting it.
+    declared_length
+        Overrides the length byte. Reads need it: the app declares a length of
+        1 on a read while sending no payload at all.
+
+    Returns
+    -------
+    bytes
+        A V3 frame on :data:`SUB_STRUCTURED`.
+
+    Examples
+    --------
+    >>> build_structured_command(ORDER_LIGHT, REG_SMOOTHNESS, bytes([1])).hex()
+    'fc08030401010191'
+    """
+
+    length = len(payload) if declared_length is None else declared_length
+    body = bytes([order_type, register, RW_WRITE if write else RW_READ, length])
+    return build_v3_command(SUB_STRUCTURED, body + payload)
+
+
+def build_control_mode_command(mode: int, frequency: int = 0) -> bytes:
+    """Build a control-mode and mains-frequency command.
+
+    The vendor app sends both in one frame (``changeControlModeParam``), which
+    is why the catalogue's ``controlMode`` and ``frequency`` lists cover the
+    same models. Mode picks the output profile -- Normal, Low End, Highspeed --
+    and frequency tunes the PWM so it does not beat against a camera shutter.
+
+    Examples
+    --------
+    >>> build_control_mode_command(1, 2).hex()
+    'fc0a03010103010002d1'
+    """
+
+    if not 0 <= mode <= 0xFF:
+        raise ValueError(f"control mode must be 0-255, got {mode}")
+    if not 0 <= frequency <= 0xFFFF:
+        raise ValueError(f"frequency code must be 0-65535, got {frequency}")
+    return build_structured_command(
+        ORDER_LIGHT,
+        REG_CONTROL_MODE,
+        bytes([mode]) + frequency.to_bytes(2, "big"),
+    )
+
+
+def build_smoothness_command(mode: int) -> bytes:
+    """Build a dimming-smoothness command.
+
+    Smoothing ramps the output between levels instead of stepping. Godox offers
+    Default, Smooth and OFF; OFF is what an automation expecting an instant
+    change wants.
+
+    Examples
+    --------
+    >>> build_smoothness_command(2).hex()
+    'fc08030401010273'
+    """
+
+    if not 0 <= mode <= 0xFF:
+        raise ValueError(f"smoothness mode must be 0-255, got {mode}")
+    return build_structured_command(ORDER_LIGHT, REG_SMOOTHNESS, bytes([mode]))
+
+
+def build_motion_recognize_command(enabled: bool) -> bytes:
+    """Build the motion-accessory recognition toggle.
+
+    Whether the light responds to a motorised accessory attached to it. The
+    polarity is inverted on the wire, the same way the power command is: zero
+    enables.
+
+    Examples
+    --------
+    >>> build_motion_recognize_command(True).hex()
+    'fc08030701010047'
+    """
+
+    return build_structured_command(
+        ORDER_LIGHT, REG_MOTION_RECOGNIZE, bytes([0 if enabled else 1])
+    )
+
+
+def build_selfie_cct_command(brightness: float, kelvin: int) -> bytes:
+    """Build a selfie-mode colour-temperature command.
+
+    Two models (MA5R and MA5R Plus) carry a second, narrower colour-temperature
+    range alongside their main one, reached through its own command rather than
+    ``0xF0``. The app sends whole-percent brightness here with no tenths field.
+
+    Examples
+    --------
+    >>> build_selfie_cct_command(80, 5600).hex()
+    'fc09050001025038f4'
+    """
+
+    percent, _tenths = split_brightness(brightness)
+    return build_structured_command(
+        ORDER_SPECIAL, SPECIAL_SELFIE, bytes([percent, kelvin // 100])
+    )
+
+
+def build_rgb_ex_command(
+    brightness: float,
+    red: int,
+    green: int,
+    blue: int,
+    *,
+    rgb_type: int = RGB_TYPE_RGBWW,
+    extra: tuple[int, int, int] = (0, 0, 0),
+) -> bytes:
+    """Build an eight-bit extended-channel command.
+
+    The middle of the three RGB frames. :func:`build_rgbw_command` covers
+    red/green/blue/white on a ``rgbDisplay`` 0 model and
+    :func:`build_rgb_wide_command` the sixteen-bit models; this one is for a
+    ``rgbDisplay`` 0 model driven in RGBWW or RGB+amber/cyan/lime, where the
+    channels are still single bytes but three of them follow blue.
+
+    Examples
+    --------
+    >>> build_rgb_ex_command(100, 255, 0, 0, extra=(128, 0, 0)).hex()
+    'f90c640001ff0000800000ec'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    channels = (red, green, blue, *extra)
+    if any(not 0 <= c <= RGB8_MAX for c in channels):
+        raise ValueError(f"channel values must be 0-{RGB8_MAX}, got {channels}")
+    return build_v3_command(
+        SUB_RGB_EX, bytes([percent, tenths, rgb_type, *channels])
+    )
+
+
+def build_fx_rainbow_command(
+    brightness: float,
+    *,
+    pixel_count: int = 1,
+    color_length: int = 1,
+    speed: int = 50,
+    direction: int = 0,
+    background: ColorBlock | None = None,
+    background_brightness: int = 100,
+    blocks: tuple[ColorBlock, ...] | None = None,
+) -> bytes:
+    """Build the Rainbow effect.
+
+    Notable for being **unreachable in the vendor app**: the SDK ships
+    ``changeLightFXRainbow`` but nothing calls it, and Rainbow has no
+    ``FxSymbolType`` entry, so no catalogue field says which models offer it.
+    Built here for completeness, not because anything is known to accept it.
+
+    It shares selector 19 with Pixel Candle and is told apart only by frame
+    length, so sending it to a model expecting Pixel Candle is a real risk.
+
+    Examples
+    --------
+    >>> build_fx_rainbow_command(80).hex()
+    'f710500013010100320032003232643c'
+    """
+
+    percent, tenths = split_brightness(brightness)
+    blocks = blocks or ()
+    bg = background or ColorBlock()
+    body = bytearray(
+        [
+            percent,
+            tenths,
+            19,
+            pixel_count & 0xFF,
+            color_length & 0xFF,
+            len(blocks),
+            speed & 0xFF,
+            direction & 0xFF,
+            bg.value & 0xFF,
+            bg.option & 0xFF,
+            bg.value & 0xFF,
+            bg.saturation & 0xFF,
+            background_brightness & 0xFF,
+        ]
+    )
+    for block in blocks:
+        body += block.to_bytes()
+    return build_v3_command(SUB_FX_PARAMS, bytes(body))
+
+
+def build_mcu_version_request() -> bytes:
+    """Build a request for the light's MCU firmware version.
+
+    The companion to :func:`build_version_request`, which asks the Bluetooth
+    chip. The MCU drives the LEDs, and its version is what a Godox firmware
+    download is keyed on.
+
+    Examples
+    --------
+    >>> build_mcu_version_request().hex()
+    'fd03ffffffffff61'
+    """
+
+    return build_v2_command(SUB_STATUS_REQUEST, _STATUS_PAD, bytes([0x03]))
+
+
+def parse_mcu_version_response(payload: bytes) -> str:
+    """Return the MCU version from an ``0xAF 0x30`` reply.
+
+    The app renders it as ``major.minor`` from two bytes; unset fields come
+    back as ``0xFF``.
+
+    Examples
+    --------
+    >>> parse_mcu_version_response(bytes.fromhex("af300105ffff00"))
+    '1.05'
+    """
+
+    if len(payload) < 4 or payload[0] != SUB_STATUS_VERSION or payload[1] != 0x30:
+        raise ValueError("not an MCU version reply (expected 0xAF 0x30)")
+    return f"{payload[2]}.{payload[3]:02d}"

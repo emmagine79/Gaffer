@@ -1,0 +1,20 @@
+.picker { display: grid; gap: 10px; min-height: 0; }
+.picker-search { position: relative; display: block; }
+.picker-search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--graphite); }
+.picker-search .input { width: 100%; padding-left: 34px; }
+.picker-list { max-height: 320px; overflow-y: auto; padding-right: 4px; display: grid; gap: 12px; align-content: start; }
+.picker-group-name { font-size: var(--fs-xs); font-weight: 600; color: var(--graphite); margin-bottom: 6px; }
+.picker-group-name span { color: var(--graphite-dim); font-weight: 500; margin-left: 4px; }
+.picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 4px; }
+.picker-model {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 8px 5px 4px;
+  border: 1px solid transparent; border-radius: 9px;
+  background: rgb(0 0 0 / 0.18); color: var(--chalk);
+  font-size: var(--fs-sm); text-align: left; white-space: nowrap; overflow: hidden;
+}
+.picker-model span { overflow: hidden; text-overflow: ellipsis; }
+.picker-model:hover { background: var(--anodized-3); }
+.picker-model.is-on { border-color: var(--live); background: var(--anodized-2); }
+.picker-model:disabled { opacity: 0.35; cursor: not-allowed; }
+.picker-empty { padding: 18px 4px; }
