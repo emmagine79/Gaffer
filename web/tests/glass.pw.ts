@@ -1,8 +1,8 @@
 /**
  * SPEC-006 acceptance tests: the Glass panel, rendered, against the real service in --demo.
  *
- * The demo seeds four Godox lights from lumen's model rows: Key light (ML100R, colour),
- * Fill (SL60IIBi, bi-colour: no colour), Backlight (SL100D, fixed daylight), Hair light (MS60R, colour).
+ * The demo seeds Godox lights from lumen's model rows (Key light, Fill, Backlight, Hair light)
+ * and one Zhiyun and one Yongnuo stand-in (SPEC-003).
  */
 import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
@@ -62,18 +62,24 @@ async function noSideScroll(page: Page) {
   expect(scroll).toBe(inner)
 }
 
-// AC1 (SPEC AC1). TODO(SPEC-003): drop a temp CCT-only and an HSI model file into
-// service/gaffer/models/<driver>/ once the loader lands, instead of lumen's rows.
+// AC1 (SPEC AC1): tests/models/godox/ holds a CCT-only and an HSI model file, which the
+// harness drops into the service's data folder (<data>/models/, SPEC-003's loader).
+// A demo light is moved onto each model through the service's own lights.model command.
 for (const [surface, width] of [['phone', 390], ['window', 1280]] as const) {
-  test(`AC1: controls follow the model file at ${width}px`, async ({ page }) => {
+  test(`AC1: a model file decides the controls at ${width}px`, async ({ page }) => {
     await open(page, surface, width)
-    await selectLight(page, 'Fill')
+    const id = (await lights(page)).find((l) => l.name === 'Backlight')!.id
+
+    await command(page, { type: 'lights.model', light: id, radio_id: 'GLASS-CCT' }, false)
+    await selectLight(page, 'Backlight')
+    await expect(page.getByText('Example Glass CCT test')).toBeVisible()
     await expect(page.getByRole('slider', { name: 'Brightness' })).toBeVisible()
     await expect(page.getByRole('slider', { name: 'Colour temperature' })).toBeVisible()
     await expect(page.locator('[data-control="colour"]')).toHaveCount(0)
     await expect(page.getByRole('slider', { name: 'Hue' })).toHaveCount(0)
 
-    await selectLight(page, 'Key light')
+    await command(page, { type: 'lights.model', light: id, radio_id: 'GLASS-HSI' }, false)
+    await expect(page.getByText('Example Glass HSI test')).toBeVisible()
     await expect(page.getByRole('slider', { name: 'Hue' })).toBeVisible()
   })
 }

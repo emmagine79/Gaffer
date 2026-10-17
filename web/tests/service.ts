@@ -7,7 +7,7 @@
  */
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,8 @@ import { fileURLToPath } from 'node:url'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SERVICE = resolve(HERE, '../../service')
 export const STATE_FILE = join(HERE, '../test-results/.auth/state.json')
+/** Test model files, copied to <data>/models/ where the service loads extra model files (SPEC-003). */
+const MODELS = join(HERE, 'models')
 
 /** How long the service may take to print its ready line: uv may first sync the venv. */
 const START_MS = 60_000
@@ -23,6 +25,7 @@ const STOP_MS = 10_000
 
 export default async function startService() {
   const data = mkdtempSync(join(tmpdir(), 'gaffer-glass-'))
+  cpSync(MODELS, join(data, 'models'), { recursive: true })
   const secret = randomBytes(24).toString('base64url')
   const child = spawn(
     'uv',
