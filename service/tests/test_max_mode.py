@@ -149,3 +149,35 @@ def test_a_light_that_is_off_refuses_max_mode_and_switching_it_off_resets_the_va
         refused = _ask(ws, {"type": "light.max_mode", "light": light, "on": True}, 2)
         assert refused["type"] == "error" and refused["text"] == "Switch the light on first."
         assert _max_mode_frames(wire) == [MAX_ON_FRAME]
+
+
+def test_a_slow_max_mode_write_does_not_hold_up_the_next_command(tmp_path, monkeypatch):
+    """A Max Mode write to a light that is slow to answer must not freeze the rest of the page."""
+    import asyncio
+
+    monkeypatch.setattr(demo, "PACE", 0.05)
+
+    class SlowWire(Wire):
+        async def open(self, address, on_notify, on_lost):
+            writes = self.writes
+
+            class SlowLink(Link):
+                async def write(self, data):
+                    if zy.parse_frame(bytes(data)).command == zy.Command.MAX_MODE:
+                        await asyncio.sleep(1.0)  # a light out of range takes this long or longer
+                    writes.append(bytes(data))
+
+            return SlowLink(writes)
+
+    wire = SlowWire()
+    app = create_app(demo=True, data_dir=tmp_path)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        key = _light(client, "Key light")["id"]
+        ws.send_json({"type": "light.max_mode", "light": light, "on": True, "rid": 1})
+        ws.send_json({"type": "light.max_mode", "light": key, "on": True, "rid": 2})  # refused at once
+        first = _until(ws, lambda m: m.get("rid") in (1, 2))
+        assert first["rid"] == 2, "the second command waited behind the slow Max Mode write"
+        assert _until(ws, lambda m: m.get("rid") == 1)["type"] == "ack"
