@@ -5,7 +5,8 @@ import AppKit
 // and for the selected state. Head and cone are one filled silhouette; two short beam strokes;
 // no stand, because a 1 pt stand vanishes at 16 px.
 //
-// The numbers repeat the head block in mac/Icon/make_icon.swift (Lamp.tsx units).
+// The head numbers (Lamp.tsx units) repeat the block in mac/Icon/make_icon.swift. Change them in
+// both files together; nothing checks this. The rib and beams here are this mark's own.
 enum GafferMark {
     // MARK GEOMETRY
     static let bodyRect = CGRect(x: 70, y: 27, width: 70, height: 46)
@@ -39,7 +40,7 @@ enum GafferMark {
                 beam.lineWidth = 1.5
                 beam.lineCapStyle = .round
                 beam.move(to: pt(180, CGFloat(y0)))
-                beam.line(to: pt(206, CGFloat(y1)))
+                beam.line(to: pt(204, CGFloat(y1)))
                 beam.stroke()
             }
             return true

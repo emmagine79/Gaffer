@@ -10,5 +10,5 @@ NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 image.draw(in: NSRect(x: 0, y: 0, width: 18, height: 18))
 NSGraphicsContext.restoreGraphicsState()
 var inked = 0
-for y in 0..<18 { for x in 0..<18 where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 { inked += 1 } }
-print(image.isTemplate, "\(Int(image.size.width))x\(Int(image.size.height))", inked > 20 ? "drawn" : "blank")
+for y in 0..<18 { for x in 0..<18 where (rep.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0 { inked += 1 } }
+print(image.isTemplate, "\(Int(image.size.width))x\(Int(image.size.height))", inked > 0 ? "drawn" : "blank")

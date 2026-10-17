@@ -1,11 +1,12 @@
 // Draws Gaffer's marks: the 1024 px app icon (a Fresnel monolight on a dark glass tile) and
-// the favicon SVG. One geometry, copied from web/src/glass/Lamp.tsx (viewBox 400 x 100).
+// the favicon SVG. One geometry, taken from web/src/glass/Lamp.tsx (viewBox 400 x 100) with
+// three changes for a standalone mark: a longer stand, a wider beam and four ribs.
 // Usage: make_icon <output.png>        the app icon
 //        make_icon --svg <output.svg>  the favicon, 64 x 64
 import AppKit
 
-// MARK GEOMETRY (Lamp.tsx units). mac/Sources/GafferMark.swift repeats the head numbers;
-// mac/tests/test_shell.py fails if the two blocks drift apart.
+// MARK GEOMETRY (Lamp.tsx units). mac/Sources/GafferMark.swift repeats the head numbers
+// (bodyRect, bodyRadius, cone). Change them in both files together; nothing checks this.
 let bodyRect = CGRect(x: 70, y: 27, width: 70, height: 46)
 let bodyRadius: CGFloat = 8
 let ribXs: [CGFloat] = [80, 90, 120, 130]          // gaps cut through the body
@@ -69,7 +70,7 @@ if svgMode {
           <stop offset="0" stop-color="#292624"/>
           <stop offset="1" stop-color="#0f0f0f"/>
         </linearGradient>
-        <linearGradient id="b" gradientUnits="userSpaceOnUse" x1="\(pt(CGPoint(x: 166, y: 50)))" x2="\(pt(CGPoint(x: 215, y: 50)))">
+        <linearGradient id="b" gradientUnits="userSpaceOnUse" x1="\(f(px(CGPoint(x: 166, y: 50)).x))" y1="\(f(px(CGPoint(x: 166, y: 50)).y))" x2="\(f(px(CGPoint(x: 215, y: 50)).x))" y2="\(f(px(CGPoint(x: 215, y: 50)).y))">
           <stop offset="0" stop-color="#FFEFE1" stop-opacity=".95"/>
           <stop offset="1" stop-color="#FFEFE1" stop-opacity="0"/>
         </linearGradient>
