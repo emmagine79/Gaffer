@@ -137,8 +137,6 @@ function LightPanel({ light }: { light: LightView }) {
         </Control>
       )}
 
-      {caps.max_mode && <MaxMode light={light} on={state.power} send={send} />}
-
       {showKelvin && (held ? (
         <Control label="Colour temperature" aside="Not in use">
           <button type="button" className="g-back" onClick={() => apply({ mode: 'cct' })}>Back to white</button>
@@ -156,6 +154,9 @@ function LightPanel({ light }: { light: LightView }) {
       {f.daylight && (
         <Control label="Colour temperature" aside={`Fixed ${caps.min_kelvin}K daylight`} />
       )}
+
+      {/* Below colour temperature (friction item 15): Max sets brightness, and on the G200 the light keeps the kelvin shown above. */}
+      {caps.max_mode && <MaxMode light={light} on={state.power} send={send} />}
 
       {f.colour && (
         <div className="g-colour" data-control="colour">

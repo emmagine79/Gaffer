@@ -254,6 +254,11 @@ for (const [surface, width] of [['phone', 390], ['window', 1280]] as const) {
     expect(await maxOf()).toBe(false)
     await noSideScroll(page)
 
+    // Friction item 15: Max sits below the colour temperature slider, not between it and brightness.
+    const kelvin = (await page.getByRole('slider', { name: 'Colour temperature' }).boundingBox())!
+    const maxTop = (await page.locator('[data-control="max-mode"]').boundingBox())!.y
+    expect(maxTop).toBeGreaterThanOrEqual(kelvin.y + kelvin.height)
+
     await max.click()
     await expect.poll(maxOf).toBe(true)
     await expect(max).toHaveAttribute('aria-checked', 'true')
