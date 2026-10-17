@@ -209,7 +209,7 @@ def test_new_pin_signs_every_phone_out_and_closes_its_socket(studio):
 
 def test_phone_access_is_off_until_switched_on_and_off_again_cuts_phones_off(studio):
     # Off at launch: a phone gets nothing, not even the PIN screen.
-    assert studio.mac.get("/api/phone").json() == {"enabled": False, "pin": None, "locked": False, "checking": False, "tailscale": None, "targets": []}
+    assert studio.mac.get("/api/phone").json() == {"enabled": False, "pin": None, "locked": False, "checking": False, "tailscale": None, "targets": [], "notice": None}
     for reply in (studio.phone.get("/"), studio.phone.get("/api/session"), studio.sign_in("123456")):
         assert reply.status_code == 403 and reply.json()["error"] == "phone_access_off"
     assert refused_socket(studio.phone, ws_url()) == 4403
@@ -677,9 +677,87 @@ def test_gaffer_still_starts_when_phone_access_cannot_reopen_its_port(tmp_path):
         with TestClient(guarded, base_url=f"http://127.0.0.1:{port}") as mac:
             mac.cookies.set(COOKIE, SECRET)
             assert mac.get("/api/lights").status_code == 200  # the lights still work
-            assert mac.get("/api/phone").json()["enabled"] is False
+            status = mac.get("/api/phone").json()
+            assert status["enabled"] is False
+            assert status["notice"]["code"] == "restore_failed"  # the Mac window can say so (SPEC-025)
+            assert "/" not in status["notice"]["message"]
     finally:
         taken.close()
+
+
+@pytest.mark.parametrize("how", ["the temporary file's name is taken", "the data folder is read-only"])
+def test_a_new_pin_whose_save_fails_never_lets_the_old_pin_back_in_after_a_restart(tmp_path, how):
+    # SPEC-025: a failed save used to leave the old phone.json, so a restart switched the revoked PIN back on.
+    cli, saved = fake_tailscale(tmp_path, RUNNING), tmp_path / "data" / "phone.json"
+    with studio_with(tmp_path, cli, saved) as first:
+        old = first.switch_on()
+        assert first.sign_in(old).status_code == 200
+        if how.startswith("the temporary"):
+            (saved.parent / "phone.json.tmp").mkdir()  # the save cannot create its temporary file; the file can still be removed
+        else:
+            saved.parent.chmod(0o500)  # neither a save nor a removal can work: the file must be overwritten in place
+        try:
+            assert first.mac.post("/api/phone/pin", json={}).status_code == 200
+            assert first.phone.get("/api/lights").status_code in (401, 403)  # this run still signed the phone out
+        finally:
+            saved.parent.chmod(0o700)
+
+    with studio_with(tmp_path, cli, saved) as second:  # Gaffer started again
+        assert second.mac.get("/api/phone").json()["enabled"] is False
+        assert second.sign_in(old).status_code != 200  # the old PIN does not work
+
+
+def test_the_mac_is_told_when_a_change_cannot_be_saved_at_all_and_no_copy_of_the_pin_is_left(tmp_path):
+    cli, saved = fake_tailscale(tmp_path, RUNNING), tmp_path / "data" / "phone.json"
+    with studio_with(tmp_path, cli, saved) as studio:
+        studio.switch_on()
+        saved.unlink()
+        saved.mkdir()  # nothing can replace it, remove it or write into it
+        status = studio.mac.post("/api/phone/pin", json={}).json()
+        assert status["enabled"] is True and status["notice"]["code"] == "not_saved"
+        assert "old PIN may come back" in status["notice"]["message"]  # the old file could not be cleared: say so
+        assert str(tmp_path) not in status["notice"]["message"]
+        assert not (saved.parent / "phone.json.tmp").exists()  # the failed save left no copy holding the PIN
+
+
+def test_the_mac_is_told_when_switching_on_cannot_be_saved_even_though_nothing_old_is_left_behind(tmp_path):
+    # SPEC-025 review: the file was removed cleanly, so the window said nothing, and a restart silently switched access off.
+    cli, saved = fake_tailscale(tmp_path, RUNNING), tmp_path / "data" / "phone.json"
+    with studio_with(tmp_path, cli, saved) as studio:
+        saved.parent.chmod(0o500)  # nothing can be saved here, and there is no old file to remove
+        try:
+            status = studio.mac.post("/api/phone", json={"enabled": True}).json()
+        finally:
+            saved.parent.chmod(0o700)
+        assert status["enabled"] is True
+        assert status["notice"]["code"] == "not_saved" and "restart" in status["notice"]["message"]
+        assert str(tmp_path) not in status["notice"]["message"] and status["pin"] not in status["notice"]["message"]
+
+
+def test_a_saved_port_held_on_every_network_address_falls_back_to_a_free_port_at_start(tmp_path):
+    # SPEC-025: the 127.0.0.1 bind passed, then the phone listener failed at every start and phone access stayed off.
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    fake_tailscale(folder, RUNNING)
+    taken = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)  # another program, on :: and 0.0.0.0
+    taken.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    taken.bind(("::", 0))
+    taken.listen()
+    held = taken.getsockname()[1]
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "phone.json").write_text(json.dumps({"enabled": True, "pin": "123456", "port": held}))
+    service, port = _start_service(tmp_path, folder)
+    try:
+        assert port != held
+        with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=20, cookies={COOKIE: SECRET}) as web:
+            status = web.get("/api/phone?wait=1").json()
+        assert (status["enabled"], status["pin"], status["notice"]) == (True, "123456", None)
+        assert all(target["url"].endswith(f":{port}/") for target in status["targets"])
+    finally:
+        taken.close()
+        if service.poll() is None:
+            os.killpg(service.pid, signal.SIGKILL)
+            service.wait()
 
 
 def test_switching_off_closes_access_even_when_the_setting_cannot_be_saved(tmp_path):

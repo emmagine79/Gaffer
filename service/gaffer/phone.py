@@ -169,6 +169,40 @@ def qr_data_uri(url: str) -> str:
 # --- the second listener -------------------------------------------------------------------------
 
 
+def bind_wildcard(port: int) -> socket.socket:
+    """Listen on every network address, IPv6 and IPv4 together (a phone may resolve the Tailscale
+    name to either). A Mac with no IPv6 falls back to IPv4 alone. Raises OSError when the port is taken."""
+    failure: OSError | None = None
+    for family, address in ((socket.AF_INET6, "::"), (socket.AF_INET, "0.0.0.0")):
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+        except OSError as err:
+            failure = err
+            continue
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            sock.bind((address, port))
+            sock.listen()
+            return sock
+        except OSError as err:
+            sock.close()
+            failure = err
+    assert failure is not None
+    raise failure
+
+
+def wildcard_free(port: int) -> bool:
+    """Whether phone access could listen on every network address at this port right now. Checked at
+    start, before the loopback port is taken, because the loopback bind alone says nothing about it."""
+    try:
+        bind_wildcard(port).close()
+    except OSError:
+        return False
+    return True
+
+
 class PhoneListener:
     """The service's app, also served on every network address at the same port.
 
@@ -184,27 +218,7 @@ class PhoneListener:
         self.task: asyncio.Task[None] | None = None
 
     def _bind(self) -> socket.socket:
-        """Listen on every network address, IPv6 and IPv4 together (a phone may resolve the Tailscale
-        name to either). A Mac with no IPv6 falls back to IPv4 alone."""
-        failure: OSError | None = None
-        for family, address in ((socket.AF_INET6, "::"), (socket.AF_INET, "0.0.0.0")):
-            try:
-                sock = socket.socket(family, socket.SOCK_STREAM)
-            except OSError as err:
-                failure = err
-                continue
-            try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                if family == socket.AF_INET6:
-                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
-                sock.bind((address, self.port))
-                sock.listen()
-                return sock
-            except OSError as err:
-                sock.close()
-                failure = err
-        assert failure is not None
-        raise failure
+        return bind_wildcard(self.port)
 
     async def start(self) -> None:
         try:
@@ -270,6 +284,9 @@ class PhoneAccess:
         self.enabled = False
         self.pin: str | None = None
         self.wrong = 0
+        #: Something the Mac window should tell its owner: phone access could not be reopened at start,
+        #: or a change could not be saved. Cleared by the next switch on, switch off or New PIN.
+        self.notice: dict[str, str] | None = None
         self._sessions: dict[str, asyncio.Event] = {}
         self._hosts: frozenset[str] = frozenset()
         self._targets: list[dict[str, str]] = []
@@ -407,18 +424,57 @@ class PhoneAccess:
             return
         data = json.dumps({"enabled": self.enabled, "pin": self.pin if self.enabled else None, "port": self.port})
         tmp = self._saved.with_name(self._saved.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as out:
-            out.write(data)
-        os.replace(tmp, self._saved)
-
-    def _save_or_warn(self) -> bool:
         try:
-            self._save()
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                out.write(data)
+            os.replace(tmp, self._saved)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink()  # never leave a half-written copy holding the PIN
+            raise
+
+    def _withdraw_saved(self) -> bool:
+        """Stop the saved file from bringing back a setting that has changed: remove it, or when the
+        folder cannot be written, overwrite it in place (that needs only the file itself to be writable).
+        False when neither worked."""
+        if self._saved is None:
+            return True
+        try:
+            self._saved.unlink(missing_ok=True)
             return True
         except OSError:
-            logger.warning("phone access settings could not be saved", exc_info=True)
+            pass
+        try:
+            with open(self._saved, "w", encoding="utf-8") as out:
+                out.write(json.dumps({"enabled": False, "pin": None, "port": self.port}))
+            return True
+        except OSError:
+            logger.warning("phone access settings could not be withdrawn", exc_info=True)
             return False
+
+    def _persist(self, change: str, *, restoring: bool = False) -> None:
+        """Save the setting. ``change`` is "on", "off" or "pin". When the save fails, fail closed: the
+        file must not keep an older setting (an old PIN, or "on" after switching off), so it is removed
+        or overwritten instead. Either way the Mac window is told what a restart will do. A restore is the
+        one exception: the file already holds that PIN, so a failed save there loses nothing and is left alone."""
+        if self._saved is None:
+            return
+        try:
+            self._save()
+            return
+        except OSError:
+            logger.warning("phone access settings could not be saved", exc_info=True)
+        if restoring:
+            return
+        if not self._withdraw_saved():
+            message = ("Gaffer could not save this change, or clear the older saved setting. After Gaffer restarts, "
+                       "phone access and the old PIN may come back.")
+        elif change == "on":
+            message = "Gaffer could not save this change, so phone access will not last through a restart."
+        else:
+            message = "Gaffer could not save this change. Phone access will be off after Gaffer restarts."
+        self.notice = {"code": "not_saved", "message": f"{message} Check that Gaffer's data folder can be written."}
 
     async def restore(self) -> None:
         """Switch access back on with its old PIN if it was on when Gaffer last stopped."""
@@ -434,12 +490,17 @@ class PhoneAccess:
         pin = saved.get("pin") if isinstance(saved, dict) and saved.get("enabled") is True else None
         if isinstance(pin, str) and len(pin) == PIN_DIGITS and pin.isascii() and pin.isdigit():
             try:
-                await self.enable(pin=pin)
+                await self.enable(pin=pin, restoring=True)
             except (PhoneUnavailable, OSError):
                 # The lights matter more than the phone: Gaffer starts, with phone access off for now.
                 logger.warning("phone access could not be switched back on at start; it stays off", exc_info=True)
+                self.notice = {
+                    "code": "restore_failed",
+                    "message": "Phone access was on when Gaffer last closed, but it could not be switched back on. "
+                               "Turn it on again to get a new PIN.",
+                }
 
-    async def enable(self, *, pin: str | None = None) -> None:
+    async def enable(self, *, pin: str | None = None, restoring: bool = False) -> None:
         async with self._guard():
             if self.enabled:
                 return
@@ -453,18 +514,20 @@ class PhoneAccess:
             else:
                 self.pin, self.wrong = pin, 0
             self.enabled = True
-            self._save_or_warn()
+            self.notice = None
+            self._persist("on", restoring=restoring)
             self.refresh()  # the Tailscale names join the allowed set when the tool answers
 
     async def disable(self, *, save: bool = True) -> None:
         """Switch access off. ``save=False`` (Gaffer quitting) closes it now but leaves it on for the next start."""
         async with self._guard():
+            if save:
+                self.notice = None
             try:
                 await self._close()
             finally:
-                if save and not self._save_or_warn() and self._saved is not None:
-                    with contextlib.suppress(OSError):
-                        self._saved.unlink()  # never left saying "on" once switched off
+                if save:
+                    self._persist("off")  # never left saying "on" once switched off
 
     async def _close(self) -> None:
         """Turn access off now: forget the PIN, sign every phone out, close the listener."""
@@ -483,8 +546,9 @@ class PhoneAccess:
     async def new_pin(self) -> None:
         async with self._guard():
             if self.enabled:
+                self.notice = None
                 self._new_pin()
-                self._save_or_warn()
+                self._persist("pin")
 
     def status(self) -> dict[str, Any]:
         """What the Mac window shows. Only ever sent to the Mac itself: it holds the PIN."""
@@ -497,6 +561,7 @@ class PhoneAccess:
             "checking": self.checking,
             "tailscale": (self._tailscale is not None) if self.enabled and self._tailscale_known else None,
             "targets": [{**t, "qr": qr_data_uri(t["url"])} for t in self._targets] if self.enabled else [],
+            "notice": self.notice,
         }
 
 

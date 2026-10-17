@@ -37,7 +37,7 @@ from .app import create_app
 from .hub import LINK_STOP_SECONDS
 from .listener import guarded_config
 from .paths import AlreadyRunning, data_home, hold_data_folder
-from .phone import PhoneAccess, saved_port
+from .phone import PhoneAccess, saved_port, wildcard_free
 from .session import protect, runtime_file, write_runtime_file
 
 
@@ -167,8 +167,11 @@ def main(argv: list[str] | None = None) -> None:
 
     phone_file = Path(args.data) / "phone.json"
     # With phone access left on, take the same port again so phones keep the address they have
-    # (Captain, 18 Oct 2026). If it is taken now, any free port: phone access shows the new address.
-    wanted = [args.port] if args.port else [p for p in (saved_port(phone_file),) if p] + [0]
+    # (Captain, 18 Oct 2026). If it is taken now, on 127.0.0.1 or on every network address (which is
+    # where phone access listens, and which a 127.0.0.1 bind does not show), any free port: phone
+    # access shows the new address.
+    previous = None if args.port else saved_port(phone_file)
+    wanted = [args.port] if args.port else ([previous] if previous and wildcard_free(previous) else []) + [0]
     for index, port_choice in enumerate(wanted):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
