@@ -84,7 +84,7 @@ class SessionGate:
                     403, "phone_access_off", "Phone access is off. Switch it on in Gaffer on the Mac."), 4403)
         elif not is_phone_source(client[0] if client else None):
             await self._deny(scope, receive, send, _refuse(
-                403, "network_not_allowed", "Gaffer only answers phones on your own network or Tailscale."), 4403)
+                403, "network_not_allowed", "Gaffer only answers a phone on the same Wi-Fi network as the Mac, or on Tailscale."), 4403)
         elif host not in phone.hosts():
             await self._deny(scope, receive, send, PlainTextResponse("Invalid host header", status_code=400), 4403)
         else:

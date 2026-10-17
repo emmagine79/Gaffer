@@ -65,6 +65,11 @@ _DNS_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-
 TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 
 
+class TailscaleUnreadable(Exception):
+    """`tailscale status` did not give an answer (it would not start, failed, or printed nonsense).
+    That says nothing about whether Tailscale is running, so an earlier good answer stays."""
+
+
 class PhoneUnavailable(Exception):
     """Phone access could not be switched on. The message is plain words, safe to show."""
 
@@ -98,22 +103,27 @@ class TailscaleInfo:
 
 
 def parse_tailscale(raw: str) -> TailscaleInfo | None:
-    """Read `tailscale status --json`. None when Tailscale is not running or says nothing usable."""
+    """Read `tailscale status --json`.
+
+    Returns None when the tool positively says Tailscale is not running. Raises TailscaleUnreadable
+    when the output is not a status at all.
+    """
     try:
         status = json.loads(raw)
         me = status["Self"]
-        if status.get("BackendState") != "Running":
-            return None
+        running = status.get("BackendState") == "Running"
         ips: list[str] = []
         for text in me.get("TailscaleIPs") or []:
             ips.append(ipaddress.ip_address(text).compressed)
         name = str(me.get("DNSName") or "").rstrip(".").lower()
-    except (ValueError, KeyError, TypeError, AttributeError):
+    except (ValueError, KeyError, TypeError, AttributeError) as err:
+        raise TailscaleUnreadable("not a Tailscale status") from err
+    if not running:
         return None
     if not _DNS_NAME.match(name) or len(name) > _MAX_DNS_NAME:
         name = ""
     if not ips and not name:
-        return None
+        raise TailscaleUnreadable("Tailscale is running but lists no address")
     return TailscaleInfo(tuple(ips), name or None)
 
 
@@ -125,22 +135,27 @@ def find_tailscale_cli() -> str | None:
 
 
 async def read_tailscale(cli: str | None) -> TailscaleInfo | None:
-    """Run `tailscale status --json` if the tool exists. Any failure means "no Tailscale"."""
+    """Run `tailscale status --json`. None means Tailscale is not installed or not running.
+
+    Raises TailscaleUnreadable when the tool is there but gives no answer.
+    """
     if cli is None:
         return None
     try:
         process = await asyncio.create_subprocess_exec(
             cli, "status", "--json", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             stdin=asyncio.subprocess.DEVNULL)
-    except OSError:
-        return None
+    except OSError as err:
+        raise TailscaleUnreadable("could not start the tailscale tool") from err
     try:
         out, _ = await process.communicate()
     except BaseException:
-        process.kill()  # cancelled (access switched off, or the service stopping): do not leave the tool running
+        process.kill()  # cancelled (access switched off, the panel opened again, or the service stopping)
         await process.wait()
         raise
-    return parse_tailscale(out.decode("utf-8", "replace")) if process.returncode == 0 else None
+    if process.returncode != 0:
+        raise TailscaleUnreadable(f"tailscale exited with {process.returncode}")
+    return parse_tailscale(out.decode("utf-8", "replace"))
 
 
 def qr_data_uri(url: str) -> str:
@@ -243,7 +258,7 @@ class PhoneAccess:
         self._targets: list[dict[str, str]] = []
         self._lan: str | None = None
         self._tailscale: TailscaleInfo | None = None
-        self._tailscale_known = False  # False until the first `tailscale status` of this switch-on ends
+        self._tailscale_known = False  # False until the first `tailscale status` has ended
         self._check: asyncio.Task[None] | None = None
         self._waiters: set[asyncio.Future[None]] = set()
         self._lock: asyncio.Lock | None = None
@@ -330,17 +345,26 @@ class PhoneAccess:
         return self.enabled and self._check is not None and not self._check.done()
 
     def refresh(self) -> None:
-        """Start a Tailscale check unless one is running. Returns at once."""
-        if self.enabled and not self.checking:
-            self._check = asyncio.create_task(self._check_tailscale())
-            self._check.add_done_callback(self._release_waiters)
+        """Start a new Tailscale check, ending one that is still running (it may be stuck). Returns at once.
+
+        The last good answer stays in use until a check gives a better one, so a stuck or failing
+        tool never takes the Tailscale names away from a phone that is already connected.
+        """
+        if not self.enabled:
+            return
+        if self._check is not None:
+            self._check.cancel()  # kills the tool; waiters on ?wait=1 move on to the new check
+        self._check = asyncio.create_task(self._check_tailscale())
+        self._check.add_done_callback(self._release_waiters)
 
     async def _check_tailscale(self) -> None:
         try:
             found = await read_tailscale(self._tailscale_cli())
-        except Exception:  # noqa: BLE001 - any failure means "no Tailscale"
-            logger.exception("tailscale check failed")
-            found = None
+        except TailscaleUnreadable as err:
+            logger.warning("tailscale gave no answer: %s", err)
+            if self.enabled:
+                self._tailscale_known = True  # with nothing good to keep, report "not found" until a check succeeds
+            return
         if self.enabled:
             self._tailscale, self._tailscale_known = found, True
             self._refresh_addresses()
@@ -364,8 +388,7 @@ class PhoneAccess:
         async with self._guard():
             if self.enabled:
                 return
-            self._tailscale, self._tailscale_known = None, False
-            self._refresh_addresses()
+            self._refresh_addresses()  # an earlier good Tailscale answer is kept; the check below renews it
             if self._listener_args is not None:
                 listener = PhoneListener(self._listener_args[0], self.port, self._listener_args[1])
                 await listener.start()

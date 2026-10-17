@@ -406,3 +406,64 @@ async def test_a_listener_that_fails_to_start_is_closed_and_the_mac_is_told_in_p
                 assert (await mac.post("/api/phone", json={"enabled": True})).status_code == 200  # the port was let go
             finally:
                 await access.disable()
+
+
+def switchable_tailscale(folder: Path) -> tuple[str, Path]:
+    """A `tailscale` whose answer is whatever the file ``mode`` says: good, stopped, broken or hung."""
+    (folder / "good.json").write_text(json.dumps(RUNNING))
+    (folder / "stopped.json").write_text(json.dumps(STOPPED))
+    mode = folder / "mode"
+    mode.write_text("good")
+    script = folder / "tailscale"
+    script.write_text(
+        f'#!/bin/sh\ncase "$(cat {mode})" in\n good) cat {folder}/good.json;;\n stopped) cat {folder}/stopped.json;;\n'
+        f' broken) exit 1;;\n hung) exec sleep 120;;\nesac\n')  # 120 s: ends by itself if a test run dies
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return str(script), mode
+
+
+def tailscale_state(studio: Studio) -> dict:
+    """Ask the Mac for a new look and wait for it, as the panel does; and say whether a phone can use the tailnet name."""
+    assert studio.mac.get("/api/phone").status_code == 200
+    status = studio.mac.get("/api/phone?wait=1").json()
+    status["name_accepted"] = studio.phone.get("/api/session", headers={"host": TAILNET_NAME}).status_code != 400
+    return status
+
+
+def test_a_failed_or_hung_tailscale_check_keeps_the_last_good_answer_and_a_stopped_tailscale_replaces_it(tmp_path):
+    cli, mode = switchable_tailscale(tmp_path)
+    with studio_with(tmp_path, cli) as s:
+        pin = s.switch_on()
+        assert s.sign_in(pin).status_code == 200
+        assert tailscale_state(s)["name_accepted"] is True
+
+        mode.write_text("broken")  # the tool fails (the Tailscale app is restarting)
+        again = tailscale_state(s)
+        assert again["tailscale"] is True and again["name_accepted"] is True
+        assert s.phone.get("/api/lights", headers={"host": TAILNET_NAME}).status_code == 200  # the signed-in phone is still in
+
+        mode.write_text("hung")  # the tool hangs; a new look ends the old one and the answer stays
+        assert s.mac.get("/api/phone").status_code == 200
+        assert s.phone.get("/api/session", headers={"host": TAILNET_NAME}).status_code == 200  # not "Invalid host header"
+
+        mode.write_text("broken")  # switching off and on with a failing tool does not lose the names either
+        s.mac.post("/api/phone", json={"enabled": False})
+        s.mac.post("/api/phone", json={"enabled": True})
+        assert tailscale_state(s)["name_accepted"] is True
+
+        mode.write_text("stopped")  # the tool says Tailscale is not running: now the names go
+        gone = tailscale_state(s)
+        assert gone["tailscale"] is False and gone["name_accepted"] is False
+
+
+def test_opening_the_panel_again_replaces_a_check_that_never_answered(tmp_path):
+    cli, mode = switchable_tailscale(tmp_path)
+    mode.write_text("hung")
+    with studio_with(tmp_path, cli) as s:
+        on = s.mac.post("/api/phone", json={"enabled": True}).json()
+        assert on["checking"] is True and on["tailscale"] is None
+        mode.write_text("good")  # Tailscale comes back; the next time the panel opens, the stuck check is replaced
+        assert s.mac.get("/api/phone").status_code == 200
+        status = s.mac.get("/api/phone?wait=1").json()
+        assert status["checking"] is False and status["tailscale"] is True
+        assert [t["kind"] for t in status["targets"]] == ["wifi", "tailscale"]
