@@ -7,6 +7,9 @@ Two facts come from an advertisement alone, without connecting:
   the model table. The vendor app reads bytes 7 and 6 of the blob *including*
   the two-byte company id (which these lights fill with part of their own
   address), so the id is read at the same offsets after putting it back.
+* **Not another brand's light.** Zhiyun's MOLUS G200 also advertises the Mesh
+  Proxy Service, and its manufacturer bytes read as Godox model ``0039``
+  (SL60IID). A name another brand's model file claims wins over those bytes.
 * **Whose mesh it is on.** A factory-fresh light advertises the Mesh
   Provisioning Service; a paired one advertises the Mesh Proxy Service with
   ``k3(network key)``, its network's public id. Matching that against our own
@@ -55,6 +58,13 @@ def radio_id_from_manufacturer(manufacturer_data: dict[int, bytes] | None) -> st
     return None
 
 
+def other_brand_name(name: str | None) -> bool:
+    """Whether another brand's model files claim this local name (a Zhiyun "PL109_..." light)."""
+    from .drivers.zhiyun.models import resolve_model
+
+    return resolve_model(name) is not None
+
+
 def _godox_name(name: str | None) -> bool:
     if not name:
         return False
@@ -83,6 +93,8 @@ def read_advert(
         return None
     if radio_id is None and network_id is None and not _godox_name(name):
         return None  # some other brand's mesh device
+    if other_brand_name(name):
+        return None  # another brand's mesh light; its own driver lists it
     return Nearby(address.upper(), name, rssi, state, radio_id, network_id, time.time())
 
 
