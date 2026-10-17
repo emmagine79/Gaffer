@@ -275,7 +275,10 @@ export const useStudio = create<Studio>()((set, get) => ({
     socket.send({ type: 'power', light: id, on, fade })
   },
 
-  send: (message) => socket.send(scoped(message)),
+  send: (message) => {
+    flush() // a slider change still waiting for its frame must not land after this (a late `set` cancels an effect just started)
+    socket.send(scoped(message))
+  },
   request: (message, timeoutMs) => socket.request(scoped(message), timeoutMs),
 
   upsert: async (collection, item) => {

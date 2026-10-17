@@ -114,12 +114,15 @@ test('Colour cycle plays as warmth on a CCT-only light', async ({ page }) => {
   await selectLight(page, 'Fill')
   await expect(own(page).getByRole('button', { name: /Colour cycle/ })).toContainText('as warmth')
   await own(page).getByRole('button', { name: /Colour cycle/ }).click()
+  await expect(own(page).getByRole('button', { name: /Colour cycle/ })).toHaveAttribute('aria-pressed', 'true')
   const kelvins = new Set<number>()
   await expect.poll(async () => {
     kelvins.add((await lightNamed(page, 'Fill')).state.cct.kelvin)
     return kelvins.size
   }, { timeout: 8000, intervals: [250] }).toBeGreaterThan(3)
   await page.getByRole('button', { name: 'Stop effect' }).click()
+  await expect(own(page).getByRole('button', { name: /Colour cycle/ })).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByRole('button', { name: 'Stop effect' })).toHaveCount(0)
 })
 
 test('a built-in effect runs on the light, and the hero names it', async ({ page }) => {
@@ -152,25 +155,49 @@ test('in gel mode the controls stop showing white-mode values', async ({ page })
   await expect.poll(async () => (await lightNamed(page, 'Key light')).state.mode).toBe('cct')
 })
 
-test('a running Gaffer effect is named in the hero, not just "effect"', async ({ page }) => {
+// The chip's own name is the one the hero and the sentence use (lumen calls these "Candle" and "Rainbow").
+test('a running Gaffer effect is named as its chip names it, and the controls stop showing live frames', async ({ page }) => {
   await open(page, 1280)
   await selectLight(page, 'Yongnuo wand')
   await own(page).getByRole('button', { name: 'Flicker' }).click()
   await expect(page.locator('.g-hero')).toHaveText('Effect')
-  await expect(page.locator('.g-sub')).toContainText('Candle')
+  await expect(page.locator('.g-sub')).toContainText('Flicker')
+  await expect(page.locator('.g-sub')).not.toContainText('Candle')
+  await expect(page.getByRole('slider', { name: 'Colour temperature' })).toHaveCount(0)
+  await expect(page.locator('.g-ctl', { hasText: 'Colour temperature' })).toContainText('Not in use')
   await page.getByRole('button', { name: 'Stop effect' }).click()
   await expect(page.locator('.g-hero')).not.toHaveText('Effect')
+  await expect(page.getByRole('slider', { name: 'Colour temperature' })).toBeVisible()
+})
+
+test('Colour cycle on a colour light says so, and the colour controls stop following its frames', async ({ page }) => {
+  await open(page, 1280)
+  await selectLight(page, 'Key light')
+  await own(page).getByRole('button', { name: /Colour cycle/ }).click()
+  await expect(own(page).getByRole('button', { name: /Colour cycle/ })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('.g-sub')).toContainText('Colour cycle')
+  await expect(page.locator('.g-sub')).not.toContainText('Rainbow')
+  await expect(page.locator('[data-control="colour"] .g-lab')).toContainText('Not in use')
+  await expect(page.getByRole('slider', { name: 'Hue' })).toHaveCount(0)
+  await expect(page.getByRole('slider', { name: 'Saturation' })).toHaveCount(0)
+  await expect(page.getByRole('slider', { name: 'Colour temperature' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Stop effect' }).click()
+  await expect(page.getByRole('slider', { name: 'Hue' })).toBeVisible()
 })
 
 test('a built-in effect the model row does not list still gets a name', async ({ page }) => {
-  // Rewrite the socket's answers so Key light claims an effect its model row does not have.
+  // Rewrite what the socket says about Key light so it always claims an effect its model row does not
+  // have: the first hello and every later message that carries that light's state.
+  let keyId = ''
+  const fake = (state: Record<string, unknown>) => ({ ...state, mode: 'fx', fx: { symbol: 99, speed: null, params: {} } })
   await page.routeWebSocket(/\/ws/, (ws) => {
     const server = ws.connectToServer()
     server.onMessage((message) => {
       const data = JSON.parse(String(message))
       for (const light of data.lights ?? []) {
-        if (light.name === 'Key light') light.state = { ...light.state, mode: 'fx', fx: { symbol: 99, speed: null, params: {} } }
+        if (light.name === 'Key light') { keyId = light.id; light.state = fake(light.state) }
       }
+      if (data.type === 'state' && data.light === keyId) data.state = fake(data.state)
       ws.send(JSON.stringify(data))
     })
   })

@@ -1,3 +1,4 @@
+import { ownLabel } from '../effects/own'
 import { emission, hueName, kelvinName, rgbCss } from '../lib/color'
 import type { Caps, EngineStatus, LightState, LightView } from '../lib/types'
 
@@ -44,15 +45,17 @@ export function sentence(state: LightState, caps: Pick<Caps, 'effects' | 'featur
 }
 
 /** The name of a Gaffer effect that is playing on this light, if one is. */
-export function runningEffect(engine: Pick<EngineStatus, 'kind' | 'label'>): string | null {
-  return engine.kind === 'effect' ? engine.label || 'effect' : null
+export function runningEffect(engine: Pick<EngineStatus, 'kind' | 'effect' | 'label'>): string | null {
+  return engine.kind === 'effect' ? ownLabel(engine.effect) ?? (engine.label || 'effect') : null
 }
 
 /**
- * What holds a light in gel or effect mode ("Gel L201", "Candle"), or null in a white or colour mode.
+ * What holds a light in gel or effect mode ("Gel L201", "Flicker"), or null in a white or colour mode.
  * The white and colour controls say this instead of the white they would otherwise still show.
+ * A playing Gaffer effect (`running`) holds the light too: it streams frames in white or colour mode.
  */
-export function heldBy(state: LightState, caps: Pick<Caps, 'effects' | 'features'>): string | null {
+export function heldBy(state: LightState, caps: Pick<Caps, 'effects' | 'features'>, running?: string | null): string | null {
+  if (running) return running
   if (state.mode === 'gel') return state.gel ? `Gel ${state.gel.label}` : 'Gel'
   if (state.mode === 'fx') {
     const what = readout(state, caps).what

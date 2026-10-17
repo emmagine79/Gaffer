@@ -1,17 +1,8 @@
 import type { BuiltinEffect, LightView, ParamSpec, SoftEffect } from '../lib/types'
 import { useStudio } from '../state/store'
 import { effectFit, usableEffects } from './fit'
+import { OWN } from './own'
 import './effects.css'
-
-/**
- * Gaffer's own effects, by the name people see and the id of lumen's effect behind it.
- * They run on the Mac and work on any light; lumen's engine adapts each to what the light can show.
- */
-const OWN: { id: string; label: string }[] = [
-  { id: 'breathe', label: 'Breathe' },
-  { id: 'candle', label: 'Flicker' },
-  { id: 'rainbow', label: 'Colour cycle' },
-]
 
 const NOTICE = 'These effects run from the Mac. They stop if the Mac sleeps, and may stutter over Bluetooth.'
 

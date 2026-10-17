@@ -58,10 +58,11 @@ function LightPanel({ light }: { light: LightView }) {
   const { caps } = light
   const f = caps.features
   const showKelvin = f.white && !f.daylight
-  const hsi = state.mode === 'hsi' && f.colour
   const running = runningEffect(light.engine)
+  // A playing effect streams frames in white or colour mode: those frames are not the light's setting.
+  const hsi = state.mode === 'hsi' && f.colour && !running
   const shown = readout(state, caps, running)
-  const held = heldBy(state, caps)
+  const held = heldBy(state, caps, running)
   return (
     <div className="g-light" data-light={light.id}>
       <div className="g-row">
@@ -112,12 +113,14 @@ function LightPanel({ light }: { light: LightView }) {
 
       {f.colour && (
         <div className="g-colour" data-control="colour">
-          <Control label="Colour" aside={hsi ? capital(hueName(state.hsi.hue)) : held ?? 'White'}>
-            <Stepper
-              className="g-knob" label="Hue" value={state.hsi.hue} min={0} max={359} step={1} jump={10}
-              track={hueTrack()}
-              onChange={(v) => apply({ mode: 'hsi', hsi: { hue: v, sat: state.hsi.sat || 100 } })}
-            />
+          <Control label="Colour" aside={running ? 'Not in use' : hsi ? capital(hueName(state.hsi.hue)) : held ?? 'White'}>
+            {!running && (
+              <Stepper
+                className="g-knob" label="Hue" value={state.hsi.hue} min={0} max={359} step={1} jump={10}
+                track={hueTrack()}
+                onChange={(v) => apply({ mode: 'hsi', hsi: { hue: v, sat: state.hsi.sat || 100 } })}
+              />
+            )}
           </Control>
           {hsi && (
             <Control label="Saturation" aside={`${Math.round(state.hsi.sat)}%`}>
