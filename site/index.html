@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gaffer, one app for your studio lights</title>
+<meta name="description" content="Gaffer is a free, open-source Mac app that controls Godox, Zhiyun and Yongnuo studio lights in one place.">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <p class="eyebrow">Free and open source, for Mac</p>
+  <div class="hero" aria-hidden="true"><span class="big">5600</span><span class="unit">K</span></div>
+  <h1>One app for all your studio lights.</h1>
+  <p class="lede">Gaffer controls lights from different brands in one place. Set the brightness and the colour temperature from your Mac or from your phone.</p>
+  <div class="actions">
+    <a class="btn" href="https://github.com/emmagine79/Gaffer/releases/latest">Download Gaffer</a>
+    <a class="btn alt" href="https://github.com/emmagine79/Gaffer">See the code on GitHub</a>
+  </div>
+  <p class="note">Gaffer is still being built. Today it finds nearby lights and shows them by brand. Light control is coming.</p>
+</header>
+<main>
+  <section id="what">
+    <h2>What Gaffer is</h2>
+    <p>Most light brands ship their own app. If you use more than one brand, you juggle more than one app. Gaffer replaces them with one.</p>
+    <p>It lives in your Mac menu bar, opens into a full window, and works on any phone in a browser.</p>
+  </section>
+
+  <section id="brands">
+    <h2>Lights it works with</h2>
+    <div class="grid">
+      <div class="tile"><h3>Godox</h3><p>Bluetooth mesh lights. 186 models, including the Litemons LA150Bi.</p></div>
+      <div class="tile"><h3>Zhiyun</h3><p>ZY Vega lights, including the MOLUS G200.</p></div>
+      <div class="tile"><h3>Yongnuo</h3><p>Bluetooth lights, including the YN150Li.</p></div>
+    </div>
+  </section>
+
+  <section id="features">
+    <h2>What it does</h2>
+    <div class="grid">
+      <div class="tile"><h3>Menu bar</h3><p>A small icon shows the current look. Click it for quick control.</p></div>
+      <div class="tile"><h3>Mac window</h3><p>A full window with a big colour temperature readout and sliders.</p></div>
+      <div class="tile"><h3>Phone browser</h3><p>Scan a QR code on your Mac, then enter a PIN. No app to install on your phone.</p></div>
+      <div class="tile"><h3>Looks</h3><p>Save the settings for many lights as one look, such as "Talking head". Each look has its own fade time.</p></div>
+      <div class="tile"><h3>Lighting desk</h3><p>Switch to one fader per light. Select several and move them together.</p></div>
+      <div class="tile"><h3>Schedules</h3><p>Switch to a look at a set time on set days, such as "All off at 2:00 AM".</p></div>
+      <div class="tile"><h3>Cues</h3><p>Step through a list of looks with a button or a keyboard shortcut.</p></div>
+    </div>
+    <div class="shots">
+      <div class="shot" aria-hidden="true">Placeholder. Screenshot of the Mac window goes here.</div>
+      <div class="shot" aria-hidden="true">Placeholder. Screenshot of the phone page goes here.</div>
+    </div>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <ol>
+      <li>Download the latest zip from the <a href="https://github.com/emmagine79/Gaffer/releases/latest">releases page</a>.</li>
+      <li>Unzip it.</li>
+      <li>Open <strong>Gaffer.app</strong>.</li>
+    </ol>
+    <p>Gaffer is unsigned. The first time you open it, macOS asks you to confirm. The first time it scans, macOS also asks for Bluetooth. Click Allow.</p>
+    <p>The <a href="https://github.com/emmagine79/Gaffer#readme">README</a> will have the step-by-step guide with screenshots.</p>
+    <div class="shot" aria-hidden="true">Placeholder. Install screenshots go here.</div>
+  </section>
+
+  <section id="credits">
+    <h2>Licence and credits</h2>
+    <p>Gaffer is free software under the <a href="https://github.com/emmagine79/Gaffer/blob/main/LICENSE">MIT licence</a>.</p>
+    <p>It builds on these MIT-licensed projects:</p>
+    <ul>
+      <li><a href="https://github.com/Rkcr7/lumen-studio">lumen-studio</a> (MIT): Godox driver, model table, effects, scenes, schedules and cues.</li>
+      <li><a href="https://github.com/mattharrison/godox-ul60bi-bt">godox-ul60bi-bt</a> (MIT): the Godox protocol that lumen-studio builds on.</li>
+      <li><a href="https://github.com/binary-person/ha-godox-mesh">ha-godox-mesh</a> (MIT): Godox mesh support for many models, also behind lumen-studio.</li>
+      <li><a href="https://github.com/didim99/HA-Zhiyun-Light">HA-Zhiyun-Light</a> (MIT): Zhiyun protocol and light names.</li>
+      <li><a href="https://github.com/aaditagrawal/zhiyun-light-control">zhiyun-light-control</a> (MIT): Zhiyun protocol.</li>
+      <li><a href="https://github.com/asidjwiaijd/yongnuo-light-control">yongnuo-light-control</a> (MIT): Yongnuo protocol and naming.</li>
+    </ul>
+  </section>
+</main>
+<footer>
+  <p><a href="https://github.com/emmagine79/Gaffer">Gaffer on GitHub</a> · MIT licence · Not affiliated with Godox, Zhiyun or Yongnuo.</p>
+</footer>
+</body>
+</html>
