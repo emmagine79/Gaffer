@@ -240,12 +240,17 @@ class Hub:
         if fixture is not None:
             if self.on_mesh(fixture):
                 self.godox.drop(fixture.node)
-            await self._release(fixture.driver, light_id)
+            # A hub-owned task, shielded: a cancelled request cannot leave the driver holding the light.
+            await asyncio.shield(self._spawn(self._release(fixture.driver, light_id)))
 
     async def _release(self, driver: Driver, light_id: str) -> None:
-        """Tell a driver to let go of a light. Like every other driver call, one failing never stops the hub."""
+        """Tell a driver to let go of a light. Like every other driver call, one failing, or hanging past
+        the hub's stop budget, never stops the hub."""
         try:
-            await driver.forget_light(light_id)
+            await asyncio.wait_for(driver.forget_light(light_id), timeout=LINK_STOP_SECONDS)
+        except TimeoutError:
+            logger.error("driver %s did not let go of light %s within %s s", driver.id, light_id, LINK_STOP_SECONDS)
+            self._log("error", f"the {driver.id} driver was slow to let go of a light")
         except Exception:  # noqa: BLE001 - the rest of the forget or hand-over must still happen
             logger.exception("driver %s failed to let go of light %s", driver.id, light_id)
             self._log("error", f"the {driver.id} driver did not let go of a light")
@@ -401,6 +406,7 @@ class Hub:
             fixture.driver.apply(fixture.light, fixture.state)
 
     async def stop(self) -> None:
+        self._started = False
         self._save_states(force=True)
         await self._stop_link()
         for task in [*self._tasks, *self._engine_tasks.values()]:
@@ -881,7 +887,8 @@ class Hub:
         if fixture.driver is not old_driver:
             if was_on_mesh:
                 self.godox.drop(fixture.node)
-            self._spawn(self._hand_over(fixture, old_driver))
+            if self._started:  # before start() nothing is connected, and start() connects every light itself
+                self._spawn(self._hand_over(fixture, old_driver))
         elif self.on_network(fixture):
             if self.on_mesh(fixture):
                 self.godox.forget(fixture.node)
@@ -892,8 +899,8 @@ class Hub:
         """The model belongs to another brand. The old driver lets go first (its link closed), and only
         then does the new one take the light, so two drivers never drive one."""
         await self._release(old_driver, fixture.id)
-        if self.fixtures.get(fixture.id) is not fixture or fixture.driver is old_driver:
-            return  # forgotten, or changed back, while the old driver was letting go
+        if not self._started or self.fixtures.get(fixture.id) is not fixture or fixture.driver is old_driver:
+            return  # stopped, forgotten, or changed back, while the old driver was letting go
         if fixture.driver is self.godox:
             if self.on_mesh(fixture):
                 self.godox.forget(fixture.node)
@@ -914,6 +921,12 @@ class Hub:
         self._broadcast({"type": "placed", "light": light_id, "x": moved.x, "y": moved.y})
 
     async def forget(self, light_id: str) -> None:
+        """Forget a light. The work runs in a task the hub owns and the request only waits on it, so a
+        cancelled request (a closed browser tab) cannot leave the forget half done."""
+        self.fixture(light_id)  # no such light: say so before anything starts
+        await asyncio.shield(self._spawn(self._forget(light_id)))
+
+    async def _forget(self, light_id: str) -> None:
         fixture = self.fixture(light_id)
         network = fixture.light.network
         await self._drop_fixture(light_id)

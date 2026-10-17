@@ -422,3 +422,58 @@ async def test_a_driver_whose_stop_never_returns_does_not_hold_up_the_hub(tmp_pa
     hub.registry.drivers = {"hang": _Recorder(log, hang_on_stop=True), "rec": _Recorder(log), **hub.registry.drivers}
     await asyncio.wait_for(hub.stop(), 10)
     assert log == ["rec.stopped"]  # the one after the hung driver was still stopped
+
+
+async def test_a_driver_that_never_lets_go_does_not_hang_a_forget(tmp_path, demo_models, monkeypatch):
+    monkeypatch.setattr(hub_module, "LINK_STOP_SECONDS", 0.2)
+    hub = await _studio(tmp_path)
+    try:
+        async def never(light_id):
+            await asyncio.Event().wait()
+
+        hub.registry.get("demo").forget_light = never
+        yongnuo = _light(hub, "Yongnuo wand")
+        await asyncio.wait_for(hub.forget(yongnuo.id), 5)
+        assert all(light.id != yongnuo.id for light in hub.library.lights)
+    finally:
+        await hub.stop()
+
+
+async def test_a_cancelled_forget_request_still_finishes_the_forget(tmp_path, demo_models):
+    hub = await _studio(tmp_path)
+    try:
+        async def slow(light_id):
+            await asyncio.sleep(0.2)
+
+        hub.registry.get("demo").forget_light = slow
+        yongnuo = _light(hub, "Yongnuo wand")
+        request = asyncio.create_task(hub.forget(yongnuo.id))
+        await asyncio.sleep(0.05)  # the driver is letting go
+        request.cancel()  # the browser went away
+        await asyncio.gather(request, return_exceptions=True)
+        for _ in range(300):
+            if all(light.id != yongnuo.id for light in hub.library.lights):
+                break
+            await asyncio.sleep(0.01)
+        assert all(light.id != yongnuo.id for light in hub.library.lights)
+    finally:
+        await hub.stop()
+
+
+async def test_a_model_change_connects_nothing_before_start_or_after_stop(tmp_path, demo_models):
+    configure_models([], {**demo.DEMO_MODELS, "REC-1": REC_MODEL})
+    library = LightLibrary(tmp_path)
+    demo.seed(library)
+    hub = Hub(Store(tmp_path), library, demo=True, scanner=demo.DemoScanner())
+    log: list[str] = []
+    hub.registry.drivers["rec"] = _Recorder(log)
+    zhiyun, yongnuo = _light(hub, "Zhiyun panel"), _light(hub, "Yongnuo wand")
+    hub.set_model(zhiyun.id, "REC-1")  # not started yet
+    await asyncio.sleep(0.2)
+    assert log == []
+    await hub.start()
+    await hub.stop()
+    log.clear()
+    hub.set_model(yongnuo.id, "REC-1")  # already stopped
+    await asyncio.sleep(0.2)
+    assert log == []
