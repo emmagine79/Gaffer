@@ -3,7 +3,7 @@
 Build first: scripts/build_app.sh --no-install
 Run:        uv run --project service --frozen pytest mac/tests/test_bundle.py
 
-Every rebuild of Gaffer.app has a new ad-hoc signature, so launching it makes macOS ask
+Launching a rebuilt Gaffer.app signed by a new identity makes macOS ask
 for Bluetooth again. This test runs the service the way the app does (the bundle's own
 Python, `-I -B -m gaffer --session-from-stdin`) but in --demo mode, which starts no
 Bluetooth scan and never touches a light. The bundle is copied into a folder whose path

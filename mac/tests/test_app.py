@@ -139,7 +139,7 @@ def gaffer(tmp_path_factory):
 
 
 def test_double_click_starts_bundled_python_service(gaffer):
-    """Criterion 1: ad-hoc signed, with icon, starts its own Python; no Terminal, no system Python."""
+    """Criterion 1: signed, with icon, starts its own Python; no Terminal, no system Python."""
     contents = gaffer.app / "Contents"
     info = plistlib.loads((contents / "Info.plist").read_bytes())
     assert (contents / "Resources" / f"{info['CFBundleIconFile']}.icns").is_file()

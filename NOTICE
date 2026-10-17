@@ -54,6 +54,10 @@ Each one's licence is kept in THIRD-PARTY/, and travels inside Gaffer.app.
   THIRD-PARTY/segno/.
   https://github.com/heuer/segno
 
+* Python and its packages. Gaffer.app carries its own Python 3.14 (python-build-standalone)
+  and the packages locked in service/uv.lock. Their licence texts are inside the app
+  in Contents/Resources/LICENSES, and the NOTICE inside the app lists them one by one.
+
 TRADEMARKS
 ----------
 
