@@ -182,6 +182,7 @@ A phone's request is refused when:
 | Case | Answer |
 | --- | --- |
 | Phone access is off | `403 phone_access_off` (socket closed with code 4403) |
+| The connection comes from a public address: not loopback, private IPv4 (RFC 1918), link-local (RFC 3927, RFC 4291), unique local IPv6 (RFC 4193) or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48). An IPv4-mapped IPv6 address counts as its IPv4 address. Checked before the Host and the PIN | `403 network_not_allowed` (socket 4403) |
 | `Host` is not an address phone access listed (the Wi-Fi address, the Tailscale addresses and MagicDNS name) | `400 Invalid host header` (socket 4403) |
 | No valid PIN cookie, and the route is not one of the open ones below | `401 pin_required` (socket closed with code 4401 before it opens) |
 

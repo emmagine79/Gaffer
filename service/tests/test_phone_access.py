@@ -46,8 +46,14 @@ def fake_tailscale(folder: Path, status: dict) -> str:
 
 
 class Studio:
-    def __init__(self, phone: TestClient, mac: TestClient, access: PhoneAccess) -> None:
-        self.phone, self.mac, self.access = phone, mac, access
+    def __init__(self, phone: TestClient, mac: TestClient, access: PhoneAccess, guarded) -> None:
+        self.phone, self.mac, self.access, self.guarded = phone, mac, access, guarded
+
+    def client_at(self, address: str) -> TestClient:
+        """Another phone, whose connection comes from ``address``, on the same event loop."""
+        other = TestClient(self.guarded, base_url=f"http://{LAN}:{PORT}", client=(address, 50000))
+        other.portal = self.phone.portal
+        return other
 
     def switch_on(self) -> str:
         reply = self.mac.post("/api/phone", json={"enabled": True})
@@ -75,7 +81,7 @@ def studio_with(tmp_path: Path, cli: str | None):
         mac.portal = phone.portal  # one event loop for both, as in the service
         assert mac.get(f"/session?key={SECRET}", follow_redirects=False).status_code == 303
         assert mac.cookies.get(COOKIE) == SECRET
-        yield Studio(phone, mac, access)
+        yield Studio(phone, mac, access, guarded)
 
 
 @pytest.fixture
@@ -294,6 +300,30 @@ async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
 def _phone_socket(port: int, token: str):
     """A WebSocket to the real listener that names the Tailscale name as its Host, as a phone's browser would."""
     return connect(f"ws://{TAILNET_NAME}:{port}/ws", host="127.0.0.1", port=port, additional_headers={"Cookie": f"{PHONE_COOKIE}={token}"})
+
+
+def test_only_connections_from_a_private_network_or_tailscale_get_as_far_as_the_pin(studio):
+    """A public address is refused even with the right PIN and a Host the Mac listed: the Host header is
+    whatever the sender writes, and the Mac's IPv6 address can be reachable from the internet."""
+    pin = studio.switch_on()
+    refused = ("8.8.8.8", "2001:4860::1", "::ffff:8.8.8.8", "100.128.0.1", "172.32.0.1", "192.169.0.1", "fec0::1")
+    allowed = ("10.1.2.3", "172.16.0.9", "192.168.1.77", "169.254.3.4", "100.100.1.1", "::ffff:192.168.1.77",
+               "fe80::1", "fd00::1", "fd7a:115c:a1e0::9", "::1")
+    for address in refused:
+        far = studio.client_at(address)
+        reply = far.post("/api/session", json={"pin": pin})
+        assert reply.status_code == 403 and reply.json()["error"] == "network_not_allowed", address
+        assert PHONE_COOKIE not in reply.headers.get("set-cookie", ""), address
+        assert far.get("/api/session").status_code == 403, address
+        assert refused_socket(far, ws_url()) == 4403, address
+    for address in allowed:
+        assert studio.client_at(address).get("/api/session").json()["error"] == "pin_required", address
+    # A signed-in phone's cookie is no use from a public address either.
+    token = studio.sign_in(pin).cookies[PHONE_COOKIE]
+    far = studio.client_at("8.8.8.8")
+    far.cookies.set(PHONE_COOKIE, token)
+    assert far.get("/api/lights").status_code == 403
+    assert studio.phone.get("/api/lights").status_code == 200
 
 
 def test_a_phone_with_the_pin_cannot_read_the_export_or_the_data_folder(studio):

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { SOCKET_CLOSED } from '../lib/socket'
 import { PinScreen } from './PinScreen'
 
 type Gate =
@@ -28,6 +29,27 @@ export function PhoneGate({ children }: { children: ReactNode }) {
         if ((error as { name?: string }).name !== 'AbortError') setGate({ kind: 'blocked', text: 'Cannot reach Gaffer. Check that the Mac is on and awake.' })
       })
     return () => controller.abort()
+  }, [])
+
+  // A phone that is signed out while the studio is open (New PIN, or access switched off) finds out
+  // when its light socket closes: ask again, and act only on a clear answer from the service.
+  useEffect(() => {
+    const controller = new AbortController()
+    const onClosed = () => {
+      fetch('/api/session', { signal: controller.signal })
+        .then(async (res) => {
+          if (res.ok) return
+          const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+          if (body.error === 'pin_required') setGate({ kind: 'pin' })
+          else if (body.error === 'phone_access_off') setGate({ kind: 'blocked', text: body.message ?? 'Phone access is off.' })
+        })
+        .catch(() => {}) // the service is not answering: the socket keeps retrying
+    }
+    window.addEventListener(SOCKET_CLOSED, onClosed)
+    return () => {
+      window.removeEventListener(SOCKET_CLOSED, onClosed)
+      controller.abort()
+    }
   }, [])
 
   if (gate.kind === 'in') return <>{children}</>

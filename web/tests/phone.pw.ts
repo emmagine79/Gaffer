@@ -48,6 +48,7 @@ test('the QR codes decode to addresses a phone can reach, and the phone needs th
   await expect(macPage.getByLabel('PIN', { exact: true })).toHaveText(/^\d{6}$/)
   const pin = (await macPage.getByLabel('PIN', { exact: true }).textContent())!
   const tailscaleUrl = `http://${TAILNET_NAME}:${service.port}/`
+  await expect(macPage.locator('.ph-url', { hasText: tailscaleUrl })).toBeVisible() // the service does not wait for the Tailscale tool
   const shown = await macPage.locator('.ph-url').allTextContents()
   expect(shown).toContain(tailscaleUrl)
   for (const label of ['Same Wi-Fi', 'Away, over Tailscale']) {
@@ -76,10 +77,21 @@ test('the QR codes decode to addresses a phone can reach, and the phone needs th
   await expect(page.getByRole('group', { name: 'View' })).toBeVisible()
   await noSideways(page)
 
-  // New PIN on the Mac signs that phone out.
+  // A phone that adds ?surface=window is not offered the Mac's Phone button.
+  const sneaky = await phone.newPage()
+  const [answer] = await Promise.all([sneaky.waitForResponse((r) => new URL(r.url()).pathname === '/api/phone'), sneaky.goto(`${tailscaleUrl}?surface=window`)])
+  expect(answer.status()).toBe(403)
+  await expect(sneaky.getByRole('group', { name: 'View' })).toBeVisible()
+  await expect(sneaky.getByRole('button', { name: 'Phone' })).toHaveCount(0)
+  await sneaky.close()
+
+  // New PIN on the Mac signs that phone out, and the open page goes back to the PIN screen.
   await macPage.getByRole('button', { name: 'New PIN' }).click()
   await expect(macPage.getByLabel('PIN', { exact: true })).not.toHaveText(pin)
   expect(await page.evaluate(async () => (await fetch('/api/lights')).status)).toBe(401)
+  await expect(page.getByLabel('Enter the PIN shown on the Mac')).toBeVisible()
+  await expect(page.getByRole('group', { name: 'View' })).toHaveCount(0)
+
   await window.close()
   await phone.close()
 })

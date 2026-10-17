@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import './phone.css'
 
 interface Target { kind: 'wifi' | 'tailscale'; label: string; url: string; qr: string }
-interface PhoneStatus { enabled: boolean; pin: string | null; locked: boolean; tailscale: boolean | null; targets: Target[] }
+interface PhoneStatus { enabled: boolean; pin: string | null; locked: boolean; checking: boolean; tailscale: boolean | null; targets: Target[] }
 
-async function call(path: string, body?: unknown): Promise<PhoneStatus> {
-  const res = await fetch(path, body === undefined ? undefined : {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+async function call(path: string, body?: unknown, signal?: AbortSignal): Promise<PhoneStatus> {
+  const res = await fetch(path, body === undefined ? { signal } : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error((data as { message?: string }).message ?? 'That did not work. Try again.')
@@ -19,10 +19,22 @@ export function PhonePanel() {
   const [status, setStatus] = useState<PhoneStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
+  // The Phone button is the Mac window's. The service answers anyone else with 403, and then there is nothing to show.
+  const [offered, setOffered] = useState(false)
 
   useEffect(() => {
-    call('/api/phone').then(setStatus).catch(() => setStatus(null))
+    call('/api/phone').then((s) => { setStatus(s); setOffered(true) }).catch(() => setOffered(false))
   }, [])
+
+  // The service never waits for the Tailscale tool. While it is still looking, hold one request open
+  // until it has answered (or access is switched off), then show what it found.
+  const checking = status?.checking === true
+  useEffect(() => {
+    if (!checking) return
+    const stop = new AbortController()
+    call('/api/phone?wait=1', undefined, stop.signal).then(setStatus).catch(() => {})
+    return () => stop.abort()
+  }, [checking])
 
   async function act(path: string, body: unknown) {
     if (busy) return
@@ -42,6 +54,7 @@ export function PhonePanel() {
     dialog.current?.showModal()
   }
 
+  if (!offered) return null
   return (
     <>
       <button type="button" className="ph-open" onClick={open}>
@@ -71,6 +84,7 @@ export function PhonePanel() {
               ))}
             </div>
             {status.targets.length === 0 && <p className="ph-note">This Mac has no network address to share. Connect it to Wi-Fi.</p>}
+            {status.checking && <p className="ph-note">Tailscale: checking…</p>}
             {status.tailscale === false && <p className="ph-note">To reach Gaffer away from home, install Tailscale on this Mac and your phone.</p>}
             <div className="ph-row">
               <button type="button" disabled={busy} onClick={() => act('/api/phone/pin', {})}>New PIN</button>
