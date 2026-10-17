@@ -6,6 +6,7 @@ import { OtherLights } from '../glass/OtherLights'
 import { CueBar } from '../cues/CueBar'
 import { CueEditor } from '../cues/CueEditor'
 import { useCueKey } from '../cues/cues'
+import { PhonePanel } from '../phone/PhonePanel'
 import { LookEditor } from '../looks/LookEditor'
 import { useLookKeys } from '../looks/looks'
 import { ScheduleEditor } from '../schedules/ScheduleEditor'
@@ -49,6 +50,7 @@ export function Shell() {
       {SURFACE === 'window' && <ScheduleEditor />}
       <AddLight />
       <Toasts />
+      {SURFACE === 'window' && <PhonePanel />}
     </div>
   )
 }

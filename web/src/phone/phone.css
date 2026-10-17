@@ -1,0 +1,19 @@
+/* The Mac window's phone access panel (SPEC-015). Tokens come from glass.css. */
+.ph-open { position: fixed; top: 14px; right: 14px; z-index: 20; padding: 6px 12px; border: 0; border-radius: 9px; font-size: 13px; color: var(--ink); background: var(--faint); }
+.ph { width: min(420px, calc(100% - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 18px; border: 0; border-radius: 18px; color: var(--ink); background: var(--panel-solid); box-shadow: var(--panel-edge); }
+.ph::backdrop { background: rgb(0 0 0 / 0.45); }
+.ph-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.ph-head h2 { font-size: 17px; }
+.ph button { padding: 8px 14px; border: 0; border-radius: 9px; font-size: 14px; color: var(--ink); background: var(--faint); }
+.ph button:disabled { opacity: 0.4; cursor: default; }
+.ph button.ph-main { width: 100%; margin-top: 12px; color: var(--sel-ink); background: var(--sel-bg); font-weight: 600; }
+.ph-note { margin: 6px 0; font-size: 14px; color: var(--dim); }
+.ph-pin { margin: 12px 0; font-size: 40px; font-weight: 650; letter-spacing: 0.18em; text-align: center; font-variant-numeric: tabular-nums; }
+.ph-warn { min-height: 1.4em; margin: 6px 0; font-size: 14px; color: var(--busy); overflow-wrap: anywhere; }
+.ph-codes { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
+.ph-code { margin: 0; flex: 1 1 160px; min-width: 0; display: grid; justify-items: center; gap: 6px; text-align: center; }
+.ph-code img { width: min(100%, 180px); height: auto; border-radius: 8px; background: #fff; }
+.ph-code figcaption { display: grid; gap: 2px; min-width: 0; max-width: 100%; font-size: 13px; }
+.ph-url { color: var(--dim); overflow-wrap: anywhere; }
+.ph-row { display: flex; gap: 10px; margin-top: 14px; }
+.ph-row button { flex: 1; }

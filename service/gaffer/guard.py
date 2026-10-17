@@ -15,10 +15,56 @@ device it controls. Two checks close that:
 
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import urlsplit
 
 LOCAL_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1", "testserver"})
 LOOPBACK: frozenset[str] = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+
+
+def is_loopback_client(address: str | None) -> bool:
+    """Whether a connection comes from this Mac itself (its peer address, not a header).
+
+    Anything else, including no address at all, is a phone or another machine.
+    """
+    if not address:
+        return False
+    if address in LOOPBACK:
+        return True
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return (ip.ipv4_mapped or ip).is_loopback if ip.version == 6 else ip.is_loopback
+
+
+#: Where a phone's connection may come from. Anything else (a public address) is refused before the PIN
+#: is looked at, because a Host header is whatever the sender writes. Each range has an authority:
+#: loopback (RFC 1122 section 3.2.1.3 for 127/8, RFC 4291 section 2.5.3 for ::1); private IPv4 (RFC 1918
+#: section 3: 10/8, 172.16/12, 192.168/16); link-local (RFC 3927 section 2.1 for 169.254/16, RFC 4291
+#: section 2.5.6 for fe80::/10); unique local IPv6 (RFC 4193 section 3, fc00::/7); Tailscale's addresses
+#: (100.64.0.0/10, the CGNAT range of RFC 6598, and fd7a:115c:a1e0::/48, both from Tailscale's "IP and DNS
+#: addresses" documentation).
+PHONE_SOURCES: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+    "fe80::/10", "fc00::/7", "100.64.0.0/10", "fd7a:115c:a1e0::/48"))
+
+
+def is_phone_source(address: str | None) -> bool:
+    """Whether a connection's peer address is on this Mac's own network, a private one, or Tailscale.
+
+    The v4 address inside an IPv4-mapped IPv6 address (``::ffff:192.168.1.5``, what a dual-stack
+    listener reports) is the one that counts. No address, or one that does not parse, is refused.
+    """
+    if not address:
+        return False
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip.version == net.version and ip in net for net in PHONE_SOURCES)
 
 
 def hostname(host_header: str) -> str:
