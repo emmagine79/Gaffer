@@ -1,12 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <radialGradient id="g" cx="50%" cy="50%" r="50%">
-      <stop offset="0" stop-color="#fff"/>
-      <stop offset=".35" stop-color="#ffd59a"/>
-      <stop offset="1" stop-color="#ff9a3c" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="t" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#292624"/>
+      <stop offset="1" stop-color="#0f0f0f"/>
+    </linearGradient>
+    <linearGradient id="b" gradientUnits="userSpaceOnUse" x1="688.4 407.8" x2="953 407.8">
+      <stop offset="0" stop-color="#FFEFE1" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#FFEFE1" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="c"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
   </defs>
-  <rect x="6" y="6" width="52" height="52" rx="14" fill="#1e1f23"/>
-  <circle cx="32" cy="32" r="17" fill="#2b2c30" stroke="#55575e" stroke-width="2"/>
-  <circle cx="32" cy="32" r="15" fill="url(#g)"/>
+  <g transform="scale(.0625)">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#t)"/>
+    <g clip-path="url(#c)">
+      <path d="M688.4 299.8 L1952 -105.2 L1952 920.8 L688.4 515.8Z" fill="url(#b)"/>
+    </g>
+    <g fill="#F3EEE6">
+      <path d="M213.2 283.6 L504.8 283.6 Q548 283.6 548 326.8 L548 488.8 Q548 532 504.8 532 L213.2 532 Q170 532 170 488.8 L170 326.8 Q170 283.6 213.2 283.6ZM213.2 283.6 L234.8 283.6 L234.8 532 L213.2 532ZM267.2 283.6 L288.8 283.6 L288.8 532 L267.2 532ZM429.2 283.6 L450.8 283.6 L450.8 532 L429.2 532ZM483.2 283.6 L504.8 283.6 L504.8 532 L483.2 532Z" fill-rule="evenodd"/>
+      <path d="M548 316 L688.4 262 L688.4 553.6 L548 499.6Z"/>
+      <path d="M359 532 V742.6" stroke="#F3EEE6" stroke-width="54" fill="none"/>
+      <path d="M197 742.6 H521" stroke="#F3EEE6" stroke-width="54" stroke-linecap="round" fill="none"/>
+    </g>
+  </g>
 </svg>
