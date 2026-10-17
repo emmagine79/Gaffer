@@ -42,6 +42,7 @@ _UNICAST = range(0x0001, 0x8000)
 _ELEMENTS_DEFAULT = 2  # what the library assumes when a node does not list its elements
 _HEX32 = re.compile(r"^[0-9a-fA-F]{32}$")
 _MAC = re.compile(r"^[0-9a-fA-F]{12}$")
+_COMPANY_ID = re.compile(rf"(0x)?{GODOX_COMPANY_ID}", re.IGNORECASE)
 
 
 class ImportProblem(ValueError):
@@ -72,18 +73,12 @@ def _key(value: Any) -> str | None:
 
 
 def _is_godox(cid: Any) -> bool:
-    """Whether a node's company id is Godox's, written as ``"0211"``, ``"0x0211"`` or the number 529."""
+    """Whether a node's company id is Godox's: the text ``0211`` or ``0x0211`` (any case), or the number 529."""
     if isinstance(cid, bool):
         return False
     if isinstance(cid, int):
         return cid == int(GODOX_COMPANY_ID, 16)
-    if not isinstance(cid, str):
-        return False
-    text = cid.strip().lower().removeprefix("0x")
-    try:
-        return int(text, 16) == int(GODOX_COMPANY_ID, 16)
-    except ValueError:
-        return False
+    return isinstance(cid, str) and _COMPANY_ID.fullmatch(cid.strip()) is not None
 
 
 def parse_mesh_export(text: str) -> MeshImport:
@@ -145,8 +140,13 @@ def mesh_json_from_db(data: bytes) -> str:
     foreign = ImportProblem("That file is not the Godox app's GodoxLight.db.")
     try:
         with contextlib.closing(sqlite3.connect(":memory:")) as db:  # ``with db`` would not close it
+            db.execute("PRAGMA trusted_schema = OFF")  # a file's own views and triggers may not run functions
             db.deserialize(data)
             db.execute("PRAGMA query_only = ON")
+            # Only a plain table is read. A view named Project could run a query that never ends.
+            plain = db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'Project'").fetchone()
+            if plain is None:
+                raise foreign
             rows = db.execute("SELECT meshJson FROM Project ORDER BY rowid").fetchall()
     except sqlite3.Error as err:
         raise foreign from err

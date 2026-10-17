@@ -48,6 +48,7 @@ export function GodoxImport({ onDone, onBack }: { onDone: () => void; onBack: ()
   const send = async (fields: Record<string, unknown>) => {
     if (!fitsSocket(fields)) {
       toast(TOO_LARGE, 'error')
+      if (fileRef.current) fileRef.current.value = ''  // or choosing the same file again fires no change event
       return
     }
     setBusy(true)

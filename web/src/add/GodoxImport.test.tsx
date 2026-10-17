@@ -33,6 +33,20 @@ it('a file too large for the socket gets a plain message and is never sent', asy
   expect(toast).toHaveBeenCalledWith(expect.stringMatching(/too large/i), 'error')
 })
 
+it('choosing the same oversize file again runs the check again', async () => {
+  const toast = vi.fn()
+  useStudio.setState({ request: vi.fn(), toast })
+  const host = await show()
+  const input = host.querySelector('input[type=file]') as HTMLInputElement
+  // Within the file-size limit, but too big once base64 and the message around it are added.
+  Object.defineProperty(input, 'files', { value: [new File([new Uint8Array(MAX_FILE_BYTES)], 'GodoxLight.db')] })
+  let chosen = 'C:\\fakepath\\GodoxLight.db'
+  Object.defineProperty(input, 'value', { get: () => chosen, set: (v: string) => { chosen = v } })
+  await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+  expect(toast).toHaveBeenCalledTimes(1)
+  expect(chosen).toBe('') // a browser fires no change event for the same file unless the input is empty
+})
+
 it('the window has a way back to the list of lights', async () => {
   const onBack = vi.fn()
   const host = await show(onBack)

@@ -109,10 +109,30 @@ def test_a_database_from_another_app_is_refused(client, tmp_path):
     assert reply["type"] == "error" and "GodoxLight.db" in reply["text"] and "/" not in reply["text"].replace("GodoxLight.db", "")
 
 
-@pytest.mark.parametrize("cid", [529, "0x0211", "0211", " 0x0211 "])
+def _with_cid(cid):
+    return json.dumps({**MESH, "nodes": [{**n, "cid": cid} if n.get("cid") == "0211" else n for n in MESH["nodes"]]})
+
+
+@pytest.mark.parametrize("cid", [529, "0x0211", "0211", " 0x0211 ", "0X0211"])
 def test_the_godox_company_id_may_be_written_as_a_number_or_with_0x(client, cid):
-    nodes = [{**node, "cid": cid} if node.get("cid") == "0211" else node for node in MESH["nodes"]]
-    _check_imported(client, _import(client, meshJson=json.dumps({**MESH, "nodes": nodes})))
+    _check_imported(client, _import(client, meshJson=_with_cid(cid)))
+
+
+@pytest.mark.parametrize("cid", ["211", "+0211", "2_11", "529", 211, 5.29, True, None])
+def test_a_company_id_that_only_looks_like_godoxs_is_another_vendors_node(client, cid):
+    reply = _import(client, meshJson=_with_cid(cid))
+    assert reply["type"] == "error" and "No Godox lights found" in reply["text"]
+
+
+def test_a_database_whose_project_is_a_view_is_refused_plainly(client, tmp_path):
+    path = tmp_path / "view.db"
+    with sqlite3.connect(path) as db:
+        db.execute("CREATE TABLE Other (meshJson TEXT)")
+        db.execute("INSERT INTO Other VALUES (?)", (json.dumps(MESH),))
+        db.execute("CREATE VIEW Project AS SELECT rowid AS rowid, meshJson FROM Other")
+    reply = _import(client, db=base64.b64encode(path.read_bytes()).decode())
+    assert reply["type"] == "error" and "not the Godox app's GodoxLight.db" in reply["text"]
+    assert "Test key" not in _saved(client)
 
 
 def test_the_database_copy_is_closed_after_reading(monkeypatch, tmp_path):
