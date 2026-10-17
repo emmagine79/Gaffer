@@ -232,10 +232,8 @@ export interface Schedule extends StoredItem {
   enabled: boolean
   at: string            // "HH:MM"
   days: number[]        // 0 = Monday
-  action: 'scene' | 'effect' | 'sunrise' | 'off' | 'on'
-  target?: string       // scene id or effect id
-  minutes?: number
-  lights?: string[]     // which lights; every light when empty
+  action: 'look' | 'off'
+  target?: string       // the look's id (look action only)
 }
 export interface Swatch extends StoredItem { hex: string }
 

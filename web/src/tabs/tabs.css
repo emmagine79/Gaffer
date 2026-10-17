@@ -312,20 +312,6 @@
 .scene-tools .danger { margin-left: auto; }
 .scene-tools .danger:hover { color: #ff8a80; }
 
-/* ================= schedule ================= */
-.schedule { display: grid; gap: 18px; }
-.sched-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px 20px; align-items: end; }
-.day-pills { display: flex; gap: 4px; flex-wrap: wrap; }
-.day-pills button { border: 1px solid var(--hairline); background: transparent; color: var(--graphite); padding: 6px 9px; border-radius: 8px; font-size: var(--fs-xs); font-weight: 600; }
-.day-pills button.is-on { background: var(--chalk); color: #16171a; border-color: var(--chalk); }
-.sched-list { display: grid; gap: 12px; }
-.sched.is-off { opacity: 0.55; }
-.sched-row { display: flex; align-items: center; gap: 22px; }
-.sched-time { font-size: 2.8rem; }
-.sched-info { flex: 1; display: grid; gap: 3px; min-width: 0; }
-.sched-info h3 { font-size: var(--fs-lg); }
-.sched-next { font-size: var(--fs-sm); color: var(--ok); font-weight: 560; }
-
 /* ================= device ================= */
 .device { display: grid; gap: 20px; }
 .device-hero { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
@@ -384,7 +370,6 @@
 @media (max-width: 640px) {
   .sync-grid { grid-template-columns: minmax(0, 1fr); }
   .frame-builder { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .sched-row { flex-wrap: wrap; gap: 12px; }
   .faders { height: 220px; }
   .colour-wheel-wrap .wheel { width: 260px !important; }
 }
