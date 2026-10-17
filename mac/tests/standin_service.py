@@ -12,7 +12,7 @@ Python standard library only, because the app runs it with the test's own Python
 Test-only routes (same cookie rule), used by mac/tests/test_shell.py:
   GET  /test/state      what happened: calls, lights, current look, page reports
   POST /test/report     the demo page tells what it saw (surface, look name, colour scheme,
-                        what is in its text box)
+                        what is in its text box, whether that box has the keyboard)
   POST /test/drop-ws    close every WebSocket from the service side
 """
 
@@ -50,9 +50,12 @@ const scheme = () => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark'
 let name = null;
 const note = document.getElementById('note');
 const report = () => fetch('/test/report', {method: 'POST', body: JSON.stringify({
-  surface, name, scheme: scheme(), note: note.value})});
+  surface, name, scheme: scheme(), note: note.value,
+  focused: document.hasFocus() && document.activeElement === note})});
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', report);
 note.addEventListener('input', report);
+window.addEventListener('focus', report);
+note.addEventListener('focus', report);
 const ws = new WebSocket('ws://' + location.host + '/ws');
 ws.onmessage = (e) => {
   const m = JSON.parse(e.data);

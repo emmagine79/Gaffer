@@ -294,10 +294,18 @@ def test_cut_copy_paste_and_select_all_work_in_the_web_view(shell):
     subprocess.run(["pbcopy"], input="sentinel", text=True, check=True)
     try:
         bring_to_front(shell)
+        def window_has_the_keyboard():
+            tell_gaffer(shell, 'perform action "AXRaise" of window "Gaffer"')  # make it the key window
+            return shell.state()["reports"]["window"].get("focused")
+        wait_for(window_has_the_keyboard, "the page's text box to have the keyboard")
         tell_gaffer(shell, 'keystroke "abc"')  # the page focuses its text box when it loads
         wait_for(lambda: shell.state()["reports"]["window"]["note"] == "abc", "the text box to take the typing")
-        tell_gaffer(shell, 'keystroke "a" using command down\nkeystroke "c" using command down\nkey code 124')
-        tell_gaffer(shell, 'keystroke "v" using command down')  # paste what Cmd-C copied
+        # One key at a time: the web view handles Select All in its own process, and a Cmd-C
+        # sent at once would copy before the selection exists.
+        for keys in ('keystroke "a" using command down', 'keystroke "c" using command down',
+                     "key code 124", 'keystroke "v" using command down'):  # select all, copy, end, paste
+            tell_gaffer(shell, keys)
+            time.sleep(0.3)
         wait_for(lambda: shell.state()["reports"]["window"]["note"] == "abcabc", "Cmd-C then Cmd-V to repeat the text")
     finally:
         subprocess.run(["pbcopy"], input=saved, text=True)
