@@ -108,3 +108,6 @@ button.ad-pick:disabled { opacity: 0.5; cursor: not-allowed; }
 .godox-import { display: grid; gap: 12px; padding: 4px 0; min-width: 0; overflow-y: auto; overflow-x: hidden; }
 .godox-steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; overflow-wrap: anywhere; font-size: 13px; }
 .godox-import textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; }
+
+/* The reset view (AddLight.tsx): the steps for one model, then Pair, then Import keys. */
+.ad-reset-steps { margin: 0; padding-left: 22px; display: grid; gap: 8px; width: 100%; text-align: left; font-size: 13.5px; overflow-wrap: anywhere; }

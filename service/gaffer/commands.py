@@ -448,6 +448,15 @@ async def _demo_held(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     hub.demo_hold(str(m.get("light") or ""), bool(m.get("held")))
 
 
+@command("demo.reset")
+async def _demo_reset(hub: Hub, client: Client, m: dict[str, Any]) -> None:
+    """Demo only: pretend the person reset the light at ``address``, so the next scan finds it ready to pair."""
+    reset = getattr(hub.scanner, "reset", None)
+    if not hub.demo or not isinstance(reset, set):
+        raise HubError("only the demo can pretend a light was reset")
+    (reset.add if m.get("reset", True) else reset.discard)(str(m.get("address") or "").upper())
+
+
 @command("lights.rename")
 async def _rename(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     hub.rename(str(m.get("light") or ""), str(m.get("name") or ""))

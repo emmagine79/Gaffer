@@ -130,6 +130,96 @@ for (const width of [375, 1280]) {
   })
 }
 
+// Friction items 2 to 4: a light paired with something else leads with Reset and pair (the model's steps,
+// then Pair), and Import keys comes second. The demo scan has an LA150Bi (steps known) and an ML100Bi (none).
+for (const width of [390, 1280]) {
+  test(`a light paired with something else leads with Reset and pair at ${width}px`, async ({ page }) => {
+    await open(page, width)
+    const sheet = await openSheet(page)
+    await expect(sheet.getByRole('button', { name: 'Import keys' })).toHaveCount(0) // not offered on the list any more
+    await sheet.getByRole('button', { name: /LA150Bi/ }).getByText('Reset and pair').click()
+    await expect(sheet.getByRole('heading', { name: 'Reset and pair the LA150Bi' })).toBeVisible()
+    await expect(sheet.getByRole('list', { name: 'Reset steps' }).getByRole('listitem')).toHaveText([
+      'Switch the light on.',
+      'Press and hold the Bluetooth button for about 2 seconds.',
+      'Let go when the Bluetooth icon on the screen starts to flash. It then stays lit: the light is reset.',
+    ])
+    const names = await sheet.getByRole('button').evaluateAll((els) => els.map((el) => el.textContent?.trim()))
+    expect(names.indexOf('Pair')).toBeGreaterThan(-1)
+    expect(names.indexOf('Import keys')).toBeGreaterThan(names.indexOf('Pair'))
+    await fitsTheScreen(page)
+
+    await sheet.getByRole('button', { name: 'Back to the list' }).click()
+    await sheet.getByRole('button', { name: /ML100Bi/ }).getByText('Reset and pair').click()
+    await expect(sheet.getByRole('list', { name: 'Reset steps' }).getByRole('listitem'))
+      .toHaveText(["Reset the light's Bluetooth as its manual describes, then press Pair."])
+    await fitsTheScreen(page)
+  })
+}
+
+// After the reset, Pair listens again and pairs the refreshed light. The demo has no button to press, so the
+// test says "the person reset it" with demo.reset (like demo.held). A light that still says elsewhere is not paired.
+test('Pair in the Reset view adds a light that was reset, and says so when the reset did not take', async ({ page }) => {
+  test.setTimeout(60_000) // two scans of about 5 s, and a running one to wait for
+  await open(page, 390)
+  const address = 'DE:MO:00:00:00:12' // the demo LA150Bi
+  const sheet = await openSheet(page)
+  try {
+    await sheet.getByRole('button', { name: /ML100Bi/ }).getByText('Reset and pair').click()
+    await sheet.getByRole('button', { name: 'Pair' }).click() // never reset: the scan still finds it elsewhere
+    await expect(sheet.getByRole('status')).toContainText('the reset did not take', { timeout: 20000 })
+    await expect(sheet.getByRole('button', { name: 'Try again' })).toBeEnabled()
+    await fitsTheScreen(page)
+    await sheet.getByRole('button', { name: 'Back to the list' }).click()
+
+    // Leaving while the check is still listening cancels it: its late answer must not pull the person back.
+    await sheet.getByRole('button', { name: /ML100Bi/ }).getByText('Reset and pair').click()
+    await sheet.getByRole('button', { name: 'Pair' }).click()
+    await sheet.getByRole('button', { name: 'Back to the list' }).click()
+    await expect(sheet.getByRole('status').first()).toContainText('found nearby', { timeout: 20000 }) // the scan ended
+    await expect(sheet.getByRole('heading', { name: 'Add a light' })).toBeVisible()
+    await expect(sheet.getByRole('heading', { name: /Reset and pair the/ })).toHaveCount(0)
+
+    await sheet.getByRole('button', { name: /LA150Bi/ }).getByText('Reset and pair').click()
+    await command(page, { type: 'demo.reset', address })
+    await sheet.getByRole('button', { name: 'Pair' }).click()
+    await expect(sheet.getByRole('heading', { name: 'LA150Bi added' })).toBeVisible({ timeout: 30000 })
+    expect((await lights(page)).some((l) => l.model === 'LA150Bi')).toBe(true)
+    await fitsTheScreen(page)
+  } finally {
+    await command(page, { type: 'demo.reset', address: 'DE:MO:00:00:00:12', reset: false })
+    await forget(page, 'LA150Bi')
+  }
+})
+
+// Pair pressed while a scan is still running (the one the sheet starts on opening) must wait for it, then listen
+// again: that scan began before the reset, so it would wrongly say "the reset did not take".
+test('Pair during a running scan waits for a fresh scan before judging the reset', async ({ page }) => {
+  test.setTimeout(60_000) // two scans of about 5 s, and a running one to wait for
+  await open(page, 390)
+  const address = 'DE:MO:00:00:00:12' // the demo LA150Bi
+  const sheet = await openSheet(page)
+  try {
+    // A long scan, held open on its own socket: the LA150Bi is heard about 4 s in, the scan ends 4 s later.
+    await page.evaluate(() => {
+      const ws = new WebSocket(`ws://${location.host}/ws`)
+      ;(window as unknown as { scanSocket: WebSocket }).scanSocket = ws
+      ws.onmessage = (event) => {
+        if (JSON.parse(event.data as string).type === 'hello') ws.send(JSON.stringify({ type: 'lights.scan', seconds: 20, rid: 1 }))
+      }
+    })
+    await expect(sheet.getByRole('status').first()).toContainText('Listening')
+    await sheet.getByRole('button', { name: /LA150Bi/ }).getByText('Reset and pair').click({ timeout: 15000 })
+    await command(page, { type: 'demo.reset', address }) // the person resets the light; the scan running now has not heard it
+    await sheet.getByRole('button', { name: 'Pair' }).click()
+    await expect(sheet.getByRole('heading', { name: 'LA150Bi added' })).toBeVisible({ timeout: 40000 })
+  } finally {
+    await page.evaluate(() => (window as unknown as { scanSocket?: WebSocket }).scanSocket?.close())
+    await command(page, { type: 'demo.reset', address, reset: false })
+    await forget(page, 'LA150Bi')
+  }
+})
+
 // AC2: a demo Yongnuo light cannot be saved without a channel.
 test('AC2: a Yongnuo light needs a channel before it is added', async ({ page }) => {
   await open(page, 375)

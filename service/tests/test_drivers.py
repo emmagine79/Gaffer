@@ -153,6 +153,50 @@ def test_a_bad_model_file_is_skipped_with_a_reason_and_changes_nothing(tmp_path,
     assert not any(bad in text for bad in ("/Users/", "/private/", "/var/", str(tmp_path)))
 
 
+def test_reset_steps_reach_the_page_and_a_bad_value_is_refused(tmp_path, monkeypatch):
+    """Friction items 2 to 4: the page reads each model's reset steps from the hello `models` list and GET
+    /api/models. A Godox table row gets its sourced steps, a model file's own steps win, a model with no source
+    has none, and a model file whose steps are not a list of words is skipped with a plain reason."""
+    monkeypatch.setattr(demo, "PACE", 0.05)
+    _write(tmp_path, "zhiyun", "OWNSTEPS.json", _model("OWNSTEPS", reset_steps=["Hold the button.", "Let go."], reset_source="its manual"))
+    _write(tmp_path, "zhiyun", "BADSTEPS.json", _model("BADSTEPS", reset_steps="hold the button"))
+    _write(tmp_path, "zhiyun", "EMPTYSTEP.json", _model("EMPTYSTEP", reset_steps=["Hold it.", " "]))
+    with TestClient(create_app(demo=True, data_dir=tmp_path)) as c:
+        listing = c.get("/api/models").json()
+        with c.websocket_connect("/ws") as ws:
+            hello = ws.receive_json()
+            while hello["type"] != "hello":
+                hello = ws.receive_json()
+            ws.send_json({"type": "lights.model", "light": hello["lights"][0]["id"], "radio_id": "0022"})
+            lights = ws.receive_json()
+            while lights["type"] != "lights":
+                lights = ws.receive_json()
+            caps = next(light["caps"] for light in lights["lights"] if light["id"] == hello["lights"][0]["id"])
+    for rows in (listing["models"], hello["models"]):
+        by_id = {m.get("id") or m["radio_id"]: m for m in rows}
+        assert by_id["OWNSTEPS"]["reset_steps"] == ["Hold the button.", "Let go."]
+        assert "Press and hold the Bluetooth button for about 2 seconds." in by_id["0022"]["reset_steps"]  # LA150Bi
+        assert by_id["0066"]["reset_steps"] == []  # ML100Bi: no source, so the page shows its generic line
+        assert not {"BADSTEPS", "EMPTYSTEP"} & set(by_id)
+        assert all("reset_source" not in m for m in rows)  # provenance stays out of the page
+    assert "Press and hold the Bluetooth button for about 2 seconds." in caps["reset_steps"] and "reset_source" not in caps
+    skipped = {s["file"]: s["reason"] for s in listing["skipped"]}
+    assert skipped == {
+        "zhiyun/BADSTEPS.json": "reset_steps must be a list of steps, each in words",
+        "zhiyun/EMPTYSTEP.json": "reset_steps must be a list of steps, each in words",
+    }
+
+
+def test_every_reset_steps_key_is_a_known_model():
+    """A mistyped radio id in data/reset-steps.json would silently give some model nothing."""
+    from gaffer.catalog import _CAPS_PATH, _RESET_PATH
+
+    table = {k.upper() for k in json.loads(_CAPS_PATH.read_text(encoding="utf-8")) if not k.startswith("_")}
+    keys = {k.upper() for k in json.loads(_RESET_PATH.read_text(encoding="utf-8"))["models"]}
+    assert keys and keys <= table, sorted(keys - table)
+    assert "0024" not in keys  # LA200Bi: no source of its own, so it shows the generic line
+
+
 # -- AC 3: the hub commands lights through their driver ------------------------------------------
 
 

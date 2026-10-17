@@ -54,7 +54,8 @@ DEMO_NEARBY: tuple[Nearby, ...] = (
     Nearby("DE:MO:00:00:00:10", "GD_LED", -58, "unpaired", "0001"),   # TL60
     Nearby("DE:MO:00:00:00:30", "PL109_DEMO", -63, "new", "ZY-DEMO"),
     Nearby("DE:MO:00:00:00:31", "YN150_DEMO", -70, "new", "YN-DEMO"),
-    Nearby("DE:MO:00:00:00:11", "GD_LED", -81, "mesh", "0066", "0000000000000000"),  # ML100Bi, elsewhere
+    Nearby("DE:MO:00:00:00:11", "GD_LED", -81, "mesh", "0066", "0000000000000000"),  # ML100Bi, elsewhere: no reset steps known
+    Nearby("DE:MO:00:00:00:12", "GD_LED", -74, "mesh", "0022", "0000000000000000"),  # LA150Bi, elsewhere: has reset steps
 )
 
 
@@ -92,6 +93,8 @@ class DemoScanner:
     def __init__(self) -> None:
         self.devices: dict[str, Any] = {}
         self.busy = False
+        #: Addresses of lights the demo user has "reset" (``demo.reset``): they advertise as ready to pair.
+        self.reset: set[str] = set()
 
     async def scan(self, seconds: float, on_found: Callable[[Nearby], None] | None = None,
                    on_other: Callable[[Any, Any], None] | None = None) -> list[Nearby]:
@@ -100,7 +103,8 @@ class DemoScanner:
             found = []
             for nearby in DEMO_NEARBY:
                 await asyncio.sleep(min(0.8, seconds / 4) * PACE)
-                seen = Nearby(nearby.address, nearby.name, nearby.rssi, nearby.state, nearby.radio_id,
+                state = "unpaired" if nearby.address in self.reset else nearby.state
+                seen = Nearby(nearby.address, nearby.name, nearby.rssi, state, nearby.radio_id,
                               nearby.network_id, time.time())
                 found.append(seen)
                 if on_found is not None:
