@@ -113,6 +113,10 @@ class Driver(ABC):
         """Max Mode as the driver last set it, or None for a driver that has no such switch."""
         return None
 
+    async def read_max_mode(self, light: SavedLight) -> bool | None:
+        """Ask the light whether Max Mode is on; None when it cannot say. Default: never asked."""
+        return None
+
     def needs_channel(self, caps: Any) -> bool:
         """True when a light of this model must be told a radio channel when it is added (Yongnuo).
 

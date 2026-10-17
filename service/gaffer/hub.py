@@ -420,7 +420,7 @@ class Hub:
             except Exception:  # one brand failing to start never stops the others
                 logger.exception("driver %s failed to start", driver.id)
                 self._log("error", f"the {driver.id} driver did not start")
-        for coro in (self._broadcast_loop(), self._sync_loop(), self._battery_loop(), scheduler):
+        for coro in (self._broadcast_loop(), self._sync_loop(), self._max_mode_loop(), self._battery_loop(), scheduler):
             self._tasks.append(asyncio.create_task(coro))
         self._link_task = asyncio.create_task(self.link.run())
         for fixture in self.fixtures.values():
@@ -617,6 +617,38 @@ class Hub:
                     continue
                 hsi = fixture.caps.has_colour and fixture.state.mode == "hsi" and not flip
                 await self._request(fixture, RECORD_HSI if hsi else RECORD_CCT)
+
+    async def _max_mode_loop(self) -> None:
+        """Ask each Max Mode light whether Max Mode is on, as often as the Godox lights are read.
+
+        The MOLUS G200 never reports a press of its own buttons. Max Mode coming on at the light takes
+        it to 100%, so Gaffer shows that (Captain's live check, 18 Oct 2026).
+        """
+        while True:
+            interval = float(self.store.settings.get("sync_interval") or 0)
+            await asyncio.sleep(interval if interval > 0 else 2.0)
+            if interval <= 0:
+                continue
+            for fixture in list(self.fixtures.values()):
+                if not fixture.caps.max_mode or not fixture.state.power or fixture.engine.kind is not None:
+                    continue
+                if time.monotonic() - fixture.last_control_at < SETTLE_SECONDS:
+                    continue
+                before, asked = fixture.max_mode, fixture.state
+                try:
+                    after = await fixture.driver.read_max_mode(fixture.light)
+                except Exception as err:  # noqa: BLE001 - one light not answering never stops the loop
+                    logger.debug("Max Mode read failed for %s: %s", fixture.light.name, err)
+                    continue
+                if after is None or after == before:
+                    continue
+                if after and fixture.state is asked and fixture.state.brightness != 100:  # never over a newer setting
+                    # Sent, so the driver wants 100 too and a reconnect does not dim the light back; the driver
+                    # already counts 100 as sent, so no frame goes out.
+                    self.set_state(fixture, fixture.state.model_copy(update={"brightness": 100.0}), "light")
+                self._log("sync", f"{fixture.light.name} changed on the light: Max Mode {'on' if after else 'off'}")
+                self._toast("sync", f"Picked up a change made on {fixture.light.name}")
+                self._broadcast_lights()
 
     async def _battery_loop(self) -> None:
         while True:

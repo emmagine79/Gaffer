@@ -192,5 +192,13 @@ def decode_color_temp_response(payload: bytes) -> int | None:
     return int.from_bytes(payload[3:5], "little") if len(payload) >= 5 else None
 
 
+def decode_max_mode_response(payload: bytes) -> bool | None:
+    """The answer to a Max Mode read or write: object (2 bytes), op, then 1 on or 0 off.
+
+    Captured from a MOLUS G200, 18 Oct 2026: off ``03 80 00 00``, on ``03 80 00 01``.
+    """
+    return payload[3] == 0x01 if len(payload) >= 4 else None
+
+
 def decode_power_response(payload: bytes) -> bool | None:
     return payload[2] == 0x01 if len(payload) >= 3 else None
