@@ -62,6 +62,9 @@ class SavedLight:
     #: Where the light stands on the mesh screen's floor plan, 0-1 each way.
     x: float | None = None
     y: float | None = None
+    #: The radio channel a light is set to, for brands that need one told to them (Yongnuo).
+    #: ``None`` for lights that have no such setting. Set when the light is added.
+    channel: int | None = None
 
     def public(self) -> dict[str, Any]:
         """Everything the browser may see: no keys."""
@@ -70,7 +73,7 @@ class SavedLight:
             "id": self.id, "name": self.name, "address": self.address, "radio_id": self.radio_id,
             "model": caps.name, "kind": caps.kind, "known_model": caps.known,
             "model_source": self.model_source, "node_address": self.node_address, "added": self.added,
-            "network": self.network, "x": self.x, "y": self.y,
+            "network": self.network, "x": self.x, "y": self.y, "channel": self.channel,
         }
 
 
@@ -277,6 +280,7 @@ class LightLibrary:
             added=existing.added if existing else time.time(),
             x=existing.x if existing else None,
             y=existing.y if existing else None,
+            channel=existing.channel if existing else None,
         )
         self.save_light(light)
         self.set_active(light.id)
@@ -295,6 +299,7 @@ class LightLibrary:
             node_address=node_address, num_elements=num_elements, device_key=device_key,
             model_source="advert" if radio_id else "unknown", added=time.time(),
             x=existing.x if existing else None, y=existing.y if existing else None,
+            channel=existing.channel if existing else None,
         )
         self.save_light(light)
         self.set_active(light.id)

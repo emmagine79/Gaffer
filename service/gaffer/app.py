@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .commands import CommandError, dispatch
 from .guard import LOCAL_HOSTS, LOOPBACK, host_allowed, origin_allowed
+from .catalog import configure_models, models_catalog, skipped_model_files
 from .hub import Client, Hub
 from .lights import LightLibrary
 from .scan import DEFAULT_SCAN_SECONDS, MAX_SCAN_SECONDS, MIN_SCAN_SECONDS, DemoScanner as DemoAdvertScanner, Scanner as AdvertScanner
@@ -81,6 +82,10 @@ def create_app(
     """
     allowed = LOCAL_HOSTS | frozenset(h.lower() for h in hosts)
     store = Store(data_dir)
+    # Model files in <data>/models/<driver>/ join the shipped ones; demo mode adds its stand-ins.
+    from .demo import DEMO_MODELS
+
+    configure_models([Path(data_dir) / "models"], DEMO_MODELS if demo else None)
     library = LightLibrary(data_dir)
     if demo:
         from .demo import DemoScanner, seed
@@ -120,6 +125,13 @@ def create_app(
             return JSONResponse({"error": "token required"}, status_code=401)
         return {"ok": True, "demo": demo, "link": hub.link.snapshot(), "lights": len(hub.fixtures),
                 "pid": os.getpid(), "app": "gaffer", "service": "gaffer", "data": str(Path(data_dir).resolve())}
+
+    @app.get("/api/models")
+    async def models() -> dict[str, Any]:
+        """Every model Gaffer knows, whatever the brand, with the ``features`` the UI lays out controls from."""
+        return {"models": models_catalog(), "skipped": skipped_model_files(),
+                "drivers": [{"id": d.id} for d in hub.registry.drivers.values()],
+                "drivers_skipped": hub.registry.skipped}
 
     @app.get("/api/bluetooth")
     async def bluetooth() -> dict[str, Any]:
