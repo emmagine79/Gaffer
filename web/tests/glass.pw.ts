@@ -215,3 +215,21 @@ test('checklist 14, 16: a 245-character name with markup stays text and never wi
     await expect(page.locator('img')).toHaveCount(0)
   }
 })
+
+test('a saved light can be renamed from its name in Glass', async ({ page }) => {
+  // Captain, 18 Oct 2026: after adding a light there was no way to rename it.
+  await open(page, 'window', 1280)
+  await page.getByRole('navigation', { name: 'Lights' }).getByRole('button', { name: 'Fill' }).click()
+  await page.getByRole('button', { name: 'Rename Fill' }).click()
+  await page.getByRole('textbox', { name: 'Light name' }).fill('Side fill')
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Side fill')
+  await expect.poll(async () => (await lights(page)).map((l) => l.name)).toContain('Side fill')
+  await page.reload()
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Side fill')  // saved, not just shown
+
+  await page.getByRole('button', { name: 'Rename Side fill' }).click()
+  await page.getByRole('textbox', { name: 'Light name' }).fill('Fill')  // the other tests know it as Fill
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => (await lights(page)).map((l) => l.name)).toContain('Fill')
+})

@@ -47,7 +47,7 @@ class FakeTransport:
 @pytest.fixture
 def driver():
     FakeTransport.sent = []
-    return YongnuoDriver(transport_factory=FakeTransport)
+    return YongnuoDriver(transport_factory=FakeTransport, resends=0)  # one copy of each frame; resends have their own test
 
 
 def light(model: str, channel: int) -> SimpleNamespace:
@@ -225,7 +225,7 @@ async def rig():
     script, sleep, made = Scripted(), RecordedSleep(), []
 
     def build(**kwargs) -> YongnuoDriver:
-        built = YongnuoDriver(transport_factory=script, sleep=sleep, **kwargs)
+        built = YongnuoDriver(transport_factory=script, sleep=sleep, **{"resends": 0, **kwargs})
         made.append(built)
         return built
 
@@ -311,8 +311,9 @@ async def test_status_says_unreachable_when_a_write_failed_even_if_the_link_stil
     script.stuck_connected = True
     script.write_failures = 1
     sleep.gate.clear()
+    waited = len(sleep.delays)  # the gap between the first state's two frames is a sleep too
     driver.apply(yn, lit(80))
-    await until(lambda: sleep.delays)
+    await until(lambda: len(sleep.delays) > waited)
     assert driver.status(yn)["reachable"] is False
     sleep.gate.set()  # the retry must build a fresh link, not reuse the broken one
     await until(lambda: len(script.bytes_for(yn.address)) == 3)
@@ -570,3 +571,48 @@ async def test_forgetting_a_light_closes_its_link_and_it_is_sent_nothing_more(ri
     assert not script.made[0].connected  # and its link is closed
     assert driver.status(yn)["reachable"] is None
     assert script.made[1].connected  # another light is untouched
+
+
+class LossyYN150:
+    """A YN150 that misses the first frame it is sent, as the real light misses some writes.
+
+    It acts on what arrives: the power frames switch it, and a level frame does nothing while it is off.
+    """
+
+    def __init__(self, address: str) -> None:
+        self.on = False
+        self.misses = 1
+        self._up = False
+        LossyYN150.made = self
+
+    async def connect(self) -> None:
+        self._up = True
+
+    async def write(self, data: bytes) -> None:
+        if self.misses:
+            self.misses -= 1
+            return
+        if data[:3] == bytes([0xAE, 0x01, 0x06]):
+            self.on = data[4] == 0x01
+
+    async def disconnect(self) -> None:
+        self._up = False
+
+    @property
+    def connected(self) -> bool:
+        return self._up
+
+
+async def test_a_yn150_that_misses_the_power_on_frame_still_comes_on():
+    # Captain, 18 Oct 2026: switching the YN150 back on from Gaffer often took many tries.
+    async def nosleep(_seconds):
+        return None
+
+    driver = YongnuoDriver(transport_factory=LossyYN150, sleep=nosleep)
+    yn = light("YN150", 4)
+    driver.apply(yn, LightState(power=False, brightness=60, cct=Cct(kelvin=5600)))
+    await driver.flush()
+    LossyYN150.made.misses = 1  # the power-on frame is the one it misses
+    driver.apply(yn, LightState(power=True, brightness=60, cct=Cct(kelvin=5600)))
+    await driver.flush()
+    assert LossyYN150.made.on is True

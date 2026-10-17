@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { Pencil } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
 import { Slider } from '../components/Slider'
 import { clamp, hueName } from '../lib/color'
 import { hueTrack, kelvinTrack, satTrack } from '../lib/tracks'
@@ -51,6 +52,41 @@ function LightTabs() {
   )
 }
 
+/** The light's name; click it to rename the light (Captain's live check, 18 Oct 2026: no way to rename after adding). */
+function LightName({ light, send }: { light: LightView; send: (message: Record<string, unknown>) => void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  if (draft === null) {
+    return (
+      <h1 className="g-name">
+        <button type="button" className="g-rename" aria-label={`Rename ${light.name}`} onClick={() => setDraft(light.name)}>
+          {light.name}<Pencil aria-hidden="true" />
+        </button>
+      </h1>
+    )
+  }
+  const save = () => {
+    const name = draft.trim()
+    if (name && name !== light.name) send({ type: 'lights.rename', light: light.id, name })
+    setDraft(null)
+  }
+  return (
+    <h1 className="g-name">
+      <form onSubmit={(e) => { e.preventDefault(); save() }}>
+        <input
+          className="input g-rename-input"
+          value={draft}
+          aria-label="Light name"
+          maxLength={60}
+          autoFocus
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => { if (e.key === 'Escape') setDraft(null) }}
+        />
+      </form>
+    </h1>
+  )
+}
+
 function LightPanel({ light }: { light: LightView }) {
   const state = useStudio((s) => s.state) ?? light.state
   const apply = useStudio((s) => s.apply)
@@ -68,7 +104,7 @@ function LightPanel({ light }: { light: LightView }) {
     <div className="g-light" data-light={light.id}>
       <div className="g-row">
         <div className="g-who">
-          <h1 className="g-name">{light.name}</h1>
+          <LightName light={light} send={send} />
           <p className="g-model">{modelLine(light)}</p>
         </div>
         <button

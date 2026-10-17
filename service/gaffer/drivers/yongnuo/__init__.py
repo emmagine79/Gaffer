@@ -45,6 +45,14 @@ CONNECT_TIMEOUT_S = 20.0
 DISCONNECT_TIMEOUT_S = 5.0
 
 
+#: Seconds between two writes, and how many times a state's frames are sent again after the first time.
+#: Writes go without a response, and the light misses some. Source: asidjwiaijd/yongnuo-light-control
+#: (MIT), yn_light_control/lib/light_controller.dart at commit 970a2f0: a 150 ms pump that sends the
+#: last command twice more "so the light doesn't miss the final command".
+FRAME_GAP_S = 0.15
+RESENDS = 2
+
+
 class Transport(Protocol):
     async def connect(self) -> None: ...
     async def write(self, data: bytes) -> None: ...
@@ -99,8 +107,10 @@ class YongnuoDriver(Driver):
         models: dict[str, dict[str, Any]] | None = None,
         sleep: Callable[[float], Any] = asyncio.sleep,
         connect_timeout: float = CONNECT_TIMEOUT_S,
+        resends: int = RESENDS,
     ) -> None:
         super().__init__(context)
+        self._resends = resends
         self._factory = transport_factory
         self.models = models if models is not None else load_models()
         self._sleep = sleep
@@ -360,7 +370,7 @@ class YongnuoDriver(Driver):
                         logger.warning("a Yongnuo light's state could not be encoded; dropped")  # retrying cannot help
                         continue
                     try:
-                        await self._transmit(light, frames)
+                        await self._transmit(light, frames, lambda: address in self._pending)
                     except Exception:  # noqa: BLE001 - _transmit recorded it; keep the state and try again later
                         failed = True
                         self._pending.setdefault(address, (light, state))  # a newer apply is already there and wins
@@ -422,15 +432,25 @@ class YongnuoDriver(Driver):
         self._tell(light)
         return transport
 
-    async def _transmit(self, light: Any, frames: list[bytes]) -> None:
-        """Open the link if needed and write ``frames``. The caller holds the light's lock."""
+    async def _transmit(self, light: Any, frames: list[bytes], superseded: Callable[[], bool] = lambda: False) -> None:
+        """Open the link if needed and write ``frames``, then send them ``resends`` more times, a gap apart.
+
+        A missed power-on frame left the light off (Captain's live check, 18 Oct 2026), so every frame
+        goes again. The resends stop early once ``superseded()`` says a newer state is waiting.
+        The caller holds the light's lock.
+        """
         address = light.address
         transport = await self._open(light)
         if transport is None:  # demo: nothing is written
             return
         try:
-            for frame in frames:
-                await transport.write(frame)
+            for attempt in range(1 + self._resends):
+                if attempt and superseded():
+                    break
+                for index, frame in enumerate(frames):
+                    if attempt or index:
+                        await self._sleep(FRAME_GAP_S)
+                    await transport.write(frame)
         except Exception:
             self._reachable[address] = False
             await self._drop(address)  # bleak may still say "connected"; the next send starts a fresh link
