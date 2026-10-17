@@ -996,29 +996,35 @@ class Hub:
             raise HubError(f"Could not change Max Mode on {fixture.light.name}. Check it is on and close by.") from None
         if on and not was_on:
             if fixture.state is asked:  # never over a level set while the write was on its way
-                self._max_mode_came_on(fixture, "app")
+                self._max_mode_came_on(fixture, "app", keep_kelvin=True)
             else:
-                fixture.before_max = (fixture.state.brightness, fixture.state.cct.kelvin)  # the newest level
+                kelvin = fixture.state.cct.kelvin
+                fixture.before_max = (fixture.state.brightness, kelvin, kelvin)  # the newest level
         elif not on and was_on and fixture.before_max is not None:
-            (brightness, kelvin), fixture.before_max = fixture.before_max, None
+            (brightness, kelvin, shown), fixture.before_max = fixture.before_max, None
             state = fixture.state
+            if state.cct.kelvin != shown:
+                kelvin = state.cct.kelvin  # a colour temperature set while Max Mode was on stays
             self.set_state(fixture, state.model_copy(
                 update={"brightness": brightness, "cct": state.cct.model_copy(update={"kelvin": kelvin})}), "app")
         self._broadcast_lights()
 
-    def _max_mode_came_on(self, fixture: Fixture, source: str) -> None:
+    def _max_mode_came_on(self, fixture: Fixture, source: str, *, keep_kelvin: bool = False) -> None:
         """Show what the light does by itself when Max Mode comes on, and remember what it had before.
 
         The G200 jumps to 100% and to the model's ``max_mode_kelvin`` (4300 K), and keeps both when Max Mode
         goes off (Captain's live checks, 18 Oct 2026); Max off in Gaffer puts the earlier values back. The
-        state is sent, so the driver wants it too and a reconnect does not undo it; the driver already
-        counts these values as sent, so no frame goes out.
+        state is sent, so the driver wants it too and a reconnect does not undo it. The driver counts 100%
+        and 4300 K as sent, so only what differs goes out: with ``keep_kelvin`` (Max switched on from Gaffer)
+        that is Gaffer's own colour temperature, sent straight back over the light's 4300 K (Captain, 18 Oct).
         """
         state = fixture.state
-        fixture.before_max = (state.brightness, state.cct.kelvin)
         update: dict[str, Any] = {"brightness": 100.0}
-        if fixture.caps.max_mode_kelvin is not None:
-            update["cct"] = state.cct.model_copy(update={"kelvin": fixture.caps.max_mode_kelvin})
+        shown = state.cct.kelvin
+        if fixture.caps.max_mode_kelvin is not None and not keep_kelvin:
+            shown = fixture.caps.max_mode_kelvin
+            update["cct"] = state.cct.model_copy(update={"kelvin": shown})
+        fixture.before_max = (state.brightness, state.cct.kelvin, shown)
         self.set_state(fixture, state.model_copy(update=update), source)
 
     def demo_hold(self, light_id: str, held: bool) -> None:

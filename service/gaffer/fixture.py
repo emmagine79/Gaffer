@@ -48,8 +48,9 @@ class Fixture:
         self.adopting = True  # first contact this run: read the light before writing it
         self.request_at: dict[int, float] = {}
         self.stream_source: str | None = None
-        #: Brightness and kelvin the light had before Gaffer saw Max Mode come on; Max off in Gaffer goes back.
-        self.before_max: tuple[float, int] | None = None
+        #: Brightness and kelvin the light had before Gaffer saw Max Mode come on, and the kelvin shown once
+        #: it did. Max off in Gaffer puts the brightness back, and the kelvin only if it is still the one shown.
+        self.before_max: tuple[float, int, int] | None = None
         self.own_values = False  # a look's fade is running: group mirroring leaves this light alone (looks.py)
 
     @property
