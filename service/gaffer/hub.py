@@ -998,11 +998,13 @@ class Hub:
             if fixture.state is asked:  # never over a level set while the write was on its way
                 self._max_mode_came_on(fixture, "app", keep_kelvin=True)
             else:
-                fixture.before_max = (fixture.state.brightness, None)  # the newest level; Gaffer keeps its kelvin
+                kelvin = fixture.state.cct.kelvin
+                fixture.before_max = (fixture.state.brightness, kelvin, kelvin)  # the newest level
         elif not on and was_on and fixture.before_max is not None:
-            (brightness, kelvin), fixture.before_max = fixture.before_max, None
+            (brightness, kelvin, shown), fixture.before_max = fixture.before_max, None
             state = fixture.state
-            kelvin = state.cct.kelvin if kelvin is None else kelvin  # a kelvin set during Max Mode stays
+            if state.cct.kelvin != shown:
+                kelvin = state.cct.kelvin  # a colour temperature set while Max Mode was on stays
             self.set_state(fixture, state.model_copy(
                 update={"brightness": brightness, "cct": state.cct.model_copy(update={"kelvin": kelvin})}), "app")
         self._broadcast_lights()
@@ -1017,10 +1019,12 @@ class Hub:
         that is Gaffer's own colour temperature, sent straight back over the light's 4300 K (Captain, 18 Oct).
         """
         state = fixture.state
-        fixture.before_max = (state.brightness, None if keep_kelvin else state.cct.kelvin)
         update: dict[str, Any] = {"brightness": 100.0}
+        shown = state.cct.kelvin
         if fixture.caps.max_mode_kelvin is not None and not keep_kelvin:
-            update["cct"] = state.cct.model_copy(update={"kelvin": fixture.caps.max_mode_kelvin})
+            shown = fixture.caps.max_mode_kelvin
+            update["cct"] = state.cct.model_copy(update={"kelvin": shown})
+        fixture.before_max = (state.brightness, state.cct.kelvin, shown)
         self.set_state(fixture, state.model_copy(update=update), source)
 
     def demo_hold(self, light_id: str, held: bool) -> None:

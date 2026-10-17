@@ -398,3 +398,45 @@ def test_max_on_from_gaffer_keeps_gaffers_colour_temperature_over_the_lights_430
         assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
         state = _light(client, "Zhiyun panel")["state"]
         assert (state["brightness"], state["cct"]["kelvin"]) == (51, 6500)  # back to 51%; the new kelvin stays
+
+
+def test_max_from_the_light_then_a_new_kelvin_in_gaffer_keeps_that_kelvin_at_max_off(tmp_path, monkeypatch):
+    """Review round 2: Max pressed on the light shows 4300 K; a colour temperature then set in Gaffer must
+    survive Max off in Gaffer, as it does when Max came on from Gaffer."""
+    from gaffer import hub as hub_module
+
+    monkeypatch.setattr(demo, "PACE", 0.05)
+    monkeypatch.setattr(hub_module, "SETTLE_SECONDS", 0.0)
+    unit = {"max": False}
+
+    class G200(Wire):
+        async def open(self, address, on_notify, on_lost):
+            writes = self.writes
+
+            class AnsweringLink(Link):
+                async def write(self, data):
+                    writes.append(bytes(data))
+                    frame = zy.parse_frame(bytes(data))
+                    if frame.command == zy.Command.MAX_MODE and frame.payload == bytes.fromhex("03800000"):
+                        on_notify(_answer(zy.Command.MAX_MODE, bytes.fromhex("038000") + bytes([unit["max"]]), frame.sequence))
+                    elif frame.command == zy.Command.MAX_MODE:
+                        unit["max"] = frame.payload[-1] == 1  # a Max Mode write from Gaffer
+
+            return AnsweringLink(writes)
+
+    wire = G200()
+    app = create_app(demo=True, data_dir=tmp_path)
+    app.state.hub.store.update_settings({"sync_interval": 0.05})
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 51, "cct": {"kelvin": 5700}}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 5700, "Gaffer at 5700 K")
+        unit["max"] = True  # Max pressed on the light
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 4300, "the light's 4300 K")
+        ws.send_json({"type": "set", "light": light, "patch": {"cct": {"kelvin": 6500}}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 6500, "Gaffer at 6500 K")
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 1)["type"] == "ack"
+        state = _light(client, "Zhiyun panel")["state"]
+        assert (state["brightness"], state["cct"]["kelvin"]) == (51, 6500)
