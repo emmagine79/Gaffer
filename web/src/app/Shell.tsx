@@ -4,6 +4,7 @@ import { Footer } from '../glass/Footer'
 import { Glass } from '../glass/Glass'
 import { OtherLights } from '../glass/OtherLights'
 import { PhonePanel } from '../phone/PhonePanel'
+import { useTabKey } from '../desk/useTabKey'
 import { useStudio } from '../state/store'
 import { AddLight, DeskSlot } from './slots'
 import { readSurface, rememberView, rememberedView, type Surface, type View } from './surface'
@@ -25,11 +26,12 @@ export function Shell() {
     setView(next)
     rememberView(SURFACE, next)
   }
+  useTabKey(() => choose(view === 'glass' ? 'desk' : 'glass'))
   return (
     <div className="surface">
       <main className="glass" style={{ '--beam': beam } as CSSProperties} data-view={view}>
         <ViewSwitch view={view} onChange={choose} />
-        {view === 'glass' ? <Glass /> : <DeskSlot />}
+        {view === 'glass' ? <Glass /> : <DeskSlot onOpenLight={() => choose('glass')} />}
         <Footer surface={SURFACE} />
         {SURFACE === 'phone' && view === 'glass' && <OtherLights />}
       </main>
