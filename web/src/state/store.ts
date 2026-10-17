@@ -61,6 +61,8 @@ interface Studio {
   log: LogEntry[]
   pump: PumpStats | null
   toasts: Toast[]
+  /** The look on now (SPEC-010), or null. */
+  look: { id: string; name: string } | null
   tab: TabId
   connectionSheet: boolean
   addLight: boolean
@@ -190,6 +192,7 @@ export const useStudio = create<Studio>()((set, get) => ({
   log: EMPTY,
   pump: null,
   toasts: EMPTY,
+  look: null,
   tab: initialTab(),
   connectionSheet: false,
   addLight: false,
@@ -367,6 +370,7 @@ function handle(m: ServerMessage) {
       remember(selected)
       set({
         ready: true, demo: h.demo, effects: h.effects, link: h.link, store: h.store, log: h.log, models: h.models,
+        look: h.look && h.look_id ? { id: h.look_id, name: h.look } : null,
         groups: h.groups, nearby: h.nearby, scanning: h.scanning, pairing: h.pairing,
         lights: h.lights, gelTables: h.gel_tables, network: h.network, selected,
         ...project(h.lights, selected, h.gel_tables),
@@ -431,6 +435,9 @@ function handle(m: ServerMessage) {
       break
     case 'settings':
       set((s) => ({ store: s.store ? { ...s.store, settings: m.settings as Settings } : s.store }))
+      break
+    case 'look':
+      set({ look: m.id && m.name ? { id: m.id, name: m.name } : null })
       break
     case 'store':
       set((s) => ({ store: s.store ? { ...s.store, [m.collection]: m.items } : s.store }))
