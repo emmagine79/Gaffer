@@ -20,10 +20,14 @@ function GroupCard({ group }: { group: Group }) {
   const groups = useStudio((s) => s.groups)
   const send = useStudio((s) => s.send)
   const [name, setName] = useState(group.name)
-  // Build on the newest copy, not this render's, so two quick clicks both count.
-  const save = (patch: Partial<Group>) => {
-    const latest = useStudio.getState().groups.find((g) => g.id === group.id) ?? group
-    send({ type: 'group.save', group: { ...latest, ...patch }, leader: useStudio.getState().selected })
+  // Work from the newest copy of the group, and show the change at once, so a second quick click
+  // builds on the first instead of undoing it. The service's broadcast then replaces the guess.
+  const save = (change: (latest: Group) => Partial<Group>) => {
+    const { groups: current, selected } = useStudio.getState()
+    const latest = current.find((g) => g.id === group.id) ?? group
+    const next = { ...latest, ...change(latest) }
+    useStudio.setState({ groups: current.map((g) => (g.id === group.id ? next : g)) })
+    send({ type: 'group.save', group: next, leader: selected })
   }
   const elsewhere = (id: string) => groups.find((g) => g.id !== group.id && g.members.includes(id))
   const live = group.enabled && group.members.length > 1
@@ -40,7 +44,7 @@ function GroupCard({ group }: { group: Group }) {
           onBlur={() => {
             const trimmed = name.trim()
             setName(trimmed || group.name) // a blank name goes back to the saved one
-            if (trimmed && trimmed !== group.name) save({ name: trimmed })
+            if (trimmed && trimmed !== group.name) save(() => ({ name: trimmed }))
           }}
         />
         <button
@@ -49,7 +53,7 @@ function GroupCard({ group }: { group: Group }) {
           className={`g-toggle ${group.enabled ? 'on' : ''}`}
           aria-checked={group.enabled}
           aria-label={`Sync ${group.name}`}
-          onClick={() => save({ enabled: !group.enabled })}
+          onClick={() => save((g) => ({ enabled: !g.enabled }))}
         />
         <button type="button" className="grp-delete" aria-label={`Delete ${group.name}`} onClick={() => send({ type: 'group.delete', id: group.id })}>
           Delete
@@ -68,7 +72,7 @@ function GroupCard({ group }: { group: Group }) {
               className={`grp-chip ${member ? 'sel' : ''}`}
               aria-pressed={member}
               title={other ? `In ${other.name}; adding it here takes it out of there` : l.name}
-              onClick={() => save({ members: member ? group.members.filter((m) => m !== l.id) : [...group.members, l.id] })}
+              onClick={() => save((g) => ({ members: g.members.includes(l.id) ? g.members.filter((m) => m !== l.id) : [...g.members, l.id] }))}
             >
               {l.name}
               {other && <small> in {other.name}</small>}
@@ -88,7 +92,7 @@ function GroupCard({ group }: { group: Group }) {
               className={`grp-chip ${on ? 'sel' : ''}`}
               aria-pressed={on}
               title={p.hint}
-              onClick={() => save({ props: on ? group.props.filter((x) => x !== p.id) : [...group.props, p.id] })}
+              onClick={() => save((g) => ({ props: g.props.includes(p.id) ? g.props.filter((x) => x !== p.id) : [...g.props, p.id] }))}
             >
               {p.name}
             </button>
@@ -108,6 +112,20 @@ function newName(groups: Group[]) {
   return `Group ${n}`
 }
 
+const NEW_GROUP_PROPS: SyncProp[] = ['power', 'brightness', 'white', 'colour']
+
+/**
+ * The members and name for a new group, or null when it cannot be made. A light follows one group,
+ * so a new group takes only lights that are in none: the light on screen if it is free, plus the next free one.
+ */
+export function planNewGroup(lights: { id: string }[], groups: Group[], selected: string | null) {
+  const free = lights.filter((l) => !groups.some((g) => g.members.includes(l.id))).map((l) => l.id)
+  if (free.length < 2) return null
+  const first = selected && free.includes(selected) ? selected : free[0]
+  const second = free.find((id) => id !== first)!
+  return { members: [first, second], name: newName(groups) }
+}
+
 /** Lights that follow each other: move any one and the rest take the properties the group shares. */
 export function Groups() {
   const groups = useStudio((s) => s.groups)
@@ -115,28 +133,19 @@ export function Groups() {
   const selected = useStudio((s) => s.selected)
   const send = useStudio((s) => s.send)
 
-  // A light follows one group, so a new group is made only from lights that are in none.
-  const free = lights.filter((l) => !groups.some((g) => g.members.includes(l.id))).map((l) => l.id)
-
-  /** The light on screen (if it is free) plus the next free light, so a new group does something at once. */
+  const plan = planNewGroup(lights, groups, selected)
   const create = () => {
-    if (free.length < 2) return
-    const first = selected && free.includes(selected) ? selected : free[0]
-    const second = free.find((id) => id !== first)!
-    send({
-      type: 'group.save',
-      group: { name: newName(groups), members: [first, second], props: ['power', 'brightness', 'white', 'colour'], enabled: true },
-      leader: selected,
-    })
+    if (!plan) return
+    send({ type: 'group.save', group: { name: plan.name, members: plan.members, props: NEW_GROUP_PROPS, enabled: true }, leader: selected })
   }
 
   return (
     <section className="grps" aria-label="Groups">
       <div className="grps-head">
         <h2 className="grps-title">Groups</h2>
-        <button type="button" className="g-tab" onClick={create} disabled={free.length < 2}>+ New group</button>
+        <button type="button" className="g-tab" onClick={create} disabled={!plan}>+ New group</button>
       </div>
-      {lights.length >= 2 && free.length < 2 && <p className="g-dim">A new group needs two lights that are in no group yet.</p>}
+      {lights.length >= 2 && !plan && <p className="g-dim">A new group needs two lights that are in no group yet.</p>}
       {groups.length === 0 ? (
         <p className="g-dim">
           {lights.length < 2

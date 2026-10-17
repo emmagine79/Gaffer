@@ -729,12 +729,14 @@ class Hub:
             ordered.append(clean)
         self.store.update_settings({"groups": ordered})
         self._broadcast({"type": "groups", "groups": ordered})
-        changed = before is None or any(before.get(k) != clean[k] for k in ("members", "props", "enabled"))
-        if changed and clean["enabled"] and len(members) > 1:
-            # Line everyone up behind the light being worked on, not whichever joined first;
-            # a rename alone changes no light.
-            first = leader if leader in members else members[0]
-            self._mirror_from(self.fixtures[first])
+        # A group edit moves no light the user did not touch. Members line up behind ``leader`` only
+        # when the group is newly on, a light newly joins, or a property is newly shared, and only
+        # when the leader is a member. Removing a light or a property moves nothing; neither does a rename.
+        joined = [m for m in members if before is None or m not in before.get("members", [])]
+        added = [p for p in props if before is None or p not in before.get("props", [])]
+        switched_on = clean["enabled"] and (before is None or not before.get("enabled", True))
+        if clean["enabled"] and len(members) > 1 and leader in members and (switched_on or joined or added):
+            self._mirror_from(self.fixtures[leader])
         return clean
 
     def delete_group(self, group_id: str) -> None:

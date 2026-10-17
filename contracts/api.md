@@ -92,7 +92,7 @@ A group is `{id, name, members: [light id], props, enabled}`. `props` are any of
 
 - `{"type": "group.save", "group": {...}, "leader": "<light id>"}` creates a group (no `id`) or updates one. Answers `{"type": "ack", "of": "group.save", "group": {...}}`. Names are cut to 40 characters.
 - `props` with no list at all means every property. An empty list `[]` means the group shares nothing: its lights stay in the group but no `set` moves the others.
-- The other members take the `leader` light's shared properties whenever a save changes `members`, `props` or `enabled` (a rename alone changes no light). So switching on `power` for an existing group sets every member's power at once. `leader` is a member of the group; if it is missing the service uses the light this client has selected, and if that is not a member either, the first member leads.
+- The other members take the `leader` light's shared properties only when a save switches the group on, adds a light, or adds a shared property, and only when `leader` is a member (it defaults to the light this client has selected). A save that only removes a light or a property, renames the group, or names a leader outside the group moves no light.
 - `{"type": "group.delete", "id": "<group id>"}` removes the group. Its lights no longer follow each other.
 - While a group is enabled with two or more members, any `set` on one member moves the others (only the shared `props`).
 
