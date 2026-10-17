@@ -696,7 +696,8 @@ class Hub:
         group = self.group_of(leader.id)
         if group is None:
             return
-        props = frozenset(group.get("props") or ALL_PROPS)
+        # An empty list is "share nothing"; only a group saved with no list at all shares everything.
+        props = ALL_PROPS if group.get("props") is None else frozenset(group["props"])
         if leader.engine.kind in ANIMATIONS and "effects" not in props:
             return
         for member_id in group["members"]:
@@ -714,7 +715,8 @@ class Hub:
         """Create or update a group. Joining or re-enabling lines the members up behind ``leader``."""
         name = str(group.get("name") or "").strip()[:40] or "Group"
         members = [m for m in dict.fromkeys(group.get("members") or []) if m in self.fixtures]
-        props = [p for p in SYNC_PROPS if p in (group.get("props") or SYNC_PROPS)]
+        wanted = group.get("props")  # [] means share nothing; no list at all means share everything
+        props = [p for p in SYNC_PROPS if wanted is None or p in wanted]
         clean = {
             "id": str(group.get("id") or uuid.uuid4().hex[:8]), "name": name, "members": members,
             "props": props, "enabled": bool(group.get("enabled", True)),
@@ -729,12 +731,14 @@ class Hub:
             ordered.append(clean)
         self.store.update_settings({"groups": ordered})
         self._broadcast({"type": "groups", "groups": ordered})
-        changed = before is None or any(before.get(k) != clean[k] for k in ("members", "props", "enabled"))
-        if changed and clean["enabled"] and len(members) > 1:
-            # Line everyone up behind the light being worked on, not whichever joined first;
-            # a rename alone changes no light.
-            first = leader if leader in members else members[0]
-            self._mirror_from(self.fixtures[first])
+        # A group edit moves no light the user did not touch. Members line up behind ``leader`` only
+        # when the group is newly on, a light newly joins, or a property is newly shared, and only
+        # when the leader is a member. Removing a light or a property moves nothing; neither does a rename.
+        joined = [m for m in members if before is None or m not in before.get("members", [])]
+        added = [p for p in props if before is None or p not in before.get("props", [])]
+        switched_on = clean["enabled"] and (before is None or not before.get("enabled", True))
+        if clean["enabled"] and len(members) > 1 and leader in members and (switched_on or joined or added):
+            self._mirror_from(self.fixtures[leader])
         return clean
 
     def delete_group(self, group_id: str) -> None:

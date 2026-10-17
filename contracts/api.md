@@ -86,6 +86,16 @@ The light objects in `hello`, `lights` and `/api/export` gain:
 - `channel`: integer or null. The radio channel a light is set to, for brands that need one told to them (Yongnuo). Saved with the light.
 - `caps.driver`, `caps.brand`, `caps.match`, `caps.driver_data`.
 
+### Sync groups (WebSocket `/ws`)
+
+A group is `{id, name, members: [light id], props, enabled}`. `props` are any of `power`, `brightness`, `white`, `colour`, `effects`. A light is in one group at a time. `hello` and every change carry the list: `{"type": "groups", "groups": [...]}`.
+
+- `{"type": "group.save", "group": {...}, "leader": "<light id>"}` creates a group (no `id`) or updates one. Answers `{"type": "ack", "of": "group.save", "group": {...}}`. Names are cut to 40 characters.
+- `props` with no list at all means every property. An empty list `[]` means the group shares nothing: its lights stay in the group but no `set` moves the others.
+- The other members take the `leader` light's shared properties only when a save switches the group on, adds a light, or adds a shared property, and only when `leader` is a member (it defaults to the light this client has selected). A save that only removes a light or a property, renames the group, or names a leader outside the group moves no light.
+- `{"type": "group.delete", "id": "<group id>"}` removes the group. Its lights no longer follow each other.
+- While a group is enabled with two or more members, any `set` on one member moves the others (only the shared `props`).
+
 ### WebSocket command: set.many
 
 One fader over several lights (the lighting desk). `{"type": "set.many", "anchor": "<light id>", "lights": ["<light id>", ...], "brightness": 80}`. Answers `{"type": "ack", "of": "set.many"}`.
