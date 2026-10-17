@@ -10,7 +10,7 @@ Gaffer is an open-source (MIT) Mac app that controls studio lights from differen
 | `web/` | Web interface (React and Vite). `npm run build` writes `web/dist`, which the service serves |
 | `mac/` | Swift menu-bar shell with a WKWebView, `Info.plist`, icon, and the tests that launch the built app (`mac/tests/`) |
 | `contracts/` | The HTTP and WebSocket contract between the service and its clients (`api.md`). Not created yet; a later card adds it |
-| `scripts/` | `build_app.sh` builds `dist/Gaffer.app` |
+| `scripts/` | `build_app.sh` builds `dist/Gaffer.app` and the release zip; `sign_app.sh` signs it; `bundle_tool.py` prepares the bundled Python and its licences |
 | `backlog/` | Cards for the work. The conductor owns it; builders do not edit it |
 | `THIRD-PARTY/`, `NOTICE` | Licences and credits for code taken from other projects |
 
@@ -29,7 +29,7 @@ Run test and build commands through `~/.claude/skills/fleet-conductor/scripts/me
 ## Rules
 
 - Never send a command to a real light unless Captain is present. Use `--demo` for anything live.
-- Every rebuild of `Gaffer.app` is ad-hoc signed with a new signature, so macOS asks for Bluetooth permission again. Do not launch a rebuilt app to scan unless Captain is there. Prove a build with `/api/health` and with the bundled Python run in `--demo` mode.
+- `Gaffer.app` is signed with a fixed self-signed identity (`scripts/sign_app.sh`), so its code requirement is stable and macOS keeps the Bluetooth permission across rebuilds on one Mac. The first launch of an app signed by a new identity still asks. Do not launch a rebuilt app to scan unless Captain is there. Prove a build with `/api/health` and with the bundled Python run in `--demo` mode. `GAFFER_SIGN=adhoc` is for quick local builds only and makes no release zip and never installs. Never make signing fall back to ad hoc by itself: any app signed ad hoc with the same bundle id would inherit the permission.
 - Never add the research folders (`apks/`, `vega-xapk/`, `dex/`, `gdex/`, `so/`, `assets/`, `f100/`, `evidence/`) or any `.apk`, `.dex`, `.so`, `.xapk` or `.jar` file. Check with `git ls-files` before you commit.
 - Copy code only from MIT-licensed repos, and credit it: add the licence to `THIRD-PARTY/` and a line to `NOTICE`.
 - No real keys, addresses or device ids in fixtures. Use invented values.

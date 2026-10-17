@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from signing_check import assert_pinned_to_the_gaffer_certificate
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILT_APP = ROOT / "dist" / "Gaffer.app"
@@ -139,12 +140,11 @@ def gaffer(tmp_path_factory):
 
 
 def test_double_click_starts_bundled_python_service(gaffer):
-    """Criterion 1: ad-hoc signed, with icon, starts its own Python; no Terminal, no system Python."""
+    """Criterion 1: signed, with icon, starts its own Python; no Terminal, no system Python."""
     contents = gaffer.app / "Contents"
     info = plistlib.loads((contents / "Info.plist").read_bytes())
     assert (contents / "Resources" / f"{info['CFBundleIconFile']}.icns").is_file()
-    signature = subprocess.run(["codesign", "-dv", str(gaffer.app)], capture_output=True, text=True).stderr
-    assert "Signature=adhoc" in signature and f"Identifier={BUNDLE_ID}" in signature
+    assert_pinned_to_the_gaffer_certificate(gaffer.app)
 
     # Gaffer was started by launchd (as from Finder), not by a shell or Terminal.
     assert run("ps", "-o", "ppid=", "-p", str(gaffer.gaffer)).strip() == "1"
