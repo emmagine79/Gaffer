@@ -92,7 +92,7 @@ async def _drain(pump: CommandPump, recorder: Recorder, rounds: int = 40) -> Non
 
 
 async def test_each_light_gets_its_own_frames_at_its_own_address():
-    pump = CommandPump(RGB, max_rate=1000)
+    pump = CommandPump(RGB, max_rate=1000, sleep=lambda _s: asyncio.sleep(0))
     recorder = Recorder()
     pump.attach(recorder)
     task = asyncio.create_task(pump.run())
@@ -104,7 +104,7 @@ async def test_each_light_gets_its_own_frames_at_its_own_address():
 
 
 async def test_lights_take_turns_so_a_busy_one_cannot_starve_the_rest():
-    pump = CommandPump(RGB, max_rate=1000)
+    pump = CommandPump(RGB, max_rate=1000, sleep=lambda _s: asyncio.sleep(0))
     recorder = Recorder(delay=0.002)
     pump.attach(recorder)
     task = asyncio.create_task(pump.run())
