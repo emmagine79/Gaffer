@@ -36,7 +36,9 @@ Each one's licence is kept in THIRD-PARTY/, and travels inside Gaffer.app.
 * zhiyun-light-control, by aaditagrawal. Zhiyun protocol.
   https://github.com/aaditagrawal/zhiyun-light-control
 
-* yongnuo-light-control, by asidjwiaijd. The Yongnuo name rule used by the scan.
+* yongnuo-light-control, by asidjwiaijd. The Yongnuo name rule used by the scan,
+  and the decimal colour-temperature frame encoder (ble_protocol.dart,
+  yn_protocol.h), ported to Python in service/gaffer/drivers/yongnuo/protocol.py.
   https://github.com/asidjwiaijd/yongnuo-light-control
 
 TRADEMARKS
