@@ -94,7 +94,7 @@ def run_self_test(report: Report = print, *, require_web: bool = True) -> bool:
 
             with connect(f"ws://127.0.0.1:{port}/ws", open_timeout=5) as ws:
                 hello = json.loads(ws.recv(timeout=5))
-            check("WebSocket", hello.get("type") == "hello" and len(hello.get("lights", [])) == 4,
+            check("WebSocket", hello.get("type") == "hello" and len(hello.get("lights", [])) == 6,
                   f"{len(hello.get('lights', []))} demo lights")
         except Exception as err:  # noqa: BLE001
             check("server", False, f"{type(err).__name__}: {err}")

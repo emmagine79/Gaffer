@@ -14,8 +14,12 @@ this metadata. So a light gets the right studio from data alone: look up its
 from __future__ import annotations
 
 import json
+import logging
+import re
+import stat
 from dataclasses import asdict, dataclass, field
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
 from godox_mesh_bt.protocol import FX_V3, FX_V3_DEFAULTS, FX_V3_SPEED_MAX
@@ -23,6 +27,9 @@ from godox_mesh_bt.protocol import FX_V3, FX_V3_DEFAULTS, FX_V3_SPEED_MAX
 from .paths import PACKAGE_DATA
 
 _CAPS_PATH = PACKAGE_DATA / "models.json"
+#: Model files shipped with Gaffer: ``models/<driver>/<ID>.json``.
+MODELS_DIR = Path(__file__).resolve().parent / "models"
+logger = logging.getLogger(__name__)
 _GELS_PATH = PACKAGE_DATA / "gels.json"
 _CHIP_HEX_PATH = PACKAGE_DATA / "gel-colours.json"
 
@@ -72,6 +79,13 @@ class ModelCaps:
     brightness_steps: int = 100
     note: str = ""
     known: bool = True
+    #: Which driver commands this model (``drivers/<id>/``) and what to call its maker.
+    driver: str = "godox"
+    brand: str = "Godox"
+    #: How an advertisement finds this model: ``{"name_prefix": str, "service": str}``, either optional.
+    match: dict[str, Any] = field(default_factory=dict)
+    #: Whatever the driver needs per model (opcodes, channel layout). Opaque to everything else.
+    driver_data: dict[str, Any] = field(default_factory=dict)
 
     # -- what kind of light ---------------------------------------------------
 
@@ -199,11 +213,160 @@ def v3_param_schema(symbol: int) -> tuple[dict[str, Any], ...]:
     )
 
 
+# -- model files ---------------------------------------------------------------------------
+#
+# Lumen's ``models.json`` is the Godox table. Any other model, or a correction to a
+# Godox row, is one JSON file: ``models/<driver>/<ID>.json`` holding the table-row keys
+# plus ``id``, ``driver``, ``brand``, ``match`` and ``driver_data``. A file with the
+# same id as a row replaces the row. One bad file is skipped with a reason; it never
+# stops the rest, and an unreadable file changes nothing.
+
+#: Gaffer's own bounds. No platform or contract names one for these.
+MAX_MODEL_FILE_BYTES = 1 << 20
+MAX_MODEL_FILES = 5000
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
+_SERVICE = re.compile(r"[0-9a-f]{4}|[0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_RESERVED_IDS = frozenset({"constructor", "prototype", "proto", "tostring", "valueof", "hasownproperty"})
+
+_extra_dirs: tuple[Path, ...] = ()
+_extra_rows: dict[str, dict[str, Any]] = {}
+_skipped: list[dict[str, str]] = []
+
+
+class ModelFileError(ValueError):
+    """A model file that cannot be used. The message is safe to show: no paths."""
+
+
+def _safe_id(value: Any, what: str) -> str:
+    if not isinstance(value, str) or not _ID.fullmatch(value) or value.lower() in _RESERVED_IDS:
+        raise ModelFileError(f"{what} is not a valid name")
+    return value
+
+
+def _check_row(raw: dict[str, Any], folder: str) -> tuple[str, dict[str, Any]]:
+    """Validate one model file's content. Returns (id, row) or raises ModelFileError."""
+    model_id = _safe_id(raw.get("id"), "id").upper()
+    driver = _safe_id(raw.get("driver"), "driver")
+    if driver != folder:
+        raise ModelFileError("driver does not match the folder")
+    brand = raw.get("brand")
+    if not isinstance(brand, str) or not brand.strip() or len(brand) > 64:
+        raise ModelFileError("brand must be a short text")
+    name = raw.get("name")
+    if not isinstance(name, str) or not name.strip() or len(name) > 120:
+        raise ModelFileError("name must be a short text")
+    for key in ("min_kelvin", "max_kelvin"):
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100_000:
+            raise ModelFileError(f"{key} must be a whole number")
+    if raw["min_kelvin"] > raw["max_kelvin"]:
+        raise ModelFileError("min_kelvin is above max_kelvin")
+    modes = raw.get("modes", [])
+    if not isinstance(modes, list) or not all(isinstance(m, str) for m in modes):
+        raise ModelFileError("modes must be a list of names")
+    match = raw.get("match", {})
+    if not isinstance(match, dict) or set(match) - {"name_prefix", "service"}:
+        raise ModelFileError("match may hold only name_prefix and service")
+    prefix = match.get("name_prefix")
+    if prefix is not None and (not isinstance(prefix, str) or not 0 < len(prefix) <= 64):
+        raise ModelFileError("match.name_prefix must be a short text")
+    service = match.get("service")
+    if service is not None and (not isinstance(service, str) or not _SERVICE.fullmatch(service.lower())):
+        raise ModelFileError("match.service must be a Bluetooth UUID")
+    data = raw.get("driver_data", {})
+    if not isinstance(data, dict):
+        raise ModelFileError("driver_data must be an object")
+    row = {k: v for k, v in raw.items() if k != "id"}
+    row.update(driver=driver, brand=brand.strip(), match=match, driver_data=data)
+    return model_id, row
+
+
+def _read_model_file(path: Path, folder: str) -> tuple[str, dict[str, Any]]:
+    try:
+        info = path.lstat()
+    except OSError:
+        raise ModelFileError("cannot be read") from None
+    if not stat.S_ISREG(info.st_mode):
+        raise ModelFileError("is not a plain file")
+    if info.st_size > MAX_MODEL_FILE_BYTES:
+        raise ModelFileError("is too large")
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        raise ModelFileError("cannot be read as JSON") from None
+    if not isinstance(raw, dict):
+        raise ModelFileError("must hold one JSON object")
+    model_id, row = _check_row(raw, folder)
+    if path.stem.upper() != model_id:
+        raise ModelFileError("file name does not match its id")
+    _caps_from_row(model_id, row)  # builds the real thing, so a bad effects list is caught here
+    return model_id, row
+
+
+def _scan_model_dir(root: Path, rows: dict[str, dict[str, Any]], skipped: list[dict[str, str]]) -> None:
+    try:
+        folders = sorted(p for p in root.iterdir() if not p.name.startswith("."))
+    except OSError:
+        return  # no models folder is normal
+    seen = 0
+    for folder in folders:
+        try:
+            if not folder.is_dir() or folder.is_symlink() or not _ID.fullmatch(folder.name):
+                continue
+            files = sorted(folder.glob("*.json"))
+        except OSError:
+            skipped.append({"file": f"{folder.name}/", "reason": "folder cannot be read"})
+            continue
+        for path in files:
+            label = f"{folder.name}/{path.name}"
+            seen += 1
+            if seen > MAX_MODEL_FILES:
+                skipped.append({"file": label, "reason": "too many model files"})
+                continue
+            try:
+                model_id, row = _read_model_file(path, folder.name)
+            except Exception as err:  # one bad file never stops the rest
+                reason = str(err) if isinstance(err, ModelFileError) else "cannot be used"
+                logger.warning("skipped model file %s: %s", label, reason)
+                skipped.append({"file": label, "reason": reason})
+                continue
+            rows[model_id] = row
+
+
+def configure_models(extra_dirs: tuple[Path, ...] | list[Path] = (), extra_rows: dict[str, dict[str, Any]] | None = None) -> None:
+    """Choose where model files are read from besides the shipped ``models/`` folder, then reload.
+
+    ``extra_rows`` are demo-only stand-ins; they are never read from disk.
+    """
+    global _extra_dirs, _extra_rows
+    _extra_dirs = tuple(Path(d) for d in extra_dirs)
+    _extra_rows = {k.upper(): v for k, v in (extra_rows or {}).items()}
+    reload_models()
+
+
+def reload_models() -> None:
+    """Forget what was loaded; the next lookup reads the table and the model files again."""
+    for fn in (_caps_table, model_caps, models_index):
+        fn.cache_clear()
+
+
+def skipped_model_files() -> list[dict[str, str]]:
+    """Model files the last load skipped, each with a reason. Never carries a path."""
+    _caps_table()
+    return list(_skipped)
+
+
 @lru_cache(maxsize=1)
 def _caps_table() -> dict[str, Any]:
     raw = json.loads(_CAPS_PATH.read_text(encoding="utf-8"))
     # Underscore-prefixed keys carry provenance, not models.
-    return {k.upper(): v for k, v in raw.items() if not k.startswith("_")}
+    table: dict[str, Any] = {k.upper(): v for k, v in raw.items() if not k.startswith("_")}
+    skipped: list[dict[str, str]] = []
+    for root in (MODELS_DIR, *_extra_dirs):
+        _scan_model_dir(root, table, skipped)  # a later file with the same id replaces an earlier row
+    table.update(_extra_rows)
+    _skipped[:] = skipped
+    return table
 
 
 def _effects(row: dict[str, Any]) -> tuple[BuiltinEffect, ...]:
@@ -238,13 +401,7 @@ def _unknown(radio_id: str) -> ModelCaps:
     )
 
 
-@lru_cache(maxsize=256)
-def model_caps(radio_id: str | None) -> ModelCaps:
-    """One model's capabilities, or a safe default for a model the table does not know."""
-    key = (radio_id or "").upper()
-    row = _caps_table().get(key)
-    if row is None:
-        return _unknown(key)
+def _caps_from_row(key: str, row: dict[str, Any]) -> ModelCaps:
     return ModelCaps(
         radio_id=key,
         name=row["name"],
@@ -266,17 +423,47 @@ def model_caps(radio_id: str | None) -> ModelCaps:
         frequencies=tuple(row.get("frequencies") or ()),
         brightness_steps=int(row.get("brightness_steps", 100)),
         note=str(row.get("note") or ""),
+        driver=str(row.get("driver") or "godox"),
+        brand=str(row.get("brand") or "Godox"),
+        match=dict(row.get("match") or {}),
+        driver_data=dict(row.get("driver_data") or {}),
     )
+
+
+@lru_cache(maxsize=256)
+def model_caps(radio_id: str | None) -> ModelCaps:
+    """One model's capabilities, or a safe default for a model the table does not know."""
+    key = (radio_id or "").upper()
+    row = _caps_table().get(key)
+    if row is None:
+        return _unknown(key)
+    return _caps_from_row(key, row)
 
 
 @lru_cache(maxsize=1)
 def models_index() -> tuple[dict[str, str], ...]:
     """Every known model, by name: for a model picker."""
     rows = []
-    for radio_id in _caps_table():
+    for radio_id, row in _caps_table().items():
+        if row.get("demo"):
+            continue  # demo stand-ins are for the demo's lights, not for picking
         caps = model_caps(radio_id)
-        rows.append({"radio_id": radio_id, "name": caps.name, "kind": caps.kind, "kind_label": KIND_LABELS[caps.kind]})
+        rows.append({"radio_id": radio_id, "name": caps.name, "kind": caps.kind, "kind_label": KIND_LABELS[caps.kind],
+                     "driver": caps.driver, "brand": caps.brand})
     return tuple(sorted(rows, key=lambda r: r["name"].lower()))
+
+
+def models_catalog() -> list[dict[str, Any]]:
+    """GET /api/models: every model, demo stand-ins included, with what the UI needs to lay out its controls."""
+    rows = list(models_index()) + [
+        {"radio_id": k, "name": model_caps(k).name, "kind": model_caps(k).kind,
+         "kind_label": KIND_LABELS[model_caps(k).kind], "driver": model_caps(k).driver, "brand": model_caps(k).brand}
+        for k, row in _caps_table().items() if row.get("demo")
+    ]
+    return [
+        {**row, "id": row["radio_id"], "features": (caps := model_caps(row["radio_id"])).features, "match": caps.match}
+        for row in rows
+    ]
 
 
 @lru_cache(maxsize=8)

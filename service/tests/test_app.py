@@ -48,7 +48,7 @@ def test_hello_carries_every_light_and_everything_the_ui_needs(client):
     with client.websocket_connect("/ws") as ws:
         hello = _hello(ws)
         names = {light["name"]: light for light in hello["lights"]}
-        assert set(names) == {"Key light", "Fill", "Backlight", "Hair light"}
+        assert set(names) == {"Key light", "Fill", "Backlight", "Hair light", "Zhiyun panel", "Yongnuo wand"}
         assert names["Key light"]["caps"]["name"] == "ML100R"
         assert names["Fill"]["caps"]["kind"] == "bicolour"
         assert names["Backlight"]["caps"]["features"]["daylight"] is True
@@ -257,7 +257,7 @@ def test_scanning_and_pairing_a_new_light(client):
         assert steps[:3] == ["starting", "provisioning", "binding"]
         lights = _until(ws, lambda m: m["type"] == "lights")["lights"]
         tube = next(light for light in lights if light["name"] == "Tube")
-        assert tube["caps"]["name"] == "TL60" and tube["node_address"] == 10
+        assert tube["caps"]["name"] == "TL60" and tube["node_address"] == 14
         assert len(lights) == len(before["lights"]) + 1
 
 

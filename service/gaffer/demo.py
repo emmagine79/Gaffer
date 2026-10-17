@@ -28,6 +28,24 @@ DEMO_LIGHTS: tuple[tuple[str, str, str, float, float], ...] = (
     ("Backlight", "000E", "DE:MO:00:00:00:03", 0.50, 0.12),   # SL100D: fixed daylight
     ("Hair light", "0078", "DE:MO:00:00:00:04", 0.20, 0.70),  # MS60R: RGB, battery, native gels
 )
+#: Zhiyun and Yongnuo models for demo mode only, until those brands' drivers land. They name the
+#: ``demo`` driver, which sends nothing, so a real driver never sees a demo light. Real model files
+#: for these brands live under ``gaffer/models/<driver>/``.
+DEMO_MODELS: dict[str, dict[str, Any]] = {
+    "ZY-DEMO": {
+        "name": "MOLUS G200 (demo)", "chip": "", "min_kelvin": 2700, "max_kelvin": 6500, "modes": ["cct", "hsi"],
+        "driver": "demo", "brand": "Zhiyun", "match": {"name_prefix": "PL1"}, "driver_data": {}, "demo": True,
+    },
+    "YN-DEMO": {
+        "name": "YN150Li (demo)", "chip": "", "min_kelvin": 3200, "max_kelvin": 5600, "modes": ["cct"],
+        "driver": "demo", "brand": "Yongnuo", "match": {"name_prefix": "YN"}, "driver_data": {}, "demo": True,
+    },
+}
+#: Demo lights of the other two brands: (name, model id, Bluetooth address, x, y, channel).
+DEMO_OTHER_LIGHTS: tuple[tuple[str, str, str, float, float, int | None], ...] = (
+    ("Zhiyun panel", "ZY-DEMO", "DE:MO:00:00:00:21", 0.82, 0.62, None),
+    ("Yongnuo wand", "YN-DEMO", "DE:MO:00:00:00:22", 0.40, 0.78, 1),
+)
 #: What a scan finds: a factory-fresh tube light, and a light on someone else's mesh.
 DEMO_NEARBY: tuple[Nearby, ...] = (
     Nearby("DE:MO:00:00:00:10", "GD_LED", -58, "unpaired", "0001"),   # TL60
@@ -36,17 +54,31 @@ DEMO_NEARBY: tuple[Nearby, ...] = (
 
 
 def seed(library: LightLibrary) -> None:
-    """Fill an empty demo library with one network and the demo lights."""
+    """Fill a demo library: one network, the Godox lights, and one light each of the other brands.
+
+    A demo folder from an earlier version already holds lights; it gets the missing ones added.
+    """
     if library.lights:
-        return
-    network = library.create_network()
-    for i, (name, radio_id, address, x, y) in enumerate(DEMO_LIGHTS):
+        network = library.lights[0].network
+        keep = library.active or library.lights[0]
+    else:
+        network = library.create_network()
+        for i, (name, radio_id, address, x, y) in enumerate(DEMO_LIGHTS):
+            light = library.add_paired(
+                network_id=network, address=address, radio_id=radio_id, node_address=2 + 2 * i,
+                num_elements=2, device_key="00" * 16, name=name,
+            )
+            library.save_light(dataclasses.replace(light, x=x, y=y))
+        keep = library.lights[0]
+    for j, (name, model, address, x, y, channel) in enumerate(DEMO_OTHER_LIGHTS, start=len(DEMO_LIGHTS)):
+        if library.by_address(address) is not None:
+            continue
         light = library.add_paired(
-            network_id=network, address=address, radio_id=radio_id, node_address=2 + 2 * i,
-            num_elements=2, device_key="00" * 16, name=name,
+            network_id=network, address=address, radio_id=model, node_address=2 + 2 * j,
+            num_elements=2, device_key="", name=name,
         )
-        library.save_light(dataclasses.replace(light, x=x, y=y))
-    library.set_active(library.lights[0].id)
+        library.save_light(dataclasses.replace(light, x=x, y=y, channel=channel))
+    library.set_active(keep.id)
 
 
 class DemoScanner:
