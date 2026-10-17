@@ -3,7 +3,7 @@
 Build first: scripts/build_app.sh --no-install
 Run:        uv run --project service --frozen pytest mac/tests/test_shell.py
 
-Each test copies dist/Gaffer.app into a folder whose path has a space, reaches it
+Each test copies the shell from dist/Gaffer.app into a folder whose path has a space, reaches it
 through a symlink, gives the copy its own bundle id (so Gaffer's real saved
 settings are never touched), and swaps the bundled Python for a launcher that runs
 standin_service.py, a small service that speaks contracts/api.md. The real shell
@@ -94,7 +94,14 @@ def launch(tmp: Path, *open_args: str) -> Shell:
     real = tmp / "path with space" / "real"
     real.mkdir(parents=True)
     copy = real / "Gaffer.app"
-    subprocess.run(["ditto", str(BUILT_APP), str(copy)], check=True)
+    # Only the shell goes into the copy (binary, plist, icon). The bundled Python and web
+    # build are big, and macOS checks every file of a new app on its first launch, which
+    # made start-up slower than the tests' wait. The stand-in replaces the service anyway.
+    (copy / "Contents/Resources/python/bin").mkdir(parents=True)
+    subprocess.run(["ditto", str(BUILT_APP / "Contents/MacOS"), str(copy / "Contents/MacOS")], check=True)
+    shutil.copy(BUILT_APP / "Contents/Info.plist", copy / "Contents/Info.plist")
+    for icon in (BUILT_APP / "Contents/Resources").glob("*.icns"):
+        shutil.copy(icon, copy / "Contents/Resources" / icon.name)
     (tmp / "link").symlink_to(real)
     app = tmp / "link" / "Gaffer.app"
 
@@ -104,8 +111,15 @@ def launch(tmp: Path, *open_args: str) -> Shell:
     info["CFBundleIdentifier"] = bundle_id
     plist.write_bytes(plistlib.dumps(info))
     state_file = tmp / "standin.json"
+    # -I -S below: the stand-in uses only the standard library.
     launcher = copy / "Contents/Resources/python/bin/python3.14"
-    launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{STANDIN}" --state-file "{state_file}" "$@"\n')
+    # The stand-in and its Python live outside ~/Documents. A process Gaffer starts is
+    # checked by macOS against Gaffer's permissions, and a new app copy reading Documents
+    # would wait on a permission prompt. sys.base_prefix is the plain Python the venv uses.
+    standin = tmp / "standin_service.py"
+    shutil.copy(STANDIN, standin)
+    python = Path(sys.base_prefix) / "bin" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+    launcher.write_text(f'#!/bin/sh\nexec "{python}" -I -S "{standin}" --state-file "{state_file}" "$@"\n')
     launcher.chmod(0o755)
     subprocess.run(["codesign", "--force", "--sign", "-", "--identifier", bundle_id, str(copy)],
                    check=True, capture_output=True)
@@ -184,7 +198,7 @@ def test_a_global_shortcut_works_while_another_app_is_frontmost(shell):
 
     press("space")  # Next cue: the first look of the cue list
     shell.wait_title("Talking head")
-    assert frontmost() == "Finder", "a global shortcut must not pull Gaffer to the front"
+    assert frontmost() != "Gaffer", "a global shortcut must not pull Gaffer to the front"
 
 
 def test_panel_and_window_are_live_views_of_the_same_service(shell):
