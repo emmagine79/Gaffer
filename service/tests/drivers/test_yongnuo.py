@@ -133,6 +133,8 @@ class Scripted:
         self.write_error: Exception = OSError("write failed")
         self.slow: set[str] = set()  # these addresses' connect waits for .release before it succeeds
         self.release = asyncio.Event()
+        self.connect_failures = 0  # the next N connects (after any wait) raise
+        self.disconnect_hangs: set[str] = set()  # the first disconnect of these addresses never returns
         self.dead: set[str] = set()  # these addresses never connect: connect raises
         self.hung: set[str] = set()  # these addresses' connect never returns
         self.connect_attempts: dict[str, int] = {}
@@ -151,6 +153,7 @@ class Scripted:
 class FlakyTransport:
     def __init__(self, script: Scripted, address: str) -> None:
         self.script, self.address, self._up, self.disconnected = script, address, False, False
+        self.disconnect_calls = 0
 
     async def connect(self) -> None:
         self.script.connect_attempts[self.address] = self.script.connect_attempts.get(self.address, 0) + 1
@@ -159,6 +162,9 @@ class FlakyTransport:
             await asyncio.Event().wait()
         if self.address in self.script.slow:
             await self.script.release.wait()
+        if self.script.connect_failures:
+            self.script.connect_failures -= 1
+            raise TimeoutError("no answer")
         if self.address in self.script.dead:
             raise TimeoutError("no answer")
         self._up = True
@@ -172,6 +178,9 @@ class FlakyTransport:
         self.script.sent.setdefault(self.address, []).append(bytes(data).hex().upper())
 
     async def disconnect(self) -> None:
+        self.disconnect_calls += 1
+        if self.disconnect_calls == 1 and self.address in self.script.disconnect_hangs:
+            await asyncio.Event().wait()
         self.disconnected = True
         self._up = False
         if self.address in self.script.disconnect_raises:
@@ -191,12 +200,14 @@ class RecordedSleep:
         self.gate = asyncio.Event()
         self.gate.set()
         self.on_wait = None
+        self.hold_from: int | None = None  # with the gate shut, only waits from this one on are held
 
     async def __call__(self, seconds: float) -> None:
         self.delays.append(seconds)
         if self.on_wait:
             self.on_wait(len(self.delays))
-        await self.gate.wait()
+        if self.hold_from is None or len(self.delays) >= self.hold_from:
+            await self.gate.wait()
         await asyncio.sleep(0)
 
 
@@ -442,3 +453,91 @@ async def test_a_fader_move_during_identify_is_not_overwritten_by_the_restore(ri
     await driver.identify(yn)
     await until(lambda: script.bytes_for(yn.address)[-1] == "AE030907" "0CE4" "14A000")
     assert script.bytes_for(yn.address).count("AE030907" "0CE4" "50A000") == 1  # the old 80 % was sent once, before the pulse
+
+
+async def test_identify_cancelled_mid_pulse_puts_the_light_back(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YNLUX100PRO", 7)
+    driver.apply(yn, lit(30, 3300))
+    await driver.flush()
+    sleep.gate.clear()
+    sleep.hold_from = 2  # the pause after the 10 % frame is the one that holds
+    pulse = asyncio.ensure_future(driver.identify(yn))
+    await until(lambda: len(sleep.delays) == 2)  # the 10 % frame is out and the pulse is waiting
+    assert script.bytes_for(yn.address)[-1] == "AE030907" "0CE4" "0AA000"
+    pulse.cancel()
+    sleep.gate.set()
+    await until(lambda: script.bytes_for(yn.address)[-1] == "AE030907" "0CE4" "1EA000")  # back at 30 %
+
+
+async def test_identify_cut_short_by_stop_writes_nothing_then_restores_after_a_restart(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YNLUX100PRO", 7)
+    driver.apply(yn, lit(30, 3300))
+    await driver.flush()
+    sleep.gate.clear()
+    sleep.hold_from = 2  # the pause after the 10 % frame is the one that holds
+    pulse = asyncio.ensure_future(driver.identify(yn))
+    await until(lambda: len(sleep.delays) == 2)  # light is at 10 %
+    await driver.stop()
+    sleep.gate.set()
+    with pytest.raises(ConnectionAbortedError):
+        await pulse
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert script.bytes_for(yn.address)[-1] == "AE030907" "0CE4" "0AA000"  # nothing written while stopped
+    await driver.start()
+    await until(lambda: script.bytes_for(yn.address)[-1] == "AE030907" "0CE4" "1EA000")
+
+
+async def test_a_connect_cut_short_by_the_timeout_disconnects_the_real_bleak_client(monkeypatch):
+    import bleak
+
+    clients = []
+
+    class FakeBleakClient:
+        def __init__(self, address, **kwargs):
+            self.is_connected, self.disconnected = False, False
+            clients.append(self)
+
+        async def connect(self):
+            await asyncio.Event().wait()
+
+        async def disconnect(self):
+            self.disconnected = True
+
+    monkeypatch.setattr(bleak, "BleakClient", FakeBleakClient)
+    driver = YongnuoDriver(connect_timeout=0.01)  # the real BleakTransport, a fake bleak under it
+    with pytest.raises(TimeoutError):
+        await driver.connect(light("YN150", 4))
+    assert [c.disconnected for c in clients] == [True]
+
+
+async def test_stop_finishes_a_disconnect_that_a_failed_write_started(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YN150", 4)
+    await driver.connect(yn)
+    script.disconnect_hangs.add(yn.address)
+    script.write_failures = 1
+    driver.apply(yn, lit())
+    await until(lambda: script.made[0].disconnect_calls == 1)  # the drop is under way and stuck
+    await driver.stop()
+    assert script.made[0].disconnected  # stop() still knew about the link and let go of it
+
+
+async def test_input_that_arrives_while_a_send_is_failing_is_not_made_to_wait_out_the_delay(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YNLUX100PRO", 7)
+    script.slow.add(yn.address)
+    script.connect_failures = 1  # the first try fails once it is released
+    sleep.gate.clear()  # no delay would ever end on its own
+    driver.apply(yn, lit(50, 3300))
+    await until(lambda: script.connect_attempts.get(yn.address) == 1)  # the send is in flight
+    driver.apply(yn, lit(91.6, 3300))  # the user moves the fader meanwhile
+    script.release.set()
+    await until(lambda: script.bytes_for(yn.address))
+    assert script.bytes_for(yn.address) == ["AE0309070CE45BA006"]

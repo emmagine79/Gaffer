@@ -63,8 +63,8 @@ class BleakTransport:
         from bleak import BleakClient
 
         client = BleakClient(self._address)
+        self._client = client  # kept before the await, so a connect that is cut short can still be disconnected
         await client.connect()
-        self._client = client
 
     async def write(self, data: bytes) -> None:
         await self._client.write_gatt_char(protocol.WRITE_UUID, data, response=False)
@@ -180,8 +180,10 @@ class YongnuoDriver(Driver):
     # -- contract -------------------------------------------------------------
 
     async def start(self) -> None:
-        """Nothing to start: a sender task begins with a light's first ``apply``."""
+        """A sender task begins with a light's first ``apply``. After a stop, send what identify left waiting."""
         self._closing = False
+        for light, state in list(self._pending.values()):
+            self._queue(light, state, replace=True)
 
     async def stop(self) -> None:
         """Release every link and forget what was known about each light. Safe to call twice.
@@ -219,8 +221,6 @@ class YongnuoDriver(Driver):
         if self._closing:
             return
         self._queue(light, state, replace=True)
-        if light.address in self._backing_off:
-            self._kicks[light.address].set()
 
     def _queue(self, light: Any, state: Any, *, replace: bool) -> None:
         address = light.address
@@ -228,8 +228,12 @@ class YongnuoDriver(Driver):
             self._pending[address] = (light, state)
         else:
             self._pending.setdefault(address, (light, state))  # a newer apply already there wins
+        if self._closing:
+            return  # nothing is sent while stopped; start() sends what is waiting
         self._settled.setdefault(address, asyncio.Event()).clear()
-        self._kicks.setdefault(address, asyncio.Event())
+        kick = self._kicks.setdefault(address, asyncio.Event())
+        if replace:
+            kick.set()  # new input: ends a back-off now, or the one about to start
         worker = self._workers.get(address)
         if worker is None or worker.done():
             self._workers[address] = asyncio.get_running_loop().create_task(self._run(address))
@@ -261,9 +265,11 @@ class YongnuoDriver(Driver):
                     return
                 await self._transmit(light, self._frames(light, state))
                 self._on[address] = bool(state.power)
-            except Exception:
-                if state is not None and not self._closing:
-                    self._queue(light, state, replace=False)  # a pulse that broke off must not leave the light at full
+            except BaseException:
+                if state is not None:
+                    # A pulse that broke off (error, cancel or stop) must not leave the light dim.
+                    # Queued, not sent here: nothing is written while stopped.
+                    self._queue(light, state, replace=False)
                 raise
 
     def status(self, light: Any) -> LightStatus:
@@ -296,6 +302,7 @@ class YongnuoDriver(Driver):
                     # Taken only once the light's lock is ours, so a state applied while an
                     # identify pulse holds the lock is still waiting here when the pulse ends.
                     light, state = self._pending.pop(address)
+                    self._kicks[address].clear()  # input that arrives from here on is newer than this state
                     try:
                         frames = self._frames(light, state)
                     except ValueError:
@@ -318,8 +325,7 @@ class YongnuoDriver(Driver):
 
     async def _back_off(self, address: str, settled: asyncio.Event) -> None:
         """Wait out the retry delay, or less if the user does something to the light meanwhile."""
-        kick = self._kicks[address]
-        kick.clear()
+        kick = self._kicks[address]  # already set if the user did something while the send was failing
         self._backing_off.add(address)
         settled.set()  # tried once; a flush does not wait out the delay
         waits = [asyncio.ensure_future(self._sleep(retry_delay(self._failures[address]))),
@@ -381,9 +387,11 @@ class YongnuoDriver(Driver):
             raise
 
     async def _drop(self, address: str) -> None:
-        transport = self._transports.pop(address, None)
+        transport = self._transports.get(address)
         if transport is not None:
-            await self._release(transport)
+            await self._release(transport)  # stays tracked until this finishes, so a cancelled drop is finished by stop()
+            if self._transports.get(address) is transport:
+                del self._transports[address]
 
     async def _release(self, transport: Transport) -> None:
         """Disconnect, never raising and never waiting longer than the Godox link does."""
