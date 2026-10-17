@@ -365,3 +365,25 @@ def test_a_slider_move_during_a_slow_max_on_write_is_kept(tmp_path, monkeypatch)
         _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 100, "Gaffer at 100%")
         assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
         assert _light(client, "Zhiyun panel")["state"]["brightness"] == 50  # back to the newest level, not 33
+
+
+def test_max_on_shows_the_lights_own_4300k_and_max_off_goes_back_to_the_earlier_kelvin(studio):
+    """Captain, 18 Oct: Max on turns the G200 to 4300 K by itself and it stays there after Max off, while
+    Gaffer kept showing 4600 K. He chose: Max off goes back to 4600 K, as brightness goes back."""
+    client, wire = studio
+    with client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 33, "cct": {"kelvin": 4600}}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 4600, "Gaffer at 4600 K")
+
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": True}, 1)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 4300
+
+        before = len(wire.writes)
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 4600
+        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_COLOR_TEMP for w in wire.writes[before:]),
+              "the light to be told 4600 K again")
+        sent = [zy.parse_frame(w) for w in wire.writes[before:] if zy.parse_frame(w).command == zy.Command.SET_COLOR_TEMP]
+        assert int.from_bytes(sent[-1].payload[3:5], "little") == 4600

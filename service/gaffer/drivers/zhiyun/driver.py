@@ -252,7 +252,7 @@ class ZhiyunDriver(Driver):
             await self._write(st, p.Command.MAX_MODE, p.encode_max_mode(on, st.op))
             st.sent.max_mode = on
             if on:
-                st.sent.brightness = 100.0  # the light jumps to full power by itself (live check, 18 Oct 2026)
+                self._max_mode_came_on(st)
 
     async def read_max_mode(self, light: Any) -> bool | None:
         """Ask a linked light whether Max Mode is on. None when it is not linked or did not answer.
@@ -284,9 +284,16 @@ class ZhiyunDriver(Driver):
         if writes != st.max_writes:
             return None  # Gaffer switched it meanwhile; this answer may predate that
         if on and not st.sent.max_mode:
-            st.sent.brightness = 100.0
+            self._max_mode_came_on(st)
         st.sent.max_mode = on
         return on
+
+    @staticmethod
+    def _max_mode_came_on(st: _Light) -> None:
+        """The light jumps to 100% and its Max Mode kelvin by itself (live checks, 18 Oct 2026)."""
+        st.sent.brightness = 100.0
+        if isinstance(st.model.get("max_mode_kelvin"), int):
+            st.sent.kelvin = st.model["max_mode_kelvin"]
 
     def max_mode(self, light: Any) -> bool:
         """Max Mode as last set by this driver; off for a light it has not set, or after a power-off."""

@@ -88,6 +88,8 @@ class ModelCaps:
     driver_data: dict[str, Any] = field(default_factory=dict)
     #: The light has a Max Mode (turbo) switch the driver can set. Set by ``"max_mode": true`` in the model file.
     max_mode: bool = False
+    #: The colour temperature the light switches itself to when Max Mode comes on, from ``"max_mode_kelvin"``.
+    max_mode_kelvin: int | None = None
 
     # -- what kind of light ---------------------------------------------------
 
@@ -283,6 +285,9 @@ def _check_row(raw: dict[str, Any], folder: str) -> tuple[str, dict[str, Any]]:
         raise ModelFileError("driver_data must be an object")
     if not isinstance(raw.get("max_mode", False), bool):
         raise ModelFileError("max_mode must be true or false")
+    kelvin = raw.get("max_mode_kelvin")
+    if kelvin is not None and (isinstance(kelvin, bool) or not isinstance(kelvin, int) or kelvin <= 0):
+        raise ModelFileError("max_mode_kelvin must be a whole number of kelvin")
     row = {k: v for k, v in raw.items() if k != "id"}
     row.update(driver=driver, brand=brand.strip(), match=match, driver_data=data)
     return model_id, row
@@ -432,6 +437,7 @@ def _caps_from_row(key: str, row: dict[str, Any]) -> ModelCaps:
         match=dict(row.get("match") or {}),
         driver_data=dict(row.get("driver_data") or {}),
         max_mode=row.get("max_mode") is True,
+        max_mode_kelvin=row.get("max_mode_kelvin") if isinstance(row.get("max_mode_kelvin"), int) else None,
     )
 
 
