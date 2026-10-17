@@ -196,7 +196,7 @@ reconnects with back-off until the service process ends.
 
 A look is `{"id", "name", "fade_seconds", "lights": {"<light id>": <state patch>}}`. It is saved in the `looks` collection, so it is also in `hello.store.looks` and in `store` messages. The order of the list is the slot order: slot 1 is the first look, and keys 1 to 9 and the Mac shortcuts use it. `lights` holds one state patch per light, in the same shape `set` takes, so a look made on one model is fitted to the light it is applied to.
 
-Applying a look runs every light in it. A fade of `0` sets each light at once. Any other fade starts a transition of that many seconds on each light, ending on the look's values. The service works out every light's values first and starts the lights only after that, so one light that cannot be worked out never leaves the others half moved (a driver error while a light starts is not rolled back). Each light gets its own values, also when it is in a group: a look does not mirror one light onto another. A light the look names that is no longer saved, is not on the network the service is connected to, or whose values cannot be worked out is left alone and named in `skipped`; the others still move.
+Applying a look runs every light in it. A fade of `0` sets each light at once. Any other fade starts a transition of that many seconds on each light, ending on the look's values. The service works out every light's values first and starts the lights only after that, so a look is never half applied. A light the look names that is no longer saved, is not on the network the service is connected to, or cannot take its patch is left alone and named in `skipped`; the others still move.
 
 | Method and path | Answer |
 | --- | --- |
@@ -212,7 +212,7 @@ WebSocket messages from the page:
 - `{"type":"looks.apply","id"}`: apply. Answers `{"type":"ack","of":"looks.apply","id","name","skipped"}`.
 - `{"type":"looks.save","look":{...}}`: the same body as `POST /api/looks`. Answers `{"type":"ack","of":"looks.save","look":{...}}`.
 - `{"type":"looks.delete","id"}`: delete. Deleting the current look makes no look current.
-- `{"type":"all.off"}`: all off. Answers `{"type":"ack","of":"all.off","skipped":[<light ids>]}`. The page shows a toast naming the `skipped` lights, which stayed on. The Mac shell's `POST /api/all-off` call reads the same `skipped` in the reply body but does not show it yet.
+- `{"type":"all.off"}`: all off.
 - `store.upsert`, `store.delete` refuse the `looks` collection; use the messages above.
 
 WebSocket messages to every client:
@@ -226,3 +226,16 @@ The current look is the one last applied. It is held in memory: after a restart 
 `GET /?surface=menubar|window|bare` is the page for each surface. The service serves the same page for all three; the page reads `surface` itself (`web/src/app/surface.ts`). Only `window` shows the look editor.
 
 Every HTTP request that is not a GET, HEAD or OPTIONS is refused with `403 {"error":"origin_not_allowed"}` when it carries an `Origin` header that is not the service's own origin (same check as `/ws`), because `SameSite` does not separate localhost ports. A request with no `Origin` (the Mac shell) is allowed. `POST /api/looks` also needs `Content-Type: application/json` (`415 json_required` otherwise).
+
+## Schedules (SPEC-013)
+
+A schedule is `{"id", "name", "enabled", "at": "HH:MM", "days": [0-6], "action": "look" | "off", "target"}`. It is saved in the `schedules` collection, so it is also in `hello.store.schedules` and in `store` messages. `at` is 24-hour local time on the Mac. `days` counts from Monday = 0 and holds at least one day. `target` is a look id and is needed for `look` only. When the minute comes on one of its days the service applies the look (as `looks.apply`) or turns every light off (as `all.off`), once. Schedules run only while Gaffer is open and the Mac is awake. A schedule whose look has been deleted does nothing.
+
+WebSocket messages from the page:
+
+- `{"type":"schedules.save","schedule":{...}}`: add one, or replace the one with the same `id`. Answers `{"type":"ack","of":"schedules.save","schedule":{...}}`. Refused with `{"type":"error","text":...}` and nothing stored: no name, a name over 80 characters or with control characters, a time that is not `HH:MM`, no days or a day outside 0 to 6, an action other than `look` or `off`, a `look` with no target or a look that does not exist.
+- `{"type":"schedules.delete","id"}`: delete.
+- `store.upsert`, `store.delete` refuse the `schedules` collection; use the messages above.
+- `{"type":"store","collection":"schedules","items":[...]}` goes to every client after a save or delete.
+
+Only the `window` surface shows the schedule editor.
