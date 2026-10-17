@@ -17,6 +17,7 @@ routes in ``phone_routes`` (Mac only: a phone can never read the PIN or switch a
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import ipaddress
 import json
@@ -240,6 +241,16 @@ class PhoneListener:
 # --- the state -----------------------------------------------------------------------------------
 
 
+def saved_port(saved: Path) -> int | None:
+    """The port phone access used last time, if it was left on, so phones keep the same address."""
+    try:
+        data = json.loads(saved.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    port = data.get("port") if isinstance(data, dict) and data.get("enabled") is True else None
+    return port if isinstance(port, int) and not isinstance(port, bool) and 0 < port < 65536 else None
+
+
 class PhoneAccess:
     """Whether phones may connect, the PIN, and who has entered it."""
 
@@ -394,12 +405,20 @@ class PhoneAccess:
         """Write whether access is on and its PIN, readable by this user only."""
         if self._saved is None:
             return
-        data = json.dumps({"enabled": self.enabled, "pin": self.pin if self.enabled else None})
+        data = json.dumps({"enabled": self.enabled, "pin": self.pin if self.enabled else None, "port": self.port})
         tmp = self._saved.with_name(self._saved.name + ".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as out:
             out.write(data)
         os.replace(tmp, self._saved)
+
+    def _save_or_warn(self) -> bool:
+        try:
+            self._save()
+            return True
+        except OSError:
+            logger.warning("phone access settings could not be saved", exc_info=True)
+            return False
 
     async def restore(self) -> None:
         """Switch access back on with its old PIN if it was on when Gaffer last stopped."""
@@ -414,7 +433,11 @@ class PhoneAccess:
             return
         pin = saved.get("pin") if isinstance(saved, dict) and saved.get("enabled") is True else None
         if isinstance(pin, str) and len(pin) == PIN_DIGITS and pin.isascii() and pin.isdigit():
-            await self.enable(pin=pin)
+            try:
+                await self.enable(pin=pin)
+            except (PhoneUnavailable, OSError):
+                # The lights matter more than the phone: Gaffer starts, with phone access off for now.
+                logger.warning("phone access could not be switched back on at start; it stays off", exc_info=True)
 
     async def enable(self, *, pin: str | None = None) -> None:
         async with self._guard():
@@ -430,31 +453,38 @@ class PhoneAccess:
             else:
                 self.pin, self.wrong = pin, 0
             self.enabled = True
-            self._save()
+            self._save_or_warn()
             self.refresh()  # the Tailscale names join the allowed set when the tool answers
 
     async def disable(self, *, save: bool = True) -> None:
         """Switch access off. ``save=False`` (Gaffer quitting) closes it now but leaves it on for the next start."""
         async with self._guard():
-            self.enabled = False
-            if save:
-                self._save()
-            self.pin = None
-            self._sign_everyone_out()
-            self._hosts, self._targets = frozenset(), []
-            check, self._check = self._check, None
-            if check is not None:
-                check.cancel()  # kills a `tailscale` that is still running
-                await asyncio.gather(check, return_exceptions=True)
-            listener, self._listener = self._listener, None
-            if listener is not None:
-                await listener.stop()
+            try:
+                await self._close()
+            finally:
+                if save and not self._save_or_warn() and self._saved is not None:
+                    with contextlib.suppress(OSError):
+                        self._saved.unlink()  # never left saying "on" once switched off
+
+    async def _close(self) -> None:
+        """Turn access off now: forget the PIN, sign every phone out, close the listener."""
+        self.enabled = False
+        self.pin = None
+        self._sign_everyone_out()
+        self._hosts, self._targets = frozenset(), []
+        check, self._check = self._check, None
+        if check is not None:
+            check.cancel()  # kills a `tailscale` that is still running
+            await asyncio.gather(check, return_exceptions=True)
+        listener, self._listener = self._listener, None
+        if listener is not None:
+            await listener.stop()
 
     async def new_pin(self) -> None:
         async with self._guard():
             if self.enabled:
                 self._new_pin()
-                self._save()
+                self._save_or_warn()
 
     def status(self) -> dict[str, Any]:
         """What the Mac window shows. Only ever sent to the Mac itself: it holds the PIN."""

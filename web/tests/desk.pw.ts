@@ -283,3 +283,13 @@ test('All off turns into All on, and pressing it again turns every light back on
   await expect.poll(powers).not.toContain(false)
   await expect(desk(page).getByRole('button', { name: /All off/ })).toBeVisible()
 })
+
+test('the 0 key does what the All off / All on button says', async ({ page }) => {
+  await open(page, 'phone', 390)
+  const powers = async () => (await page.request.get(`${base()}/api/lights`).then((r) => r.json())).lights.map((l: { state: { power: boolean } }) => l.state.power)
+  await page.keyboard.press('0')
+  await expect.poll(powers).not.toContain(true)
+  await expect(page.getByRole('button', { name: /All on/ })).toBeVisible()  // the page has heard every light go off
+  await page.keyboard.press('0')
+  await expect.poll(powers).not.toContain(false)
+})

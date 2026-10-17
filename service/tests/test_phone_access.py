@@ -620,3 +620,77 @@ def test_phone_access_stays_on_with_the_same_pin_after_gaffer_restarts_until_swi
 
     with studio_with(tmp_path, cli, saved) as third:  # switched off stays off
         assert third.mac.get("/api/phone").json()["enabled"] is False
+
+
+def _start_service(tmp_path: Path, folder: Path) -> tuple[subprocess.Popen, int]:
+    service = subprocess.Popen(
+        [sys.executable, "-I", "-B", "-m", "gaffer", "--demo", "--session-from-stdin", "--data", str(tmp_path / "data")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        env={"HOME": str(tmp_path), "PATH": f"{folder}:/usr/bin:/bin"}, start_new_session=True,
+    )
+    service.stdin.write(SECRET + "\n")
+    service.stdin.flush()
+    line = ""
+    while "GAFFER_SERVICE_READY" not in line:
+        assert service.poll() is None, "the service did not start"
+        line = service.stdout.readline()
+    return service, int(line.split("port=")[1])
+
+
+def test_after_a_real_restart_phones_keep_the_same_address_and_pin(tmp_path):
+    # The Mac app starts the service with no --port, so each start used to pick a new one and a phone's
+    # saved address stopped working even with the same PIN (review of PR 25).
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    fake_tailscale(folder, RUNNING)
+    service, first_port = _start_service(tmp_path, folder)
+    try:
+        with httpx.Client(base_url=f"http://127.0.0.1:{first_port}", timeout=20, cookies={COOKIE: SECRET}) as web:
+            pin = web.post("/api/phone", json={"enabled": True}).json()["pin"]
+        service.stdin.close()  # how the Mac app quits the service
+        assert service.wait(timeout=30) == 0
+        service, second_port = _start_service(tmp_path, folder)
+        assert second_port == first_port
+        with httpx.Client(base_url=f"http://127.0.0.1:{second_port}", timeout=20, cookies={COOKIE: SECRET}) as web:
+            status = web.get("/api/phone").json()
+        assert (status["enabled"], status["pin"]) == (True, pin)
+    finally:
+        if service.poll() is None:
+            os.killpg(service.pid, signal.SIGKILL)
+            service.wait()
+
+
+def test_gaffer_still_starts_when_phone_access_cannot_reopen_its_port(tmp_path):
+    taken = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)  # another program holds the port, both IPv6 and IPv4
+    taken.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+    taken.bind(("::", 0))
+    taken.listen()
+    port = taken.getsockname()[1]
+    saved = tmp_path / "data" / "phone.json"
+    saved.parent.mkdir(parents=True)
+    saved.write_text(json.dumps({"enabled": True, "pin": "123456", "port": port}))
+    access = PhoneAccess(port=port, lan_ip=lambda: LAN, tailscale_cli=lambda: None, saved=saved)
+    app = create_app(demo=True, data_dir=tmp_path / "data", phone=access)
+    guarded = protect(app, SECRET, access)
+    access.bind_listener(guarded, 1.0)
+    try:
+        with TestClient(guarded, base_url=f"http://127.0.0.1:{port}") as mac:
+            mac.cookies.set(COOKIE, SECRET)
+            assert mac.get("/api/lights").status_code == 200  # the lights still work
+            assert mac.get("/api/phone").json()["enabled"] is False
+    finally:
+        taken.close()
+
+
+def test_switching_off_closes_access_even_when_the_setting_cannot_be_saved(tmp_path):
+    cli, saved = fake_tailscale(tmp_path, RUNNING), tmp_path / "data" / "phone.json"
+    with studio_with(tmp_path, cli, saved) as studio:
+        pin = studio.switch_on()
+        assert studio.sign_in(pin).status_code == 200
+        saved.parent.chmod(0o500)  # the data folder can no longer be written
+        try:
+            reply = studio.mac.post("/api/phone", json={"enabled": False})
+            assert reply.status_code == 200 and reply.json()["enabled"] is False
+            assert studio.phone.get("/api/lights").status_code in (401, 403)  # the phone is signed out
+        finally:
+            saved.parent.chmod(0o700)

@@ -37,7 +37,7 @@ from .app import create_app
 from .hub import LINK_STOP_SECONDS
 from .listener import guarded_config
 from .paths import AlreadyRunning, data_home, hold_data_folder
-from .phone import PhoneAccess
+from .phone import PhoneAccess, saved_port
 from .session import protect, runtime_file, write_runtime_file
 
 
@@ -165,9 +165,20 @@ def main(argv: list[str] | None = None) -> None:
     if args.import_keys is not None:
         _import_keys(args, parser)
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", args.port))
+    phone_file = Path(args.data) / "phone.json"
+    # With phone access left on, take the same port again so phones keep the address they have
+    # (Captain, 18 Oct 2026). If it is taken now, any free port: phone access shows the new address.
+    wanted = [args.port] if args.port else [p for p in (saved_port(phone_file),) if p] + [0]
+    for index, port_choice in enumerate(wanted):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port_choice))
+            break
+        except OSError:
+            sock.close()
+            if index == len(wanted) - 1:
+                raise
     sock.listen()
     port = sock.getsockname()[1]
 
@@ -176,7 +187,7 @@ def main(argv: list[str] | None = None) -> None:
     # Phone access (SPEC-015) is switched on from the Mac window, and only then does the service listen
     # beyond 127.0.0.1. Once on, it stays on with the same PIN across restarts until switched off
     # (Captain, 18 Oct 2026), so it is kept in the data folder.
-    phone = PhoneAccess(port=port, saved=Path(args.data) / "phone.json")
+    phone = PhoneAccess(port=port, saved=phone_file)
     app = create_app(demo=args.demo, data_dir=args.data, on_shutdown=_remove_runtime_file, phone=phone)
     guarded = protect(app, secret, phone)
     phone.bind_listener(guarded, CONNECTIONS_SECONDS)
