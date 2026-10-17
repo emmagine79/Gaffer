@@ -16,10 +16,13 @@ Two facts come from an advertisement alone, without connecting:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 MESH_PROV = "00001827-0000-1000-8000-00805f9b34fb"
 MESH_PROXY = "00001828-0000-1000-8000-00805f9b34fb"
@@ -94,7 +97,10 @@ class Scanner:
         self.devices: dict[str, Any] = {}
         self.busy = False
 
-    async def scan(self, seconds: float, on_found: Callable[[Nearby], None] | None = None) -> list[Nearby]:
+    async def scan(self, seconds: float, on_found: Callable[[Nearby], None] | None = None,
+                   on_other: Callable[[Any, Any], None] | None = None) -> list[Nearby]:
+        """Listen for ``seconds``. ``on_found`` hears each Godox light; ``on_other(device, advert)`` hears every
+        other advertisement, so the hub can ask the other brands' drivers whether it is theirs."""
         from bleak import BleakScanner
 
         found: dict[str, Nearby] = {}
@@ -106,6 +112,11 @@ class Scanner:
                 {int(k): bytes(v) for k, v in (adv.manufacturer_data or {}).items()},
             )
             if seen is None:
+                if on_other is not None:
+                    try:
+                        on_other(device, adv)
+                    except Exception:  # one odd advertisement never ends the scan
+                        logger.warning("could not read an advertisement from %s", device.address, exc_info=True)
                 return
             self.devices[seen.address] = device
             previous = found.get(seen.address)

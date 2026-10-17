@@ -28,7 +28,9 @@ from godox_mesh_bt.crypto import k3
 from godox_mesh_bt.state import MeshState
 
 from .catalog import model_caps, models_index
-from .drivers import Driver, DriverContext, build_drivers
+from .discovery import Nearby
+from .drivers import Advert, Driver, DriverContext, build_drivers
+from .drivers.demo import DemoDriver
 from .drivers.godox import GodoxDriver
 from .effects import REGISTRY
 from .effects.profile import effect_profile
@@ -61,6 +63,11 @@ SETTLE_SECONDS = 1.2
 BATTERY_INTERVAL = 120.0
 #: How long stopping the hub waits for the link to let go of the light before cancelling it.
 LINK_STOP_SECONDS = 8.0
+#: How long flashing a light may take before the hub gives up and frees the light for another try. Derived
+#: from the drivers: Yongnuo's connect (CONNECT_TIMEOUT_S, 20 s, the same the Godox link allows) and its
+#: disconnect (DISCONNECT_TIMEOUT_S, 5 s), plus the pulse itself, which every driver ends in under 5 s
+#: (Godox 4 x 0.45 s, Zhiyun 4 x 0.35 s, Yongnuo 3 x 0.3 s, each with its write).
+IDENTIFY_SECONDS = 20.0 + 5.0 + 5.0
 #: A light's changed state is saved this long after the change (and at once when the hub stops).
 SAVE_AFTER_SECONDS = 2.0
 #: Engine kinds that animate a light; a group mirrors them only when "effects" is synced.
@@ -192,6 +199,8 @@ class Hub:
         self._started = False
         self._save_due = 0.0
         self._switch_lock = asyncio.Lock()
+        #: Lights being flashed right now: a second request for one of them waits for the first to end.
+        self._identifying: set[str] = set()
         self.look: dict[str, str] | None = None  # the look on now ({id, name}); see looks.py
         self.cue: dict[str, Any] | None = None  # the active cue ({id, step}); see cues.py
 
@@ -778,6 +787,9 @@ class Hub:
                 await self._move_to_network(fixture.light.network)
 
     async def scan(self, seconds: float = 6.0) -> list[dict[str, Any]]:
+        """Listen for lights of every brand. Godox lights are read as lumen reads them; any other
+        advertisement goes to the drivers, and the first whose ``match`` names a model lists it by that
+        model's name."""
         if self.scanning:
             return list(self.nearby.values())
         public_ids = self.library.network_ids_by_public_id()
@@ -786,15 +798,115 @@ class Hub:
         self._broadcast({"type": "nearby", "nearby": [], "scanning": True})
 
         def found(nearby: Any) -> None:
-            self.nearby[nearby.address] = self.library.describe(nearby, public_ids)
+            entry = self.library.describe(nearby, public_ids)
+            caps = model_caps(entry["radio_id"])
+            entry["needs_channel"] = bool(entry["relation"] == "new" and self.driver_for(caps).needs_channel(caps))
+            self.nearby[nearby.address] = entry
             self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": True})
 
+        told: dict[str, tuple[str | None, str]] = {}  # what each other-brand light was last listed as
+
+        def heard_other(device: Any, adv: Any) -> None:
+            advert = Advert(
+                address=str(device.address), name=adv.local_name or device.name, rssi=adv.rssi,
+                services=tuple(str(u).lower() for u in (adv.service_uuids or ())),
+                manufacturer_data={int(k): bytes(v) for k, v in (adv.manufacturer_data or {}).items()},
+            )
+            match = self.registry.match(advert)
+            if match is None or not model_caps(match[1]).known:
+                return
+            address = advert.address.upper()
+            if told.get(address) == (advert.name, match[1]) and address in self.nearby:
+                # The same light saying the same thing: keep its strength current, but do not re-list it to
+                # every client on each advert (a light advertises several times a second).
+                self.nearby[address]["rssi"], self.nearby[address]["seen_at"] = advert.rssi, time.time()
+                return
+            told[address] = (advert.name, match[1])
+            found(Nearby(address, advert.name, advert.rssi, "new", match[1], None, time.time()))
+
         try:
-            await self.scanner.scan(seconds, found)
+            await self.scanner.scan(seconds, found, heard_other)
         finally:
             self.scanning = False
             self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": False})
         return list(self.nearby.values())
+
+    async def add_light(self, client: Client, address: str, name: str = "", channel: Any = None) -> SavedLight:
+        """Save a light of a brand with nothing to pair (Zhiyun, Yongnuo), found by the last scan.
+
+        Everything is checked before anything is saved, so a refused request changes nothing. A model
+        whose driver needs a channel (Yongnuo) is refused without a valid one.
+        """
+        address = address.upper()
+        seen = self.nearby.get(address)
+        if seen is None or seen.get("relation") != "new":
+            raise HubError("scan first: only a light the last scan found can be added")
+        model_id = seen["radio_id"]
+        caps = model_caps(model_id)
+        driver = self.driver_for(caps)
+        if driver.needs_channel(caps):
+            if channel is None or channel == "":
+                raise HubError("Set this light's channel first. It must match the channel set on the light.")
+            try:
+                channel = driver.check_channel(channel)
+            except ValueError as err:
+                raise HubError(str(err)) from err
+        else:
+            channel = None
+        network = self.library.default_network()
+        light = self.library.add_paired(
+            network_id=network, address=address, radio_id=model_id,
+            node_address=self.library.next_node_address(network), num_elements=1, device_key="",
+            name=name, channel=channel,
+        )
+        fixture = self._add_fixture(light)
+        client.selected = light.id
+        if self._started:
+            self._spawn(self._connect_other(fixture))
+        seen["relation"], seen["light_id"], seen["needs_channel"] = "saved", light.id, False  # true only for a new light
+        self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": self.scanning})
+        self._broadcast_lights()
+        self._log("lights", f"added {light.name} ({caps.brand} {caps.name})")
+        return light
+
+    async def identify(self, light_id: str) -> str:
+        """Flash a light so someone can see which one it is. Returns the id of the driver that did it.
+
+        A second request for a light already flashing returns at once. A driver that hangs is stopped
+        after ``IDENTIFY_SECONDS``, so the light can be flashed again.
+        """
+        fixture = self.fixture(light_id)
+        driver = fixture.driver
+        if not self.on_network(fixture):
+            raise HubError(f"{fixture.light.name} is on another network. Switch to it first.")
+        if light_id in self._identifying:
+            return driver.id
+        self._identifying.add(light_id)
+        try:
+            # An effect would keep writing through the pulse, so it ends first (the light goes back to what it
+            # showed before). The driver then puts the light back to the fixture's state, not to its own default.
+            fixture.engine.stop()
+            if driver is not self.godox or not fixture.adopting:  # a mesh light not read yet has no state of ours to trust
+                driver.apply(fixture.light, fixture.state)
+            await asyncio.wait_for(driver.identify(fixture.light), timeout=IDENTIFY_SECONDS)
+        except TimeoutError:
+            raise HubError(f"{fixture.light.name} did not answer. Check it is on and close by.") from None
+        except Exception:  # noqa: BLE001 - the page gets plain words, the log gets the detail
+            logger.exception("could not flash %s", fixture.light.name)
+            raise HubError(f"Could not flash {fixture.light.name}. Check it is on and close by.") from None
+        finally:
+            self._identifying.discard(light_id)
+        return driver.id
+
+    def demo_hold(self, light_id: str, held: bool) -> None:
+        """Demo only: pretend an official app takes a light's connection, or lets go of it."""
+        if not self.demo:
+            raise HubError("only the demo can pretend another app holds a light")
+        driver = self.fixture(light_id).driver
+        if not isinstance(driver, DemoDriver):
+            raise HubError("that is not a demo stand-in light")
+        driver.set_held(light_id, held)
+        self._broadcast_lights()
 
     def _pairing_step(self, address: str, step: str, error: str = "") -> None:
         self.pairing = {"address": address, "step": step, "error": error, "at": time.time()}
@@ -986,7 +1098,18 @@ class Hub:
                 await self._relink(nxt)
         self._broadcast({"type": "groups", "groups": groups})
         self._broadcast_lights()
+        self._relist_forgotten(light_id)
         self._log("lights", f"forgot {fixture.light.name}")
+
+    def _relist_forgotten(self, light_id: str) -> None:
+        """A Zhiyun or Yongnuo light added from this scan and then forgotten is a new light again, so the
+        page can add it again at once (its adverts are not re-listed, so nothing else would reset it)."""
+        for entry in self.nearby.values():
+            if entry.get("light_id") == light_id and entry.get("driver") != "godox":
+                caps = model_caps(entry["radio_id"])
+                entry["relation"], entry["light_id"] = "new", None
+                entry["needs_channel"] = self.driver_for(caps).needs_channel(caps)
+                self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": self.scanning})
 
     async def power_all(self, on: bool, fade: float = 0.0) -> None:
         for fixture in self.fixtures.values():
@@ -1049,7 +1172,8 @@ class Hub:
             if now - last_stats > 1.0:
                 last_stats = now
                 self._broadcast({"type": "stats", "stats": self.stats(),
-                                 "reachable": {f.id: f.reachable for f in self.fixtures.values()}})
+                                 "reachable": {f.id: f.reachable for f in self.fixtures.values()},
+                                 "held": {f.id: f.held for f in self.fixtures.values()}})
                 self._save_states()
                 for fixture in list(self.fixtures.values()):
                     if fixture.engine.expire_stream():
