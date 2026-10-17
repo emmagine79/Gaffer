@@ -58,6 +58,10 @@ RESPONSE_PREFIX = bytes([0xF1, 0x11, 0x02])
 #: inside this window are treated as echoes, never as outside changes.
 SETTLE_SECONDS = 1.2
 BATTERY_INTERVAL = 120.0
+#: How long stopping the hub waits for the link to let go of the light before cancelling it.
+LINK_STOP_SECONDS = 8.0
+#: A light's changed state is saved this long after the change (and at once when the hub stops).
+SAVE_AFTER_SECONDS = 2.0
 #: Engine kinds that animate a light; a group mirrors them only when "effects" is synced.
 ANIMATIONS = frozenset({"effect", "stream", "timeline"})
 SYNC_PROPS = ("power", "brightness", "white", "colour", "effects")
@@ -315,7 +319,7 @@ class Hub:
         task, self._link_task = self._link_task, None
         if task is not None:
             try:
-                await asyncio.wait_for(task, timeout=8)
+                await asyncio.wait_for(task, timeout=LINK_STOP_SECONDS)
             except (TimeoutError, asyncio.CancelledError):
                 task.cancel()
             except Exception as err:  # noqa: BLE001 - it is going away either way
@@ -628,7 +632,7 @@ class Hub:
         fixture.dirty = True
         if send and self.on_network(fixture):
             fixture.driver.apply(fixture.light, state)
-        self._save_due = self._save_due or time.monotonic() + 2.0
+        self._save_due = self._save_due or time.monotonic() + SAVE_AFTER_SECONDS
         if mirror:
             self._mirror_from(fixture)
 
