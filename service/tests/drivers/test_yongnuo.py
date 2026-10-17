@@ -10,11 +10,14 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import asyncio
+import importlib
+import pkgutil
 
 import pytest
 import pytest_asyncio
 
-from gaffer.drivers.base import Advert
+import gaffer.drivers
+from gaffer.drivers.base import Advert, Driver
 from gaffer.drivers.yongnuo import YongnuoDriver, retry_delay
 from gaffer.drivers.yongnuo.protocol import encode_plain
 from gaffer.state import Cct, LightState
@@ -94,6 +97,17 @@ def test_yn150_advert_is_listed_as_yongnuo_yn150(driver):
     assert row["driver_data"]["frame_variant"] == "plain"
 
 
+def test_the_driver_is_found_by_the_registry_rule_and_matches_a_yn150li_advert():
+    # The rule in gaffer/drivers/base.py: import every sub-package, take each concrete Driver.
+    for info in pkgutil.iter_modules(gaffer.drivers.__path__):
+        if info.ispkg:
+            importlib.import_module(f"gaffer.drivers.{info.name}")
+    found = {cls.id: cls for cls in Driver.__subclasses__() if not getattr(cls, "__abstractmethods__", None)}
+    assert "yongnuo" in found
+    advert = Advert(address="x", name="YN150Li", services=("0000feff-0000-1000-8000-00805f9b34fb",))
+    assert found["yongnuo"]().match(advert) == "YN150"
+
+
 async def test_inputs_outside_the_range_are_clamped_or_refused(driver):
     driver.apply(light("YN150", 3), LightState(brightness=100, cct=Cct(kelvin=9000)))
     await driver.flush()
@@ -116,6 +130,9 @@ class Scripted:
         self.made: list[FlakyTransport] = []
         self.sent: dict[str, list[str]] = {}
         self.write_failures = 0  # the next N writes (any light) raise
+        self.write_error: Exception = OSError("write failed")
+        self.slow: set[str] = set()  # these addresses' connect waits for .release before it succeeds
+        self.release = asyncio.Event()
         self.dead: set[str] = set()  # these addresses never connect: connect raises
         self.hung: set[str] = set()  # these addresses' connect never returns
         self.connect_attempts: dict[str, int] = {}
@@ -140,6 +157,8 @@ class FlakyTransport:
         await asyncio.sleep(0)
         if self.address in self.script.hung:
             await asyncio.Event().wait()
+        if self.address in self.script.slow:
+            await self.script.release.wait()
         if self.address in self.script.dead:
             raise TimeoutError("no answer")
         self._up = True
@@ -149,7 +168,7 @@ class FlakyTransport:
             self.script.write_failures -= 1
             if not self.script.stuck_connected:
                 self._up = False
-            raise OSError("write failed")
+            raise self.script.write_error
         self.script.sent.setdefault(self.address, []).append(bytes(data).hex().upper())
 
     async def disconnect(self) -> None:
@@ -219,19 +238,46 @@ async def test_a_failed_send_is_tried_again_after_the_project_backoff(rig):
     assert sleep.delays == [retry_delay(1), retry_delay(2)] == [2.0, 4.0]
 
 
-async def test_a_dead_light_does_not_hold_up_a_healthy_one_or_get_hammered(rig):
+async def test_a_dead_light_does_not_hold_up_a_healthy_one_and_is_not_retried_in_a_loop(rig):
     script, sleep, build = rig
     driver = build()
     dead, fine = light("YN150", 1), light("YNLUX100PRO", 2)
     script.dead.add(dead.address)
     sleep.gate.clear()  # the dead light waits out its delay for the whole test
-    for level in range(1, 41):  # a fader dragged at speed
-        driver.apply(dead, lit(level))
-        await asyncio.sleep(0)
+    driver.apply(dead, lit())
     driver.apply(fine, lit(100, 5600))
     await until(lambda: script.bytes_for(fine.address))
     assert script.bytes_for(fine.address) == ["AE030902" "15E0" "64A000"]
+    for _ in range(100):  # time passes with no new input for the dead light
+        await asyncio.sleep(0)
     assert script.connect_attempts[dead.address] == 1  # one try, then it waited
+    assert sleep.delays == [2.0]
+
+
+async def test_new_input_ends_the_back_off_and_is_tried_at_once(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YNLUX100PRO", 7)
+    script.dead.add(yn.address)
+    sleep.gate.clear()  # the delay would never end on its own
+    driver.apply(yn, lit(50, 3300))
+    await until(lambda: sleep.delays)  # failed once, now waiting
+    script.dead.clear()  # the phone app let go; the user moves the fader
+    driver.apply(yn, lit(91.6, 3300))
+    await until(lambda: script.bytes_for(yn.address))
+    assert script.bytes_for(yn.address) == ["AE0309070CE45BA006"]
+    assert driver.status(yn)["reachable"] is True
+
+
+async def test_a_value_error_from_the_link_is_retried_not_dropped_as_a_bad_state(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YNLUX100PRO", 7)
+    script.write_failures = 1
+    script.write_error = ValueError("closed")
+    driver.apply(yn, lit(91.6, 3300))
+    await until(lambda: script.bytes_for(yn.address))
+    assert script.bytes_for(yn.address) == ["AE0309070CE45BA006"]
 
 
 async def test_a_hung_connect_to_one_light_does_not_stop_another(rig):
@@ -289,29 +335,84 @@ async def test_a_light_that_is_not_a_yongnuo_model_is_refused_in_plain_words(rig
         build().apply(stray, lit())
 
 
-async def test_flush_waiting_on_a_stuck_connect_does_not_spin_the_event_loop(rig):
+async def test_a_connect_that_never_answers_times_out_into_the_back_off_and_flush_returns(rig):
     script, sleep, build = rig
-    driver = build()
+    driver = build(connect_timeout=0.01)
     stuck = light("YN150", 1)
     script.hung.add(stuck.address)
+    sleep.gate.clear()
     driver.apply(stuck, lit())
-    loop = asyncio.get_running_loop()
-    scheduled = 0
-    real_call_soon = loop.call_soon
+    await asyncio.wait_for(driver.flush(), 5)  # without a bound on connect this waits for ever
+    assert sleep.delays == [2.0]
+    assert driver.status(stuck) == {"reachable": False, "held": True}
+    await asyncio.wait_for(driver.flush(), 5)  # and with nothing queued it returns at once
 
-    def counting(*args, **kwargs):
-        nonlocal scheduled
-        scheduled += 1
-        return real_call_soon(*args, **kwargs)
 
-    loop.call_soon = counting
-    waiting = asyncio.ensure_future(driver.flush())
-    turns = 200
-    for _ in range(turns):  # this loop alone schedules one callback per turn
-        await asyncio.sleep(0)
-    loop.call_soon = real_call_soon
-    waiting.cancel()
-    assert scheduled < turns * 1.5  # a flush that polls would add a second callback every turn
+async def test_a_failed_connect_does_not_leave_its_link_half_open(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YN150", 1)
+    script.dead.add(yn.address)
+    with pytest.raises(TimeoutError):
+        await driver.connect(yn)
+    assert [t.disconnected for t in script.made] == [True]
+
+
+async def test_identify_that_breaks_off_mid_pulse_puts_the_light_back(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YNLUX100PRO", 7)
+    driver.apply(yn, lit(30, 3300))
+    await driver.flush()
+    sleep.on_wait = lambda n: setattr(script, "write_failures", 1) if n == 1 else None
+    with pytest.raises(OSError):
+        await driver.identify(yn)
+    await until(lambda: script.bytes_for(yn.address)[-1] == "AE030907" "0CE4" "1EA000")  # back to 30 %
+    assert script.bytes_for(yn.address)[1] == "AE030907" "0CE4" "64A000"  # the pulse did start
+
+
+async def test_stop_while_identify_is_mid_pulse_leaves_no_link_open(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YNLUX100PRO", 7)
+    driver.apply(yn, lit(30, 3300))
+    await driver.flush()
+    sleep.gate.clear()
+    pulse = asyncio.ensure_future(driver.identify(yn))
+    await until(lambda: sleep.delays)  # the pulse is holding the light, waiting between frames
+    await driver.stop()
+    sleep.gate.set()
+    with pytest.raises(ConnectionAbortedError):
+        await pulse
+    assert len(script.made) == 1 and not script.made[0].connected
+
+
+async def test_stop_while_a_connect_is_in_flight_releases_the_link_it_opens(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YN150", 4)
+    script.slow.add(yn.address)
+    opening = asyncio.ensure_future(driver.connect(yn))
+    await until(lambda: script.made)
+    await driver.stop()
+    script.release.set()
+    with pytest.raises(ConnectionAbortedError):
+        await opening
+    assert not any(t.connected for t in script.made)
+    assert driver.status(yn)["reachable"] is None
+
+
+async def test_stop_forgets_what_it_knew_so_a_restarted_light_is_switched_on_again(rig):
+    script, sleep, build = rig
+    driver = build()
+    yn = light("YN150", 21)
+    driver.apply(yn, lit(90, 5300))
+    await driver.flush()
+    await driver.stop()
+    await driver.start()
+    driver.apply(yn, lit(90, 5300))
+    await driver.flush()
+    assert script.bytes_for(yn.address).count("AE0106150156") == 2  # power-on sent again after the restart
 
 
 async def test_identify_wakes_a_plain_light_that_is_off_and_puts_it_back_off(rig):
