@@ -21,6 +21,40 @@ it('the import window shows the steps with the Finder path', async () => {
   expect(host.textContent).toContain('Choose GodoxLight.db')
 })
 
+it('pasting an export shows how many lights were imported and which were skipped', async () => {
+  const { request: savedRequest, select: savedSelect } = useStudio.getState()
+  const request = vi.fn().mockResolvedValue({
+    type: 'ack', light: 'a1', lights: ['a1', 'b2'], skipped: ['Test spare: those keys are not usable'],
+  })
+  useStudio.setState({ request, select: vi.fn() })
+  const onDone = vi.fn()
+  ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => root.render(<GodoxImport onDone={onDone} onBack={() => {}} />))
+    const box = host.querySelector('textarea') as HTMLTextAreaElement
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(box, '{"netKeys": []}')
+      box.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const importButton = [...host.querySelectorAll('button')].find((b) => /import pasted text/i.test(b.textContent ?? ''))
+    await act(async () => importButton?.click())
+
+    expect(request).toHaveBeenCalledWith({ type: 'lights.import', meshJson: '{"netKeys": []}' }, 30000)
+    expect(host.querySelector('h2')?.textContent).toMatch(/2 lights imported/)
+    expect(host.querySelector('.hint')?.textContent).toContain('Skipped Test spare: those keys are not usable')
+    const done = [...host.querySelectorAll('button')].find((b) => /^done$/i.test((b.textContent ?? '').trim()))
+    await act(async () => done?.click())
+    expect(onDone).toHaveBeenCalledOnce()
+  } finally {
+    await act(async () => root.unmount())
+    host.remove()
+    useStudio.setState({ request: savedRequest, select: savedSelect })
+  }
+})
+
 it('a file too large for the socket gets a plain message and is never sent', async () => {
   const request = vi.fn()
   const toast = vi.fn()

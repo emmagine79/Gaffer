@@ -212,6 +212,7 @@ class Hub:
         #: Lights being flashed right now: a second request for one of them waits for the first to end.
         self._identifying: set[str] = set()
         self.look: dict[str, str] | None = None  # the look on now ({id, name}); see looks.py
+        self.cue: dict[str, Any] | None = None  # the active cue ({id, step}); see cues.py
 
         self.registry = build_drivers(DriverContext(demo=demo, data_dir=getattr(store, "root", None)), demo=demo)
         godox = self.registry.get("godox")
@@ -243,7 +244,15 @@ class Hub:
         self.fixtures[light.id] = fixture
         if self._started:
             self._engine_tasks[light.id] = asyncio.create_task(fixture.engine.run())
+        self._tell_cue()
         return fixture
+
+    def _tell_cue(self) -> None:
+        """A light came or went: the look the active cue's Go runs next may now be another (SPEC-014)."""
+        if getattr(self, "cue", None) is not None:
+            from . import cues  # cues imports this module
+
+            cues.republish(self)
 
     def driver_for(self, caps: Any) -> Driver:
         """The driver a model names. A driver that is not installed gives a stand-in, never another brand's."""
@@ -255,6 +264,7 @@ class Hub:
 
     async def _drop_fixture(self, light_id: str) -> None:
         fixture = self.fixtures.pop(light_id, None)
+        self._tell_cue()
         task = self._engine_tasks.pop(light_id, None)
         if task is not None:
             task.cancel()
@@ -737,7 +747,11 @@ class Hub:
                 return group
         return None
 
-    def _mirror_from(self, leader: Fixture) -> None:
+    def mirror_from(self, leader: Fixture, *, skip: frozenset[str] = frozenset()) -> None:
+        """Copy what ``leader``'s group shares onto the other members, except the lights in ``skip``."""
+        self._mirror_from(leader, skip)
+
+    def _mirror_from(self, leader: Fixture, skip: frozenset[str] = frozenset()) -> None:
         group = self.group_of(leader.id)
         if group is None:
             return
@@ -747,7 +761,7 @@ class Hub:
             return
         for member_id in group["members"]:
             follower = self.fixtures.get(member_id)
-            if follower is None or follower is leader or not self.on_network(follower):
+            if follower is None or follower is leader or member_id in skip or not self.on_network(follower):
                 continue
             new = mirror(leader.state, follower.state, props, follower.caps, leader_caps=leader.caps)
             if new == follower.state:
@@ -992,6 +1006,26 @@ class Hub:
         self._log("lights", f"paired {light.name} as node 0x{node:04x}")
         return light
 
+    async def _take_imported(self, light: SavedLight) -> bool:
+        """Put an imported light on the desk. True when the link must be pointed at its network again.
+
+        A light already here whose keys and model are unchanged keeps its fixture: its state and any
+        running effect carry on. If its keys or model changed the fixture is rebuilt, after the
+        states are saved, so only a running effect stops.
+        """
+        fixture = self.fixtures.get(light.id)
+        if fixture is not None:
+            old = fixture.light
+            if (old.network, old.node_address, old.num_elements, old.device_key, old.radio_id, old.address) == (
+                    light.network, light.node_address, light.num_elements, light.device_key, light.radio_id,
+                    light.address):
+                fixture.light = light  # a name or model source may differ; nothing else
+                return False
+            self._save_states(force=True)
+            await self._drop_fixture(light.id)
+        self._add_fixture(light)
+        return True
+
     async def import_keys(self, client: Client, keys: Any, address: str, name: str = "",
                           radio_id: str = "") -> SavedLight:
         if not isinstance(keys, dict):
@@ -1014,12 +1048,10 @@ class Hub:
                                              source="manual" if radio_id else "advert")
         except ValueError as err:
             raise HubError(str(err)) from err
-        if light.id in self.fixtures:
-            await self._drop_fixture(light.id)
-        self._add_fixture(light)
+        changed = await self._take_imported(light)
         client.selected = light.id
         async with self._switch_lock:
-            await self._relink(light.network)
+            await (self._relink if changed else self._move_to_network)(light.network)
         self._broadcast_lights()
         self._log("lights", f"imported keys for {light.name}")
         return light
@@ -1033,24 +1065,24 @@ class Hub:
             raise HubError(str(err)) from err
         saved: list[SavedLight] = []
         skipped: list[str] = []
+        changed = False
         for name, address, state in plans:
             try:
                 problem = keys_problem(state)
                 if problem:
                     raise ValueError(problem)
-                light = self.library.import_keys(state, address=address, name=name, source="unknown")
+                light = self.library.import_keys(state, address=address, name=name, source="unknown",
+                                                 keep_name=True)
             except ValueError as err:
                 skipped.append(f"{name}: {err}")
                 continue
-            if light.id in self.fixtures:
-                await self._drop_fixture(light.id)
-            self._add_fixture(light)
+            changed = await self._take_imported(light) or changed
             saved.append(light)
         if not saved:
             raise HubError("No light could be added. " + " ".join(skipped))
         client.selected = saved[0].id
         async with self._switch_lock:
-            await self._relink(saved[-1].network)
+            await (self._relink if changed else self._move_to_network)(saved[-1].network)
         self._broadcast_lights()
         self._log("lights", f"imported {len(saved)} lights from the Godox app")
         return saved, skipped

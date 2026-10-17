@@ -3,6 +3,9 @@ import { beamOf } from '../glass/describe'
 import { Footer } from '../glass/Footer'
 import { Glass } from '../glass/Glass'
 import { OtherLights } from '../glass/OtherLights'
+import { CueBar } from '../cues/CueBar'
+import { CueEditor } from '../cues/CueEditor'
+import { useCueKey } from '../cues/cues'
 import { PhonePanel } from '../phone/PhonePanel'
 import { LookEditor } from '../looks/LookEditor'
 import { useLookKeys } from '../looks/looks'
@@ -26,6 +29,7 @@ export function Shell() {
   const state = useStudio((s) => s.state)
   const beam = state ? beamOf(state).css : NO_LIGHT
   useLookKeys()
+  useCueKey(SURFACE)
   const choose = (next: View) => {
     setView(next)
     rememberView(SURFACE, next)
@@ -37,10 +41,12 @@ export function Shell() {
         <ViewSwitch view={view} onChange={choose} />
         {view === 'glass' ? <Glass /> : <DeskSlot onOpenLight={() => choose('glass')} />}
         {SURFACE !== 'menubar' && view === 'glass' && <Groups />}
+        <CueBar />
         <Footer surface={SURFACE} />
         {SURFACE === 'phone' && view === 'glass' && <OtherLights />}
       </main>
       {SURFACE === 'window' && <LookEditor />}
+      {SURFACE === 'window' && <CueEditor />}
       {SURFACE === 'window' && <ScheduleEditor />}
       <AddLight />
       <Toasts />

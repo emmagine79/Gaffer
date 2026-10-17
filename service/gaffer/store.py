@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-COLLECTIONS: tuple[str, ...] = ("scenes", "presets", "timelines", "schedules", "swatches", "looks")
+COLLECTIONS: tuple[str, ...] = ("scenes", "presets", "timelines", "schedules", "swatches", "looks", "cues")
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "max_rate": 40.0,          # commands/s ceiling, shared by every light; an ML100R kept up with 80 paced

@@ -63,6 +63,8 @@ interface Studio {
   toasts: Toast[]
   /** The look on now (SPEC-010), or null. */
   look: { id: string; name: string } | null
+  /** The active cue (SPEC-014): steps run so far (0 is the top) out of steps, or null. */
+  cue: { id: string; name: string; step: number; steps: number; next: { id: string; name: string } | null; blocked: string | null } | null
   tab: TabId
   connectionSheet: boolean
   addLight: boolean
@@ -195,6 +197,7 @@ export const useStudio = create<Studio>()((set, get) => ({
   pump: null,
   toasts: EMPTY,
   look: null,
+  cue: null,
   tab: initialTab(),
   connectionSheet: false,
   addLight: false,
@@ -452,6 +455,9 @@ function handle(m: ServerMessage) {
       break
     case 'look':
       set({ look: m.id && m.name ? { id: m.id, name: m.name } : null })
+      break
+    case 'cue':
+      set({ cue: m.id && m.name && m.step !== null && m.steps !== null ? { id: m.id, name: m.name, step: m.step, steps: m.steps, next: m.next, blocked: m.blocked ?? null } : null })
       break
     case 'store':
       set((s) => ({ store: s.store ? { ...s.store, [m.collection]: m.items } : s.store }))
