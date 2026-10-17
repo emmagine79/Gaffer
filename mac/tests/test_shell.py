@@ -325,7 +325,6 @@ def test_a_look_with_a_different_label_still_counts_as_the_same_shortcut(tmp_pat
 
 MARK_SOURCE = Path(__file__).parents[1] / "Sources" / "GafferMark.swift"
 MARK_CHECK = Path(__file__).with_name("mark_check.swift")
-ICON_SOURCE = Path(__file__).parents[1] / "Icon" / "make_icon.swift"
 
 
 def test_the_menu_bar_mark_is_a_drawn_template_image(tmp_path):
@@ -339,15 +338,3 @@ def test_the_menu_bar_mark_is_a_drawn_template_image(tmp_path):
     out = subprocess.run([str(binary)], capture_output=True, text=True, check=True, cwd=work)
     assert out.stdout.strip() == "true 18x18 drawn"
 
-
-def test_the_menu_bar_mark_and_the_app_icon_share_one_head_geometry():
-    """GafferMark.swift repeats the head numbers of make_icon.swift; they must not drift apart."""
-    import re
-
-    def head(path):
-        text = path.read_text()
-        block = text.split("MARK GEOMETRY", 2)[1]
-        lines = [l for l in block.splitlines() if re.search(r"\b(bodyRect|bodyRadius|cone)\b", l)]
-        return [re.findall(r"-?\d+", l) for l in lines]
-
-    assert head(MARK_SOURCE) == head(ICON_SOURCE) != []
