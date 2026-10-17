@@ -245,8 +245,14 @@ class LightLibrary:
 
     def import_keys(
         self, state: MeshState, *, address: str, name: str, radio_id: str = "", source: str = "advert",
+        keep_name: bool = False,
     ) -> SavedLight:
         """Save a light that was paired elsewhere, from its ``mesh_state.json``.
+
+        A light already saved at this address keeps what was settled in Gaffer: only its keys are
+        updated. A name typed in now still renames it, but not with ``keep_name`` (a name that came
+        from an export, not from a person). A model picked by hand, or already known, is not replaced
+        by a guess; only a model picked by hand now (``source="manual"``) replaces it.
 
         A network seen for the first time gets a source address of its own, at
         sequence 0: the light keeps a separate replay record per source, so the
@@ -267,16 +273,23 @@ class LightLibrary:
                     set(span) & set(range(other.node_address, other.node_address + max(1, other.num_elements)))):
                 raise ValueError(f"{other.name} already uses node 0x{state.node_address:04x} on that network; "
                                  "these keys belong to another light")
+        if existing and keep_name:
+            name = existing.name
+        radio, model_source = radio_id.upper(), source
+        if existing and existing.radio_id and source != "manual":
+            radio, model_source = existing.radio_id, existing.model_source
+        elif existing and not radio_id:
+            radio, model_source = existing.radio_id, existing.model_source
         light = SavedLight(
             id=existing.id if existing else uuid.uuid4().hex[:10],
             name=name.strip()[:60] or (existing.name if existing else model_caps(radio_id).name),
             address=address.upper(),
-            radio_id=(radio_id or (existing.radio_id if existing else "")).upper(),
+            radio_id=radio,
             network=network_id,
             node_address=state.node_address,
             num_elements=state.num_elements,
             device_key=state.device_key,
-            model_source=source,
+            model_source=model_source,
             added=existing.added if existing else time.time(),
             x=existing.x if existing else None,
             y=existing.y if existing else None,

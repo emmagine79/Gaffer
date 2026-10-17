@@ -86,6 +86,37 @@ def test_a_godox_light_db_gives_the_same_lights(client, tmp_path):
     _check_imported(client, _import(client, db=_db(tmp_path, {**MESH, "nodes": []}, MESH)))
 
 
+def _do_in_gaffer(client, key, fill):
+    """Rename one light, pick its model, dim it and start an effect on the other. set.many is the one that answers."""
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "lights.rename", "light": key, "name": "Key"})
+        ws.send_json({"type": "lights.model", "light": key, "radio_id": "008F"})
+        ws.send_json({"type": "engine.start", "light": fill, "effect": "rainbow", "params": {"period": 60}})
+        ws.send_json({"type": "set.many", "rid": 9, "anchor": key, "lights": [key], "brightness": 33})
+        for _ in range(400):
+            if ws.receive_json().get("rid") == 9:
+                return
+    raise AssertionError("no reply")
+
+
+def test_importing_the_same_export_again_keeps_a_lights_name_model_and_live_state(client):
+    """SPEC-023: the Godox app's export read a second time must not undo what was done in Gaffer."""
+    _import(client, meshJson=json.dumps(MESH))
+    studio = _saved(client)
+    key, fill = studio["Test key"]["id"], studio["Test fill"]["id"]
+    _do_in_gaffer(client, key, fill)
+
+    assert len(_import(client, meshJson=json.dumps(MESH))["lights"]) == 2
+
+    with client.websocket_connect("/ws") as ws:
+        lights = {light["id"]: light for light in ws.receive_json()["lights"]}
+    assert len(lights) == len(studio) and lights[key]["name"] == "Key"  # no second copy either
+    assert lights[key]["model_source"] == "manual" and lights[key]["radio_id"] == "008F"
+    assert lights[key]["state"]["brightness"] == 33
+    assert lights[fill]["engine"]["kind"] is not None  # the running effect was not stopped
+
+
 @pytest.mark.parametrize(("fields", "reason"), [
     ({"meshJson": "this is not json"}, "not JSON"),
     ({"meshJson": json.dumps({"netKeys": [], "appKeys": [], "nodes": []})}, "no network key"),

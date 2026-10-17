@@ -90,3 +90,20 @@ def test_an_empty_light_id_is_refused_instead_of_moving_the_selected_light(clien
         ):
             assert _send(ws, {"type": "set.many", **message})["type"] == "error"
         assert _levels(client) == before
+
+
+def test_a_ratio_drag_over_grouped_lights_keeps_the_ratio_and_moves_unpicked_members_once(client):
+    """SPEC-023: Key and Fill (picked) and Backlight (not picked) share brightness in one group."""
+    with client.websocket_connect("/ws") as ws:
+        ids = {light["name"]: light["id"] for light in ws.receive_json()["lights"]}
+        key, fill, backlight = ids["Key light"], ids["Fill"], ids["Backlight"]
+        for light_id, level in ((key, 40), (fill, 25), (backlight, 10)):
+            ws.send_json({"type": "set", "light": light_id, "patch": {"brightness": level}})
+        # The leader is a light outside the group, so joining lines nobody up and the levels stay as set.
+        ws.send_json({"type": "group.save", "rid": 2, "leader": ids["Hair light"], "group": {
+            "name": "Pair", "members": [key, fill, backlight], "props": ["brightness"]}})
+        while ws.receive_json().get("rid") != 2:
+            pass
+        assert _send(ws, {"type": "set.many", "anchor": key, "lights": [key, fill], "brightness": 80})["type"] == "ack"
+        after = _levels(client)
+        assert (after["Key light"], after["Fill"], after["Backlight"]) == (80, 50, 80)
