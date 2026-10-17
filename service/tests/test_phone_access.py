@@ -8,7 +8,9 @@ same guard. Demo mode, so no Bluetooth is touched. Tailscale is a fake script th
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import socket
 import stat
 from contextlib import contextmanager
@@ -50,6 +52,7 @@ class Studio:
     def switch_on(self) -> str:
         reply = self.mac.post("/api/phone", json={"enabled": True})
         assert reply.status_code == 200 and reply.json()["enabled"] is True
+        assert self.mac.get("/api/phone?wait=1").json()["checking"] is False  # the Tailscale names are in
         return reply.json()["pin"]
 
     def sign_in(self, pin: str) -> httpx.Response:
@@ -69,6 +72,7 @@ def studio_with(tmp_path: Path, cli: str | None):
     guarded = protect(app, SECRET, access)
     with TestClient(guarded, base_url=f"http://{LAN}:{PORT}", client=(PHONE, 50000)) as phone:
         mac = TestClient(guarded, base_url=f"http://127.0.0.1:{PORT}")
+        mac.portal = phone.portal  # one event loop for both, as in the service
         assert mac.get(f"/session?key={SECRET}", follow_redirects=False).status_code == 303
         assert mac.cookies.get(COOKIE) == SECRET
         yield Studio(phone, mac, access)
@@ -192,7 +196,7 @@ def test_new_pin_signs_every_phone_out_and_closes_its_socket(studio):
 
 def test_phone_access_is_off_until_switched_on_and_off_again_cuts_phones_off(studio):
     # Off at launch: a phone gets nothing, not even the PIN screen.
-    assert studio.mac.get("/api/phone").json() == {"enabled": False, "pin": None, "locked": False, "tailscale": None, "targets": []}
+    assert studio.mac.get("/api/phone").json() == {"enabled": False, "pin": None, "locked": False, "checking": False, "tailscale": None, "targets": []}
     for reply in (studio.phone.get("/"), studio.phone.get("/api/session"), studio.sign_in("123456")):
         assert reply.status_code == 403 and reply.json()["error"] == "phone_access_off"
     assert refused_socket(studio.phone, ws_url()) == 4403
@@ -265,8 +269,12 @@ async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
             with pytest.raises(httpx.ConnectError):
                 await web.get("/api/session", headers=name)
             await access.enable()
+            await access.settled()
             try:
                 assert (await web.get("/api/session", headers=name)).json()["error"] == "pin_required"
+                # A phone that resolves the Tailscale name to its IPv6 address reaches the same listener.
+                async with httpx.AsyncClient(base_url=f"http://[::1]:{port}") as v6:
+                    assert (await v6.get("/api/session", headers=name)).json()["error"] == "pin_required"
                 assert (await web.post("/api/session", json={"pin": wrong_pin(access.pin)}, headers=name)).status_code == 401
                 signed = await web.post("/api/session", json={"pin": access.pin}, headers=name)
                 assert signed.status_code == 200
@@ -286,3 +294,85 @@ async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
 def _phone_socket(port: int, token: str):
     """A WebSocket to the real listener that names the Tailscale name as its Host, as a phone's browser would."""
     return connect(f"ws://{TAILNET_NAME}:{port}/ws", host="127.0.0.1", port=port, additional_headers={"Cookie": f"{PHONE_COOKIE}={token}"})
+
+
+def test_a_phone_with_the_pin_cannot_read_the_export_or_the_data_folder(studio):
+    """The export holds the lights' keys and /api/health used to name a folder on the Mac."""
+    pin = studio.switch_on()
+    assert studio.sign_in(pin).status_code == 200
+    refused = studio.phone.get("/api/export")
+    assert refused.status_code == 403 and refused.json()["error"] == "mac_only"
+    assert studio.mac.get("/api/export").status_code == 200
+    for window in (studio.phone, studio.mac):
+        health = window.get("/api/health")
+        assert health.status_code == 200 and "data" not in health.json() and "/" not in health.text
+
+
+async def test_a_tailscale_tool_that_never_answers_blocks_nothing(tmp_path):
+    """Switching on, New PIN, switching off and the service stopping all go ahead while `tailscale` hangs,
+    and the hung tool is killed. The 10 s only turns a hang into a failed test."""
+    pids = tmp_path / "pids"
+    script = tmp_path / "tailscale"
+    script.write_text(f"#!/bin/sh\necho $$ >> {pids}\nexec sleep 120\n")  # 120 s: ends by itself if a test run dies
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    access = PhoneAccess(port=PORT, lan_ip=lambda: LAN, tailscale_cli=lambda: str(script))
+    app = create_app(demo=True, data_dir=tmp_path / "data", phone=access)
+    transport = httpx.ASGITransport(app=protect(app, SECRET, access), client=("127.0.0.1", 50000))
+    async def tool_started(times: int) -> None:
+        while not pids.exists() or len(pids.read_text().split()) < times:
+            await asyncio.sleep(0.01)
+
+    try:
+        async with asyncio.timeout(10):
+            async with app.router.lifespan_context(app):
+                async with httpx.AsyncClient(transport=transport, base_url=f"http://127.0.0.1:{PORT}", cookies={COOKIE: SECRET}) as mac:
+                    on = (await mac.post("/api/phone", json={"enabled": True})).json()
+                    assert on["enabled"] and on["checking"] and on["tailscale"] is None
+                    assert [t["kind"] for t in on["targets"]] == ["wifi"]  # the Wi-Fi code does not wait for Tailscale
+                    await tool_started(1)
+                    assert (await mac.post("/api/phone/pin", json={})).status_code == 200  # answers while the tool hangs
+                    assert (await mac.post("/api/phone", json={"enabled": False})).json()["enabled"] is False
+                    assert (await mac.post("/api/phone", json={"enabled": True})).json()["enabled"] is True
+                    await tool_started(2)
+                # leaving the app switches phone access off: the service stops without waiting for the tool
+        started = [int(p) for p in pids.read_text().split()]
+        assert len(started) == 2
+        for pid in started:
+            with pytest.raises(ProcessLookupError):
+                os.kill(pid, 0)
+    finally:
+        for line in pids.read_text().split() if pids.exists() else []:
+            try:
+                os.kill(int(line), 9)
+            except ProcessLookupError:
+                pass
+
+
+async def test_a_listener_that_fails_to_start_is_closed_and_the_mac_is_told_in_plain_words(tmp_path, monkeypatch):
+    """uvicorn ends the program with SystemExit when it cannot start. The port must be free again for the next try."""
+    import uvicorn
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    access = PhoneAccess(port=port, lan_ip=lambda: LAN, tailscale_cli=lambda: None)
+    app = create_app(demo=True, data_dir=tmp_path / "data", phone=access)
+    guarded = protect(app, SECRET, access)
+    access.bind_listener(guarded, 1.0)
+    transport = httpx.ASGITransport(app=guarded, client=("127.0.0.1", 50000))
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=transport, base_url=f"http://127.0.0.1:{port}", cookies={COOKIE: SECRET}) as mac:
+            real_startup = uvicorn.Server.startup
+
+            async def cannot_start(self, sockets=None):
+                raise SystemExit(1)
+
+            monkeypatch.setattr(uvicorn.Server, "startup", cannot_start)
+            failed = await mac.post("/api/phone", json={"enabled": True})
+            assert failed.status_code == 503 and failed.json()["error"] == "phone_unavailable"
+            assert "/" not in failed.json()["message"] and access.enabled is False
+            monkeypatch.setattr(uvicorn.Server, "startup", real_startup)
+            try:
+                assert (await mac.post("/api/phone", json={"enabled": True})).status_code == 200  # the port was let go
+            finally:
+                await access.disable()

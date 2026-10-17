@@ -134,7 +134,7 @@ def create_app(
         if not local and not authorised(t):
             return JSONResponse({"error": "token required"}, status_code=401)
         return {"ok": True, "demo": demo, "link": hub.link.snapshot(), "lights": len(hub.fixtures),
-                "pid": os.getpid(), "app": "gaffer", "service": "gaffer", "data": str(Path(data_dir).resolve())}
+                "pid": os.getpid(), "app": "gaffer", "service": "gaffer"}
 
     @app.get("/api/models")
     async def models() -> dict[str, Any]:
@@ -178,7 +178,9 @@ def create_app(
         return scan_page
 
     @app.get("/api/export")
-    async def export(t: str | None = None) -> JSONResponse:
+    async def export(request: Request, t: str | None = None) -> JSONResponse:
+        if request.scope.get("gaffer_local") is False:  # a phone: the export holds the lights' keys
+            return JSONResponse({"error": "mac_only", "message": "The export is only for the Mac."}, status_code=403)
         if not authorised(t):
             return JSONResponse({"error": "token required"}, status_code=401)
         return JSONResponse({**store.snapshot(), "lights": library.public()})

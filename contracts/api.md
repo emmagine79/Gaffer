@@ -196,7 +196,7 @@ Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request 
 
 ```json
 {
-  "enabled": true, "pin": "042917", "locked": false, "tailscale": true,
+  "enabled": true, "pin": "042917", "locked": false, "checking": false, "tailscale": true,
   "targets": [
     {"kind": "wifi", "label": "Same Wi-Fi", "url": "http://192.168.1.20:8787/", "qr": "data:image/svg+xml;..."},
     {"kind": "tailscale", "label": "Away, over Tailscale", "url": "http://studio-mac.tail1234.ts.net:8787/", "qr": "data:image/svg+xml;..."}
@@ -207,4 +207,8 @@ Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request 
 - `POST /api/phone` with `{"enabled": true|false}` switches phone access on or off and answers with the status. Switching on makes a new PIN and opens the network port; `503 phone_unavailable` if the port cannot be opened. Switching off closes the port, signs every phone out and closes their sockets.
 - `POST /api/phone/pin` makes a new PIN, clears the wrong-guess count, signs every phone out and closes their sockets.
 - When off, `pin` is `null`, `targets` is empty and `tailscale` is `null`. `tailscale` is `false` when the `tailscale` tool is missing or not running; then there is no second target.
+- Nothing waits for the `tailscale` tool. Switching on answers at once with `checking: true`, `tailscale: null` and the Wi-Fi target only; the Tailscale target joins when the tool answers. Switching off, or the service stopping, ends the check and kills the tool. `GET /api/phone` also starts a new check (so opening the panel looks again), unless one is running. `GET /api/phone?wait=1` does not start one; it answers when no check is running, however long that takes.
+- `GET /api/export` is Mac window only (it holds the lights' keys): a phone gets `403 mac_only`. `GET /api/health` carries no folder path.
+- A phone that is signed out (New PIN, or access switched off) has its socket closed with code 4401. The page then asks `GET /api/session` again and shows the PIN screen (or "Phone access is off").
+- The network listener takes IPv6 and IPv4 together (`::`, dual-stack), and falls back to IPv4 alone on a Mac with no IPv6.
 - Tailscale addresses come from `tailscale status --json` (`Self.TailscaleIPs`, `Self.DNSName`), found on `PATH` or in `/Applications/Tailscale.app`.

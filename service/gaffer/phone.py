@@ -137,7 +137,8 @@ async def read_tailscale(cli: str | None) -> TailscaleInfo | None:
     try:
         out, _ = await process.communicate()
     except BaseException:
-        process.kill()  # cancelled: do not leave the tool running
+        process.kill()  # cancelled (access switched off, or the service stopping): do not leave the tool running
+        await process.wait()
         raise
     return parse_tailscale(out.decode("utf-8", "replace")) if process.returncode == 0 else None
 
@@ -164,22 +165,46 @@ class PhoneListener:
         self.sock: socket.socket | None = None
         self.task: asyncio.Task[None] | None = None
 
+    def _bind(self) -> socket.socket:
+        """Listen on every network address, IPv6 and IPv4 together (a phone may resolve the Tailscale
+        name to either). A Mac with no IPv6 falls back to IPv4 alone."""
+        failure: OSError | None = None
+        for family, address in ((socket.AF_INET6, "::"), (socket.AF_INET, "0.0.0.0")):
+            try:
+                sock = socket.socket(family, socket.SOCK_STREAM)
+            except OSError as err:
+                failure = err
+                continue
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if family == socket.AF_INET6:
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                sock.bind((address, self.port))
+                sock.listen()
+                return sock
+            except OSError as err:
+                sock.close()
+                failure = err
+        assert failure is not None
+        raise failure
+
     async def start(self) -> None:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("0.0.0.0", self.port))
-            sock.listen()
+            sock = self._bind()
         except OSError as err:
-            sock.close()
             logger.warning("phone listener could not bind port %s: %r", self.port, err)
             raise PhoneUnavailable("Gaffer could not open its port to the network. Try again.") from err
-        config = uvicorn.Config(self.app, lifespan="off", log_level="warning", access_log=False,
-                                timeout_graceful_shutdown=self.graceful_seconds)
-        server = uvicorn.Server(config)
-        config.load()
-        server.lifespan = config.lifespan_class(config)
-        await server.startup(sockets=[sock])
+        try:
+            config = uvicorn.Config(self.app, lifespan="off", log_level="warning", access_log=False,
+                                    timeout_graceful_shutdown=self.graceful_seconds)
+            server = uvicorn.Server(config)
+            config.load()
+            server.lifespan = config.lifespan_class(config)
+            await server.startup(sockets=[sock])  # uvicorn calls sys.exit when it cannot start
+        except (Exception, SystemExit) as err:
+            sock.close()
+            logger.warning("phone listener could not start on port %s: %r", self.port, err)
+            raise PhoneUnavailable("Gaffer could not open its port to the network. Try again.") from err
         self.server, self.sock = server, sock
         self.task = asyncio.create_task(server.main_loop())
 
@@ -216,7 +241,11 @@ class PhoneAccess:
         self._sessions: dict[str, asyncio.Event] = {}
         self._hosts: frozenset[str] = frozenset()
         self._targets: list[dict[str, str]] = []
-        self._tailscale_found = False
+        self._lan: str | None = None
+        self._tailscale: TailscaleInfo | None = None
+        self._tailscale_known = False  # False until the first `tailscale status` of this switch-on ends
+        self._check: asyncio.Task[None] | None = None
+        self._waiters: set[asyncio.Future[None]] = set()
         self._lock: asyncio.Lock | None = None
         self._listener_args: tuple[ASGIApp, float] | None = None
         self._listener: PhoneListener | None = None
@@ -274,9 +303,10 @@ class PhoneAccess:
             self._lock = asyncio.Lock()
         return self._lock
 
-    async def _discover(self) -> None:
-        lan = self._lan_ip()
-        found = await read_tailscale(self._tailscale_cli())
+    def _refresh_addresses(self) -> None:
+        """Work out the Wi-Fi address (a local lookup, no process) and the names and addresses a phone may use."""
+        self._lan = lan = self._lan_ip()
+        found = self._tailscale
         hosts: set[str] = set()
         targets: list[dict[str, str]] = []
         if lan:
@@ -290,21 +320,59 @@ class PhoneAccess:
             where = found.name or v4
             if where:
                 targets.append({"kind": "tailscale", "label": "Away, over Tailscale", "url": f"http://{where}:{self.port}/"})
-        self._tailscale_found = found is not None
         self._hosts = frozenset(hosts)
         self._targets = targets
+
+    @property
+    def checking(self) -> bool:
+        """Whether `tailscale status` is still running. Nothing waits for it: it ends when it answers
+        or when access is switched off, which kills it."""
+        return self.enabled and self._check is not None and not self._check.done()
+
+    def refresh(self) -> None:
+        """Start a Tailscale check unless one is running. Returns at once."""
+        if self.enabled and not self.checking:
+            self._check = asyncio.create_task(self._check_tailscale())
+            self._check.add_done_callback(self._release_waiters)
+
+    async def _check_tailscale(self) -> None:
+        try:
+            found = await read_tailscale(self._tailscale_cli())
+        except Exception:  # noqa: BLE001 - any failure means "no Tailscale"
+            logger.exception("tailscale check failed")
+            found = None
+        if self.enabled:
+            self._tailscale, self._tailscale_known = found, True
+            self._refresh_addresses()
+
+    def _release_waiters(self, _task: object = None) -> None:
+        for waiter in self._waiters:
+            if not waiter.done():
+                waiter.set_result(None)
+
+    async def settled(self) -> None:
+        """Return when no Tailscale check is running (at once if none is)."""
+        while self.checking:
+            waiter: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            self._waiters.add(waiter)
+            try:
+                await waiter
+            finally:
+                self._waiters.discard(waiter)
 
     async def enable(self) -> None:
         async with self._guard():
             if self.enabled:
                 return
-            await self._discover()
+            self._tailscale, self._tailscale_known = None, False
+            self._refresh_addresses()
             if self._listener_args is not None:
                 listener = PhoneListener(self._listener_args[0], self.port, self._listener_args[1])
                 await listener.start()
                 self._listener = listener
             self._new_pin()
             self.enabled = True
+            self.refresh()  # the Tailscale names join the allowed set when the tool answers
 
     async def disable(self) -> None:
         async with self._guard():
@@ -312,6 +380,10 @@ class PhoneAccess:
             self.pin = None
             self._sign_everyone_out()
             self._hosts, self._targets = frozenset(), []
+            check, self._check = self._check, None
+            if check is not None:
+                check.cancel()  # kills a `tailscale` that is still running
+                await asyncio.gather(check, return_exceptions=True)
             listener, self._listener = self._listener, None
             if listener is not None:
                 await listener.stop()
@@ -321,17 +393,16 @@ class PhoneAccess:
             if self.enabled:
                 self._new_pin()
 
-    async def status(self) -> dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         """What the Mac window shows. Only ever sent to the Mac itself: it holds the PIN."""
         if self.enabled:
-            async with self._guard():
-                if self.enabled:
-                    await self._discover()  # the Wi-Fi address may have changed since last time
+            self._refresh_addresses()  # the Wi-Fi address may have changed since last time
         return {
             "enabled": self.enabled,
             "pin": self.pin if self.enabled else None,
             "locked": self.locked,
-            "tailscale": self._tailscale_found if self.enabled else None,
+            "checking": self.checking,
+            "tailscale": (self._tailscale is not None) if self.enabled and self._tailscale_known else None,
             "targets": [{**t, "qr": qr_data_uri(t["url"])} for t in self._targets] if self.enabled else [],
         }
 
@@ -393,7 +464,14 @@ def phone_routes(phone: PhoneAccess, allowed_hosts: Callable[[], frozenset[str]]
 
     @router.get("/api/phone")
     async def phone_state(request: Request) -> JSONResponse:
-        return mac_only(request) or JSONResponse(await phone.status())
+        refused = mac_only(request)
+        if refused:
+            return refused
+        if request.query_params.get("wait"):
+            await phone.settled()  # the window holds this request open until Tailscale has answered
+        else:
+            phone.refresh()  # opening the panel looks again, in the background
+        return JSONResponse(phone.status())
 
     @router.post("/api/phone")
     async def phone_switch(request: Request) -> JSONResponse:
@@ -410,7 +488,7 @@ def phone_routes(phone: PhoneAccess, allowed_hosts: Callable[[], frozenset[str]]
             await (phone.enable() if wanted else phone.disable())
         except PhoneUnavailable as err:
             return _error(503, "phone_unavailable", str(err))
-        return JSONResponse(await phone.status())
+        return JSONResponse(phone.status())
 
     @router.post("/api/phone/pin")
     async def phone_new_pin(request: Request) -> JSONResponse:
@@ -418,7 +496,7 @@ def phone_routes(phone: PhoneAccess, allowed_hosts: Callable[[], frozenset[str]]
         if refused:
             return refused
         await phone.new_pin()
-        return JSONResponse(await phone.status())
+        return JSONResponse(phone.status())
 
     return router
 
