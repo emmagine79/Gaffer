@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .commands import CommandError, dispatch
 from .guard import LOCAL_HOSTS, LOOPBACK, host_allowed, origin_allowed
+from .phone import PhoneAccess, phone_routes
 from .catalog import configure_models, models_catalog, skipped_model_files
 from .hub import Client, Hub
 from .lights import LightLibrary
@@ -74,13 +75,18 @@ def create_app(
     hosts: tuple[str, ...] = (),
     advert_scanner: Any = None,
     on_shutdown: Callable[[], None] | None = None,
+    phone: PhoneAccess | None = None,
 ) -> FastAPI:
-    """The studio app. ``hosts`` adds names it may be reached by.
+    """The studio app. ``hosts`` adds names it may be reached by, and ``phone`` (SPEC-015) adds the
+    addresses phone access lists while it is on, and the routes that switch it on and off.
 
     ``advert_scanner`` answers /api/scan (the Bluetooth scan that tags brand families); demo mode
     uses canned adverts so it never starts a Bluetooth scan. ``on_shutdown`` runs when the app stops.
     """
-    allowed = LOCAL_HOSTS | frozenset(h.lower() for h in hosts)
+    named = LOCAL_HOSTS | frozenset(h.lower() for h in hosts)
+
+    def allowed_now() -> frozenset[str]:
+        return named | phone.hosts() if phone is not None else named
     store = Store(data_dir)
     # Model files in <data>/models/<driver>/ join the shipped ones; demo mode adds its stand-ins.
     from .demo import DEMO_MODELS
@@ -101,12 +107,16 @@ def create_app(
         try:
             yield
         finally:
+            if phone is not None:
+                await phone.disable()  # close the network listener and sign every phone out
             await hub.stop()
             if on_shutdown is not None:
                 on_shutdown()
 
     app = FastAPI(title="Gaffer light service", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.hub = hub
+    if phone is not None:
+        app.include_router(phone_routes(phone, allowed_now))
 
     def authorised(supplied: str | None) -> bool:
         return token is None or (supplied is not None and secrets.compare_digest(supplied, token))
@@ -114,7 +124,7 @@ def create_app(
     @app.middleware("http")
     async def only_known_hosts(request: Request, call_next):  # type: ignore[no-untyped-def]
         # DNS rebinding: a foreign page reaching 127.0.0.1 still names its own host.
-        if not host_allowed(request.headers.get("host"), allowed):
+        if not host_allowed(request.headers.get("host"), allowed_now()):
             return PlainTextResponse("unknown host", status_code=421)
         return await call_next(request)
 
@@ -195,7 +205,7 @@ def create_app(
     @app.websocket("/ws")
     async def websocket(ws: WebSocket) -> None:
         # Another web page must not drive the lights: only the studio's own page may connect.
-        if not origin_allowed(ws.headers.get("origin"), ws.headers.get("host"), allowed):
+        if not origin_allowed(ws.headers.get("origin"), ws.headers.get("host"), allowed_now()):
             await ws.close(code=4403)
             return
         if not authorised(ws.query_params.get("t")):

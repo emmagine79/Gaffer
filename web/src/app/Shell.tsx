@@ -3,6 +3,7 @@ import { beamOf } from '../glass/describe'
 import { Footer } from '../glass/Footer'
 import { Glass } from '../glass/Glass'
 import { OtherLights } from '../glass/OtherLights'
+import { PhonePanel } from '../phone/PhonePanel'
 import { useStudio } from '../state/store'
 import { AddLight, DeskSlot } from './slots'
 import { readSurface, rememberView, rememberedView, type Surface, type View } from './surface'
@@ -34,6 +35,7 @@ export function Shell() {
       </main>
       <AddLight />
       <Toasts />
+      {SURFACE === 'window' && <PhonePanel />}
     </div>
   )
 }

@@ -1,0 +1,13 @@
+/* The PIN screen a phone sees before it has entered the PIN (SPEC-015). Tokens come from glass.css. */
+.pin { min-height: 100vh; display: grid; align-content: center; justify-items: center; gap: 20px; padding: 24px 16px; text-align: center; }
+.pin h1 { font-size: 22px; font-weight: 650; letter-spacing: -0.01em; }
+.pin-card { width: min(100%, 320px); display: grid; gap: 14px; padding: 20px 16px; border-radius: 18px; background: var(--panel-bg); box-shadow: var(--panel-edge); }
+.pin-card label { color: var(--dim); font-size: 14px; }
+.pin-input {
+  width: 100%; min-width: 0; padding: 12px 8px; border: 1px solid var(--faint); border-radius: 12px;
+  background: var(--faint); color: var(--ink); text-align: center; font-size: 28px; letter-spacing: 0.35em; text-indent: 0.35em;
+}
+.pin-input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.pin-note { min-height: 1.4em; font-size: 14px; color: var(--busy); overflow-wrap: anywhere; }
+.pin-go { padding: 12px; border: 0; border-radius: 12px; font-size: 16px; font-weight: 600; color: var(--sel-ink); background: var(--sel-bg); }
+.pin-go:disabled { opacity: 0.4; cursor: default; }

@@ -15,10 +15,27 @@ device it controls. Two checks close that:
 
 from __future__ import annotations
 
+import ipaddress
 from urllib.parse import urlsplit
 
 LOCAL_HOSTS: frozenset[str] = frozenset({"127.0.0.1", "localhost", "::1", "testserver"})
 LOOPBACK: frozenset[str] = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+
+
+def is_loopback_client(address: str | None) -> bool:
+    """Whether a connection comes from this Mac itself (its peer address, not a header).
+
+    Anything else, including no address at all, is a phone or another machine.
+    """
+    if not address:
+        return False
+    if address in LOOPBACK:
+        return True
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return (ip.ipv4_mapped or ip).is_loopback if ip.version == 6 else ip.is_loopback
 
 
 def hostname(host_header: str) -> str:

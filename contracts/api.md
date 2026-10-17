@@ -4,7 +4,7 @@ The HTTP and WebSocket contract between the Gaffer service and its clients (the 
 
 ## Service
 
-Everything in this section is served by the Python service in `service/`. It listens on `127.0.0.1` only. Every route and `/ws` need the session cookie. Errors are `{"error": "<code>", "message": "<plain words>"}` and never carry a path.
+Everything in this section is served by the Python service in `service/`. It listens on `127.0.0.1`, and also on the network while phone access is on (see Phone access). Every route and `/ws` need a cookie: the Mac window's session cookie, or a phone's PIN cookie. Errors are `{"error": "<code>", "message": "<plain words>"}` and never carry a path.
 
 ### GET /api/models
 
@@ -152,3 +152,49 @@ Service to shell:
 
 The shell sends nothing. If the socket closes, the shell shows no look name and
 reconnects with back-off until the service process ends.
+
+## Phone access
+
+Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback and `Host` is `127.0.0.1` or `localhost`; needs the launch secret cookie, no PIN) and a **phone** (anything else; needs the PIN cookie).
+
+A phone's request is refused when:
+
+| Case | Answer |
+| --- | --- |
+| Phone access is off | `403 phone_access_off` (socket closed with code 4403) |
+| `Host` is not an address phone access listed (the Wi-Fi address, the Tailscale addresses and MagicDNS name) | `400 Invalid host header` (socket 4403) |
+| No valid PIN cookie, and the route is not one of the open ones below | `401 pin_required` (socket closed with code 4401 before it opens) |
+
+Open to a phone without the cookie: `GET /` (answered with status 401, so the page can show the PIN screen), `GET /assets/*`, `GET /favicon.svg`, `GET /api/session` and `POST /api/session`. A signed-in phone reaches everything except the Mac-only routes.
+
+### GET /api/session
+
+`200 {"signed_in": true, "local": <bool>}` when this browser may use the studio. `401 {"error": "pin_required"}` when it is a phone that has not entered the PIN. The page asks this first and shows the PIN screen on 401.
+
+### POST /api/session
+
+Body `{"pin": "123456"}`, at most 64 bytes. Answers:
+
+- `200 {"ok": true}` and `Set-Cookie: gaffer_phone=<random token>; HttpOnly; SameSite=Strict; Path=/` (a session cookie, as the Mac window's).
+- `401 wrong_pin`. `403 pin_locked` after 100 wrong PINs on one PIN (NIST SP 800-63B section 5.2.2 allows at most 100 consecutive failures); the right PIN is refused too until New PIN. `403 phone_access_off`. `400 bad_pin` for a body that is not six ASCII digits (not counted as a guess).
+
+The PIN is six digits from a CSPRNG, kept in memory only, compared in constant time.
+
+### GET /api/phone, POST /api/phone, POST /api/phone/pin
+
+Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request whose `Origin` is another site is `403 wrong_origin`.
+
+```json
+{
+  "enabled": true, "pin": "042917", "locked": false, "tailscale": true,
+  "targets": [
+    {"kind": "wifi", "label": "Same Wi-Fi", "url": "http://192.168.1.20:8787/", "qr": "data:image/svg+xml;..."},
+    {"kind": "tailscale", "label": "Away, over Tailscale", "url": "http://studio-mac.tail1234.ts.net:8787/", "qr": "data:image/svg+xml;..."}
+  ]
+}
+```
+
+- `POST /api/phone` with `{"enabled": true|false}` switches phone access on or off and answers with the status. Switching on makes a new PIN and opens the network port; `503 phone_unavailable` if the port cannot be opened. Switching off closes the port, signs every phone out and closes their sockets.
+- `POST /api/phone/pin` makes a new PIN, clears the wrong-guess count, signs every phone out and closes their sockets.
+- When off, `pin` is `null`, `targets` is empty and `tailscale` is `null`. `tailscale` is `false` when the `tailscale` tool is missing or not running; then there is no second target.
+- Tailscale addresses come from `tailscale status --json` (`Self.TailscaleIPs`, `Self.DNSName`), found on `PATH` or in `/Applications/Tailscale.app`.
