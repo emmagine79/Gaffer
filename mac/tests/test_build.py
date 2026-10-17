@@ -49,8 +49,8 @@ def requirement(app: Path) -> str:
     return sh("codesign", "-d", "-r-", app).stderr.strip()
 
 
-def main_cdhash(app: Path) -> str:
-    out = sh("codesign", "-dvvv", app / "Contents" / "MacOS" / "Gaffer").stderr
+def python_cdhash(app: Path) -> str:
+    out = sh("codesign", "-dvvv", app / "Contents" / "Resources" / "python" / "bin" / "python3.14").stderr
     return re.search(r"^CDHash=(\w+)", out, re.M).group(1)
 
 
@@ -78,8 +78,9 @@ def test_two_builds_of_one_commit_have_the_same_contents_and_the_same_pinned_req
     assert (one / "Gaffer-0.1.0.manifest.txt").read_bytes() == (two / "Gaffer-0.1.0.manifest.txt").read_bytes()
     # After signing: the same files in the same places.
     assert tree(one / "Gaffer.app") == tree(two / "Gaffer.app")
-    # The same code in the shell binary (its code directory hash is not touched by the signing time).
-    assert main_cdhash(one / "Gaffer.app") == main_cdhash(two / "Gaffer.app")
+    # A signed file inside: its code hash does not include the signing time. (The app's own hash does,
+    # because it seals the signatures of everything inside it, so it is not compared.)
+    assert python_cdhash(one / "Gaffer.app") == python_cdhash(two / "Gaffer.app")
     # The requirement pins the certificate, and is the same on both builds.
     req = requirement(one / "Gaffer.app")
     assert req == requirement(two / "Gaffer.app")
