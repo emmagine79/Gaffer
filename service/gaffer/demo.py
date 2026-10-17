@@ -35,7 +35,7 @@ DEMO_MODELS: dict[str, dict[str, Any]] = {
     "ZY-DEMO": {
         "name": "MOLUS G200 (demo)", "chip": "", "min_kelvin": 2700, "max_kelvin": 6500, "modes": ["cct", "hsi"],
         "driver": "demo", "brand": "Zhiyun", "match": {"name_prefix": "PL1"}, "driver_data": {}, "demo": True,
-        "max_mode": True,
+        "max_mode": True, "max_mode_kelvin": 4300,
     },
     "YN-DEMO": {
         "name": "YN150Li (demo)", "chip": "", "min_kelvin": 3200, "max_kelvin": 5600, "modes": ["cct"],
