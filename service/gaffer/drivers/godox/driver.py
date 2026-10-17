@@ -144,7 +144,7 @@ class GodoxDriver(Driver):
     def stats(self) -> dict[str, float | int]:
         return self.pump.stats.to_dict(time.monotonic())
 
-    def forget_light(self, light_id: str) -> None:
+    async def forget_light(self, light_id: str) -> None:
         self._heard.pop(light_id, None)
         self._applied.pop(light_id, None)
 

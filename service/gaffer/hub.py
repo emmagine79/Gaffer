@@ -232,7 +232,7 @@ class Hub:
     def controller(self) -> Any:
         return self.godox.controller
 
-    def _drop_fixture(self, light_id: str) -> None:
+    async def _drop_fixture(self, light_id: str) -> None:
         fixture = self.fixtures.pop(light_id, None)
         task = self._engine_tasks.pop(light_id, None)
         if task is not None:
@@ -240,7 +240,22 @@ class Hub:
         if fixture is not None:
             if self.on_mesh(fixture):
                 self.godox.drop(fixture.node)
-            fixture.driver.forget_light(light_id)
+            await self._release(fixture.driver, light_id)
+
+    async def _release(self, driver: Driver, light_id: str) -> None:
+        """Tell a driver to let go of a light. Like every other driver call, one failing never stops the hub."""
+        try:
+            await driver.forget_light(light_id)
+        except Exception:  # noqa: BLE001 - the rest of the forget or hand-over must still happen
+            logger.exception("driver %s failed to let go of light %s", driver.id, light_id)
+            self._log("error", f"the {driver.id} driver did not let go of a light")
+
+    def _spawn(self, coro: Any) -> asyncio.Task[Any]:
+        """A task the hub cancels when it stops and forgets when it finishes."""
+        task = asyncio.create_task(coro)
+        self._tasks.append(task)
+        task.add_done_callback(lambda t: self._tasks.remove(t) if t in self._tasks else None)
+        return task
 
     def fixture(self, light_id: str | None) -> Fixture:
         if light_id is None:
@@ -373,7 +388,7 @@ class Hub:
         self._link_task = asyncio.create_task(self.link.run())
         for fixture in self.fixtures.values():
             if fixture.driver is not self.godox:
-                self._tasks.append(asyncio.create_task(self._connect_other(fixture)))
+                self._spawn(self._connect_other(fixture))
 
     async def _connect_other(self, fixture: Fixture) -> None:
         """Open a non-mesh light's own link through its driver, and say so if it cannot."""
@@ -393,7 +408,10 @@ class Hub:
         await asyncio.gather(*self._tasks, *self._engine_tasks.values(), return_exceptions=True)
         for driver in self.registry.drivers.values():
             try:
-                await driver.stop()
+                # The hub's own stop budget (as for the link): a driver that never lets go cannot hold up the rest.
+                await asyncio.wait_for(driver.stop(), timeout=LINK_STOP_SECONDS)
+            except TimeoutError:
+                logger.error("driver %s did not stop within %s s", driver.id, LINK_STOP_SECONDS)
             except Exception:  # noqa: BLE001
                 logger.exception("driver %s failed to stop", driver.id)
 
@@ -802,7 +820,7 @@ class Hub:
                 num_elements=paired.num_elements, device_key=paired.device_key, name=name,
             )
             if light.id in self.fixtures:
-                self._drop_fixture(light.id)  # a saved light that was reset and paired again
+                await self._drop_fixture(light.id)  # a saved light that was reset and paired again
             fixture = self._add_fixture(light)
             client.selected = light.id
             await self._relink(network)
@@ -836,7 +854,7 @@ class Hub:
         except ValueError as err:
             raise HubError(str(err)) from err
         if light.id in self.fixtures:
-            self._drop_fixture(light.id)
+            await self._drop_fixture(light.id)
         self._add_fixture(light)
         client.selected = light.id
         async with self._switch_lock:
@@ -861,18 +879,27 @@ class Hub:
         fixture.engine.stop(restore=False)
         fixture.use_caps(model_caps(radio_id))
         if fixture.driver is not old_driver:
-            # The model belongs to another brand: the old driver lets go of the light (a queued mesh write
-            # must not reach it later), and the new one opens its own link as it does at start-up.
             if was_on_mesh:
                 self.godox.drop(fixture.node)
-            old_driver.forget_light(light_id)
-            if self._started and fixture.driver is not self.godox:
-                self._tasks.append(asyncio.create_task(self._connect_other(fixture)))
-        if self.on_network(fixture):
+            self._spawn(self._hand_over(fixture, old_driver))
+        elif self.on_network(fixture):
             if self.on_mesh(fixture):
                 self.godox.forget(fixture.node)
             fixture.driver.apply(fixture.light, fixture.state)
         self._broadcast_lights()
+
+    async def _hand_over(self, fixture: Fixture, old_driver: Driver) -> None:
+        """The model belongs to another brand. The old driver lets go first (its link closed), and only
+        then does the new one take the light, so two drivers never drive one."""
+        await self._release(old_driver, fixture.id)
+        if self.fixtures.get(fixture.id) is not fixture or fixture.driver is old_driver:
+            return  # forgotten, or changed back, while the old driver was letting go
+        if fixture.driver is self.godox:
+            if self.on_mesh(fixture):
+                self.godox.forget(fixture.node)
+                self.godox.apply(fixture.light, fixture.state)
+        else:
+            await self._connect_other(fixture)  # connects, then applies: no write before the link exists
 
     def set_model(self, light_id: str, radio_id: str) -> None:
         if not radio_id or not model_caps(radio_id).known:
@@ -889,7 +916,7 @@ class Hub:
     async def forget(self, light_id: str) -> None:
         fixture = self.fixture(light_id)
         network = fixture.light.network
-        self._drop_fixture(light_id)
+        await self._drop_fixture(light_id)
         self.library.forget(light_id)
         groups = [{**g, "members": [m for m in g["members"] if m != light_id]} for g in self.groups]
         states = {k: v for k, v in (self.store.settings.get("light_states") or {}).items() if k != light_id}

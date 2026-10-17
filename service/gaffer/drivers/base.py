@@ -104,7 +104,10 @@ class Driver(ABC):
     def status(self, light: SavedLight) -> LightStatus:
         """``{"reachable": bool | None, "held": bool}`` for this light."""
 
-    def forget_light(self, light_id: str) -> None:
-        """The hub no longer has this light with this driver (forgotten, paired again, or given another
-        model). Drop anything kept for it: queued writes, a link, a last-heard time. The id can come
-        back later, so a stale entry would be read as the new light's. Default: nothing kept."""
+    async def forget_light(self, light_id: str) -> None:
+        """Let go of this light: the hub no longer has it with this driver (forgotten, paired again,
+        or given another brand's model). Close any link you hold for it, stop any task that writes to
+        it, and drop whatever is kept for it (queued writes, last-heard time). When this returns, this
+        driver must send the light nothing more: the hub awaits it before the light's new driver
+        connects, so two drivers never drive one light. The id can come back later, so a stale entry
+        would be read as the new light's. Default: nothing kept."""

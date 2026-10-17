@@ -15,8 +15,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaffer import demo, drivers
+from gaffer import hub as hub_module
 from gaffer.app import create_app
 from gaffer.catalog import configure_models
+from gaffer.drivers.base import Driver
 from gaffer.drivers.godox import GodoxDriver
 from gaffer.hub import Hub
 from gaffer.lights import LightLibrary, SavedLight
@@ -329,3 +331,94 @@ async def test_forgetting_a_light_clears_what_its_own_driver_kept(tmp_path, demo
         assert zhiyun.id not in stand_in.applied
     finally:
         await hub.stop()
+
+
+class _Recorder(Driver):
+    """A brand that writes what it is asked to into a shared log, so the order of calls can be read back."""
+
+    id = "rec"
+
+    def __init__(self, log, *, hang_on_stop=False):
+        super().__init__()
+        self.log, self.hang_on_stop = log, hang_on_stop
+
+    def match(self, advert):
+        return None
+
+    async def connect(self, light):
+        self.log.append("rec.connect-start")
+        await asyncio.sleep(0.05)
+        self.log.append("rec.connect-done")
+
+    def apply(self, light, state):
+        self.log.append("rec.apply")
+
+    async def identify(self, light):
+        return None
+
+    def status(self, light):
+        return {"reachable": True, "held": False}
+
+    async def stop(self):
+        if self.hang_on_stop:
+            await asyncio.Event().wait()  # never returns
+        self.log.append("rec.stopped")
+
+
+REC_MODEL = {"name": "Recorder", "min_kelvin": 2700, "max_kelvin": 6500, "modes": ["cct"], "driver": "rec",
+             "brand": "Rec", "match": {}, "driver_data": {}, "demo": True}
+
+
+async def test_a_driver_that_fails_to_let_go_does_not_stop_a_forget_or_a_model_change(tmp_path, demo_models, monkeypatch):
+    hub = await _studio(tmp_path)
+    try:
+        async def broken(light_id):
+            raise KeyError(light_id)
+
+        monkeypatch.setattr(hub.registry.get("demo"), "forget_light", broken)
+        wire = _Wire(hub)
+        zhiyun, yongnuo = _light(hub, "Zhiyun panel"), _light(hub, "Yongnuo wand")
+        hub.set_model(zhiyun.id, "008F")  # to a Godox model; the demo driver fails to let go
+        assert hub.library.get(zhiyun.id).radio_id == "008F"
+        await wire.first_write_to(zhiyun.node)  # and the Godox driver still took the light over
+        await hub.forget(yongnuo.id)  # the same failure must not leave the forget half done
+        assert yongnuo.id not in hub.fixtures
+        assert all(light.id != yongnuo.id for light in hub.library.lights)
+    finally:
+        await hub.stop()
+
+
+async def test_the_old_driver_lets_go_before_the_new_one_connects_and_the_light_is_written_once(tmp_path, demo_models):
+    configure_models([], {**demo.DEMO_MODELS, "REC-1": REC_MODEL})
+    hub = await _studio(tmp_path)
+    log: list[str] = []
+    try:
+        hub.registry.drivers["rec"] = _Recorder(log)
+
+        async def slow_release(light_id):
+            log.append("demo.release-start")
+            await asyncio.sleep(0.05)  # closing a link takes time
+            log.append("demo.release-done")
+
+        hub.registry.get("demo").forget_light = slow_release
+        zhiyun, tasks_before = _light(hub, "Zhiyun panel"), len(hub._tasks)
+        hub.set_model(zhiyun.id, "REC-1")
+        for _ in range(400):
+            if "rec.apply" in log:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)  # time for any second write to show itself
+        assert log == ["demo.release-start", "demo.release-done", "rec.connect-start", "rec.connect-done", "rec.apply"]
+        assert len(hub._tasks) == tasks_before  # the hand-over task is not kept after it ends
+    finally:
+        hub.registry.drivers.pop("rec", None)
+        await hub.stop()
+
+
+async def test_a_driver_whose_stop_never_returns_does_not_hold_up_the_hub(tmp_path, demo_models, monkeypatch):
+    monkeypatch.setattr(hub_module, "LINK_STOP_SECONDS", 0.2)
+    hub = await _studio(tmp_path)
+    log: list[str] = []
+    hub.registry.drivers = {"hang": _Recorder(log, hang_on_stop=True), "rec": _Recorder(log), **hub.registry.drivers}
+    await asyncio.wait_for(hub.stop(), 10)
+    assert log == ["rec.stopped"]  # the one after the hung driver was still stopped
