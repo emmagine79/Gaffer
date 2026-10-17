@@ -25,6 +25,8 @@ const levelOf = async (page: Page, name: string) => (await lights(page)).find((l
 /** Drag the Brightness slider on screen from one fraction of its width to another. */
 async function drag(page: Page, from: number, to: number) {
   const slider = page.getByRole('slider', { name: 'Brightness' })
+  // Clicking "+ New group" scrolls the page down when it is taller than the screen (the Effects section sits above Groups).
+  await slider.scrollIntoViewIfNeeded()
   const box = (await slider.boundingBox())!
   const y = box.y + box.height / 2
   await page.mouse.move(box.x + box.width * from, y)
@@ -64,7 +66,7 @@ for (const width of [375, 1280]) {
     expect(scroll).toBe(inner)
 
     // AC2: deleting the group stops it.
-    await group.getByRole('button', { name: /^Delete / }).click()
+    await page.getByRole('button', { name: /^Delete / }).click()
     await expect(page.locator('.grp')).toHaveCount(0)
     const next = await drag(page, 0.9, 0.3)
     expect(next).not.toBe(moved)

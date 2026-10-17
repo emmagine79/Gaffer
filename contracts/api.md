@@ -79,6 +79,14 @@ The contract is in `service/gaffer/drivers/base.py`: `id`, `match(advert)`, `sta
 
 A light uses the driver its model's `driver` key names. If that driver is not installed, the light shows as unreachable and takes no commands. The same holds for a light whose model is not known and whose id is not shaped like a Godox radio id (four hex digits): it is never commanded as a Godox light. A Godox-shaped unknown id is commanded generically, as lumen does.
 
+### Effects in Glass
+
+Glass reads two lists and adds no route.
+
+- Built-in effects: `caps.effects` of the selected light, from its model file. Glass shows a "Built into the light" group only when the list is not empty. Running one is `set` with `{"mode": "fx", "fx": {"symbol": ..., "speed": ..., "params": {...}}}`.
+- Gaffer's own effects: lumen's registry (`hello.effects`), started with `engine.start` and stopped with `engine.stop`. They work on any light, because the engine fits each frame to what the light can show. Glass offers three: Breathe (`breathe`), Flicker (`candle`) and Colour cycle (`rainbow`, played as warmth on a light with white only). On a fixed-daylight light only those whose brightness moves are offered.
+- These run from the Mac: they stop if the Mac sleeps and may stutter over Bluetooth. Glass says so beside them.
+
 ### Light fields
 
 The light objects in `hello`, `lights` and `/api/export` gain:
@@ -177,7 +185,7 @@ reconnects with back-off until the service process ends.
 
 A look is `{"id", "name", "fade_seconds", "lights": {"<light id>": <state patch>}}`. It is saved in the `looks` collection, so it is also in `hello.store.looks` and in `store` messages. The order of the list is the slot order: slot 1 is the first look, and keys 1 to 9 and the Mac shortcuts use it. `lights` holds one state patch per light, in the same shape `set` takes, so a look made on one model is fitted to the light it is applied to.
 
-Applying a look runs every light in it. A fade of `0` sets each light at once. Any other fade starts a transition of that many seconds on each light, ending on the look's values. The service works out every light's values first and starts the lights only after that, so a look is never half applied. A light the look names that is no longer saved, is not on the network the service is connected to, or cannot take its patch is left alone and named in `skipped`; the others still move.
+Applying a look runs every light in it. A fade of `0` sets each light at once. Any other fade starts a transition of that many seconds on each light, ending on the look's values. The service works out every light's values first and starts the lights only after that, so one light that cannot be worked out never leaves the others half moved (a driver error while a light starts is not rolled back). Each light gets its own values, also when it is in a group: a look does not mirror one light onto another. A light the look names that is no longer saved, is not on the network the service is connected to, or whose values cannot be worked out is left alone and named in `skipped`; the others still move.
 
 | Method and path | Answer |
 | --- | --- |
@@ -193,7 +201,7 @@ WebSocket messages from the page:
 - `{"type":"looks.apply","id"}`: apply. Answers `{"type":"ack","of":"looks.apply","id","name","skipped"}`.
 - `{"type":"looks.save","look":{...}}`: the same body as `POST /api/looks`. Answers `{"type":"ack","of":"looks.save","look":{...}}`.
 - `{"type":"looks.delete","id"}`: delete. Deleting the current look makes no look current.
-- `{"type":"all.off"}`: all off.
+- `{"type":"all.off"}`: all off. Answers `{"type":"ack","of":"all.off","skipped":[<light ids>]}`. The page shows a toast naming the `skipped` lights, which stayed on. The Mac shell's `POST /api/all-off` call reads the same `skipped` in the reply body but does not show it yet.
 - `store.upsert`, `store.delete` refuse the `looks` collection; use the messages above.
 
 WebSocket messages to every client:

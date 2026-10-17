@@ -666,9 +666,11 @@ class Hub:
             self._mirror_from(fixture)
 
     def _apply_engine(self, fixture: Fixture, state: LightState) -> None:
-        self.set_state(fixture, state, "engine")
+        self.set_state(fixture, state, "engine", mirror=not fixture.own_values)
 
     def _engine_changed(self, fixture: Fixture, status: dict[str, Any]) -> None:
+        if status["kind"] != "transition":
+            fixture.own_values = False  # a look's fade is over (or something else took the light)
         self._broadcast({"type": "engine", "light": fixture.id, "engine": status})
 
     def _save_states(self, *, force: bool = False) -> None:

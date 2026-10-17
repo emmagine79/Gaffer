@@ -143,6 +143,10 @@ html[data-surface='phone'] .glass {
 
 /* ---------- controls: lumen's Slider, drawn as the mockup's track ---------- */
 .g-ctl { margin-top: 12px; }
+.g-back {
+  padding: 4px 10px; border: 0; border-radius: 8px;
+  font-size: 12px; color: var(--ink); background: var(--faint);
+}
 .g-lab { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--dim); margin-bottom: 8px; }
 .g-slider { display: flex; align-items: center; gap: 10px; }
 .g-slider .slider { flex: 1; gap: 0; }

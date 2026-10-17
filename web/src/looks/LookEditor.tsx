@@ -94,7 +94,7 @@ function LookRow({ look, slot, save }: { look: Look; slot: number; save: Save })
         <button type="button" onClick={() => applyLook(look.id)}>Try</button>
         <button type="button" title="Save what the lights are doing now into this look"
           onClick={() => void save({ id: look.id, name: look.name, capture: true })}>Use lights now</button>
-        <button type="button" className="looks-delete" aria-label={`Delete look ${slot}`}
+        <button type="button" className="looks-delete" aria-label={`Remove look ${slot}`}
           onClick={() => remove({ type: 'looks.delete', id: look.id })}>Delete</button>
       </div>
     </li>

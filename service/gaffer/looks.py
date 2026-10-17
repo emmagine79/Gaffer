@@ -5,12 +5,12 @@ A look is stored in the ``looks`` collection as::
     {"id": "talking-head", "name": "Talking head", "fade_seconds": 2.0,
      "lights": {"<light id>": {<state patch>}, ...}}
 
-Applying a look runs every light in it to its patch with lumen's ``_start``: a fade of
-0 sets the light at once, anything longer starts ``engine.start_transition``. Every
-light's values are worked out first and the lights are started only after that, so a
-look is never half applied. A light that is not saved, not on the network or cannot
-take its patch is left alone and named in ``skipped``. The list order is the slot
-order: slot 1 is the first look (the Mac shortcuts and keys 1 to 9).
+Applying a look runs every light in it to its patch: a fade of 0 sets the light at once,
+anything longer starts ``engine.start_transition``. Each light gets its own values, also when
+it sits in a group: a look never mirrors one light onto another. Every light's values are
+worked out first and the lights are started only after that. A light that is not saved, not
+on the network or whose values cannot be worked out is left alone and named in ``skipped``.
+The list order is the slot order: slot 1 is the first look (the Mac shortcuts and keys 1 to 9).
 
 The same functions serve the HTTP routes the Mac shell calls (``app.py``) and the
 WebSocket commands the web page sends (registered below).
@@ -22,7 +22,7 @@ import re
 import unicodedata
 from typing import Any
 
-from .commands import CommandError, _fitted, _start, command
+from .commands import CommandError, _fitted, command
 from .hub import Client, Hub
 
 COLLECTION = "looks"
@@ -183,11 +183,23 @@ def delete(hub: Hub, look_id: str) -> None:
         set_current(hub, None)
 
 
+def _run(hub: Hub, fixture: Any, target: Any, fade: float) -> None:
+    """Take one light to its look values. Group mirroring is off: the light keeps its own values."""
+    if fixture.engine.kind is not None:
+        fixture.engine.stop(restore=False)
+    if fade > 0:
+        fixture.engine.start_transition(target, fade)
+        fixture.own_values = True  # until the fade ends, the hub does not mirror this light's frames
+    else:
+        hub.set_state(fixture, target, "app", mirror=False)
+
+
 def apply(hub: Hub, look_id: str, fade: float | None = None) -> dict[str, Any]:
     """Run every light in the look to its values. A light that is not saved, not on the network or
-    cannot take its part is skipped and named in ``skipped``; the others still move. Every target is
-    worked out before any light starts, so a failure there leaves all lights and the current look as
-    they were. Raises CommandError when no light could move.
+    whose values cannot be worked out is skipped and named in ``skipped``; the others still move.
+    All values are worked out before any light starts, so a light that cannot be worked out never
+    leaves the others half moved. A driver error while a light is starting is not rolled back.
+    Raises CommandError when no light could move.
     ``fade`` replaces the look's own fade for this run (a cue step's fade, SPEC-014)."""
     look = find(hub, look_id)
     fade = float(look["fade_seconds"] if fade is None else fade)
@@ -195,18 +207,22 @@ def apply(hub: Hub, look_id: str, fade: float | None = None) -> dict[str, Any]:
     plan = []
     for light_id, patch in look["lights"].items():
         fixture = hub.fixtures.get(light_id)
-        if fixture is None or not hub.on_network(fixture):
+        if fixture is None:
             skipped.append(light_id)
             continue
         try:
+            if not hub.on_network(fixture):
+                skipped.append(light_id)
+                continue
             plan.append((fixture, _fitted(fixture, patch)))
-        except CommandError:
+        except Exception as err:  # a bad patch or unreadable model data skips that light, not the look
+            hub._log("looks", f"{look['name']}: skipped {fixture.light.name} ({type(err).__name__})")
             skipped.append(light_id)
     if not plan:
         raise CommandError("None of the lights in this look can be reached right now.")
     for fixture, target in plan:
         fixture.stream_source = None  # a look takes the light over, like any command
-        _start(hub, fixture, target, fade)
+        _run(hub, fixture, target, fade)
     set_current(hub, look)
     return {"id": look["id"], "name": look["name"], "skipped": skipped}
 
@@ -243,5 +259,5 @@ async def _delete(hub: Hub, client: Client, m: dict[str, Any]) -> None:
 
 
 @command("all.off")
-async def _all_off(hub: Hub, client: Client, m: dict[str, Any]) -> None:
-    await all_off(hub)
+async def _all_off(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "ack", "of": "all.off", "skipped": await all_off(hub)}
