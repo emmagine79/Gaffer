@@ -271,3 +271,15 @@ test('checklist 14, 16: a 245-character name with markup stays text and never wi
     await expect(page.locator('img')).toHaveCount(0)
   }
 })
+
+test('All off turns into All on, and pressing it again turns every light back on', async ({ page }) => {
+  // Captain, 18 Oct 2026: after All off, each light had to be switched on by hand.
+  await open(page, 'window')
+  await page.getByRole('button', { name: 'All lights' }).click()
+  const powers = async () => (await page.request.get(`${base()}/api/lights`).then((r) => r.json())).lights.map((l: { state: { power: boolean } }) => l.state.power)
+  await desk(page).getByRole('button', { name: /All off/ }).click()
+  await expect.poll(powers).not.toContain(true)
+  await desk(page).getByRole('button', { name: /All on/ }).click()
+  await expect.poll(powers).not.toContain(false)
+  await expect(desk(page).getByRole('button', { name: /All off/ })).toBeVisible()
+})

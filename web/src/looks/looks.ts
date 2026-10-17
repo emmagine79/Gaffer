@@ -12,6 +12,12 @@ export function applyLook(id: string) {
   useStudio.getState().send({ type: 'looks.apply', id })
 }
 
+/** Every light back on, each at the level it had (Captain, 18 Oct 2026: All off had no way back). */
+export function allOn() {
+  const { lights, powerOf } = useStudio.getState()
+  lights.forEach((l) => powerOf(l.id, true))
+}
+
 /** Every light off at once. Says so when a light could not be reached and so stayed on. */
 export async function allOff() {
   const { request, toast, lights } = useStudio.getState()

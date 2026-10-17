@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
+import { allOn } from '../looks/looks'
 import { Slider } from '../components/Slider'
 import type { LightView } from '../lib/types'
 import { beamOf, modelLine, readout } from '../glass/describe'
@@ -225,8 +226,8 @@ function Looks() {
           <b>{i + 1}</b><span>{look.name}</span>
         </button>
       ))}
-      <button type="button" className={`d-look ${off ? 'on' : ''}`} onClick={() => { setLast(null); allOff() }}>
-        <b>0</b><span>All off</span>
+      <button type="button" className="d-look" onClick={() => { setLast(null); if (off) allOn(); else allOff() }}>
+        <b>0</b><span>{off ? 'All on' : 'All off'}</span>
       </button>
     </div>
   )
