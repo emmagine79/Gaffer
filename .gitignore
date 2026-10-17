@@ -1,0 +1,34 @@
+# Gaffer is only this folder. The parent folder holds third-party research
+# (Zhiyun and Godox app files) that must never be published.
+# Block every app-package and native-binary type outright.
+*.apk
+*.xapk
+*.apks
+*.dex
+*.so
+*.odex
+*.oat
+*.jar
+*.aab
+# Research folder names, in case anything is ever copied in.
+apks/
+vega-xapk/
+dex/
+gdex/
+so/
+/assets/
+f100/
+evidence/
+
+# Build output
+build/
+dist/
+*.app/
+.build/
+DerivedData/
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.DS_Store
+.claude/worktrees/
