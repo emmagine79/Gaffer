@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from importlib.resources import files
 from typing import Any
 
@@ -38,8 +40,14 @@ def _error(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"error": code, "message": message})
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Gaffer light service", docs_url=None, redoc_url=None)
+def create_app(on_shutdown: Callable[[], None] | None = None) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+        if on_shutdown is not None:
+            on_shutdown()
+
+    app = FastAPI(title="Gaffer light service", docs_url=None, redoc_url=None, lifespan=lifespan)
     scanner = Scanner()
     page = files("gaffer_service").joinpath("static/index.html").read_text(encoding="utf-8")
 

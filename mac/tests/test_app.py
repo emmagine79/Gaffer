@@ -62,17 +62,31 @@ def alive(pid):
     return True
 
 
-def get(port, path):
+def get(port, path, secret=None, host=None):
+    """GET a service route as a local tool would: with the session cookie when given."""
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}")
+    if secret:
+        req.add_header("Cookie", f"gaffer_session={secret}")
+    if host:
+        req.add_header("Host", host)
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=WAIT_SECONDS + 5) as r:
-            return r.status, json.loads(r.read())
+        with urllib.request.urlopen(req, timeout=WAIT_SECONDS + 5) as r:
+            body = r.read()
+            return r.status, json.loads(body) if r.headers.get_content_type() == "application/json" else body.decode()
     except urllib.error.HTTPError as err:
-        return err.code, json.loads(err.read())
+        body = err.read()
+        try:
+            return err.code, json.loads(body)
+        except ValueError:
+            return err.code, body.decode()
 
 
 class Launched:
-    def __init__(self, app: Path, gaffer: int, child: int, port: int):
-        self.app, self.gaffer, self.child, self.port = app, gaffer, child, port
+    def __init__(self, app: Path, gaffer: int, child: int, port: int, secret: str):
+        self.app, self.gaffer, self.child, self.port, self.secret = app, gaffer, child, port, secret
+
+    def get(self, path, **kw):
+        return get(self.port, path, secret=self.secret, **kw)
 
 
 def launch(tmp: Path) -> Launched:
@@ -93,17 +107,28 @@ def launch(tmp: Path) -> Launched:
     child = wait_for(lambda: next(iter(int(p) for p in run("pgrep", "-P", str(gaffer)).split()), None),
                      "the light service to start")
 
-    def port():
-        m = re.search(r"n127\.0\.0\.1:(\d+)", run("lsof", "-a", "-p", str(child), "-iTCP", "-sTCP:LISTEN", "-n", "-P", "-Fn"))
-        return int(m.group(1)) if m else None
+    # The service records its port and secret for local tools in a file only this user can read.
+    runtime = Path.home() / f"Library/Application Support/Gaffer/run/service-{child}.json"
 
-    return Launched(real / "Gaffer.app", gaffer, child, wait_for(port, "the service to listen"))
+    def recorded():
+        try:
+            return json.loads(runtime.read_text())
+        except (FileNotFoundError, ValueError):
+            return None
+
+    info = wait_for(recorded, "the service to record its port")
+    return Launched(real / "Gaffer.app", gaffer, child, info["port"], info["secret"])
 
 
 def stop(launched: Launched):
-    for pid in (launched.gaffer, launched.child):
-        if alive(pid):
-            os.kill(pid, signal.SIGKILL)
+    """End Gaffer; its service then ends by itself. Kill the service only if it doesn't."""
+    if alive(launched.gaffer):
+        os.kill(launched.gaffer, signal.SIGKILL)
+    try:
+        wait_for(lambda: not alive(launched.child), "the light service to exit")
+    finally:
+        if alive(launched.child):
+            os.kill(launched.child, signal.SIGKILL)
 
 
 @pytest.fixture(scope="module")
@@ -127,7 +152,7 @@ def test_double_click_starts_bundled_python_service(gaffer):
     # The service's executable file is the Python inside this copy of the bundle.
     exe = run("lsof", "-a", "-p", str(gaffer.child), "-d", "txt", "-Fn").split("\nn", 1)[1].splitlines()[0]
     assert Path(exe).resolve() == (contents / "Resources/python/bin/python3.14").resolve()
-    assert get(gaffer.port, "/api/health") == (200, {"ok": True, "service": "gaffer"})
+    assert gaffer.get("/api/health") == (200, {"ok": True, "service": "gaffer"})
 
 
 def test_bluetooth_permission_is_asked_as_gaffer(gaffer):
@@ -139,7 +164,7 @@ def test_bluetooth_permission_is_asked_as_gaffer(gaffer):
     assert "Gaffer" in info["NSBluetoothAlwaysUsageDescription"]
     start = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     time.sleep(1)  # log show --start has one-second resolution
-    status, body = get(gaffer.port, "/api/bluetooth")  # a preflight check: never shows a prompt
+    status, body = gaffer.get("/api/bluetooth")  # a preflight check: never shows a prompt
     assert status == 200
 
     def subjects():
@@ -153,26 +178,41 @@ def test_bluetooth_permission_is_asked_as_gaffer(gaffer):
 
 def test_scan_lists_and_tags_nearby_devices(gaffer):
     """Criterion 3: the scan lists nearby BLE devices with a brand family, through the HTTP API."""
-    status, body = get(gaffer.port, "/api/bluetooth")
+    status, body = gaffer.get("/api/bluetooth")
     assert body["permission"] == "allowed", "Bluetooth permission for Gaffer is not granted yet"
-    status, body = get(gaffer.port, "/api/scan?seconds=6")
+    status, body = gaffer.get("/api/scan?seconds=6")
     assert status == 200, body
     assert body["devices"], "no Bluetooth devices heard"
     for device in body["devices"]:
         assert {"id", "name", "rssi", "family", "family_label"} <= device.keys()
     # The page the window shows is served by the same service.
-    with urllib.request.urlopen(f"http://127.0.0.1:{gaffer.port}/", timeout=WAIT_SECONDS) as r:
-        assert "/api/scan" in r.read().decode()
+    status, page = gaffer.get("/")
+    assert status == 200 and "/api/scan" in page
 
 
 def test_service_has_no_way_to_write_to_a_light(gaffer):
     """Criterion 5: the service's whole API is read-only, and its errors carry no server paths."""
-    status, spec = get(gaffer.port, "/openapi.json")
+    status, spec = gaffer.get("/openapi.json")
     methods = {m for ops in spec["paths"].values() for m in ops}
     assert methods == {"get"}, methods
-    status, body = get(gaffer.port, "/api/scan?seconds=not-a-number")
+    status, body = gaffer.get("/api/scan?seconds=not-a-number")
     assert status == 422
     assert not re.search(r"/Users/|/private/|/var/", json.dumps(body))
+
+
+def test_only_gaffers_own_window_can_use_the_service(gaffer):
+    """Security (conductor, 18 Oct 2026): a web page can't reach the service by DNS rebinding,
+    and nothing without this launch's session secret can use it."""
+    status, _ = gaffer.get("/api/health", host="evil.example")
+    assert status == 400  # refused by the Host check, even with the right cookie
+    for path in ("/api/scan?seconds=2", "/api/health", "/"):
+        status, body = get(gaffer.port, path)
+        assert status == 401 and body["error"] == "not_signed_in", (path, status, body)
+    status, body = get(gaffer.port, "/api/health", secret="not-this-launch")
+    assert status == 401
+    # Gaffer's window has already used this launch's one-time sign-in link.
+    status, body = get(gaffer.port, f"/session?key={gaffer.secret}")
+    assert status == 401 and body["error"] == "link_not_valid"
 
 
 @pytest.mark.parametrize("how", ["quit", "SIGINT", "SIGTERM", "SIGKILL"])
@@ -190,6 +230,8 @@ def test_quitting_gaffer_leaves_no_service(tmp_path, how):
             os.kill(launched.gaffer, getattr(signal, how))
         wait_for(lambda: not alive(launched.gaffer), "Gaffer to exit")
         wait_for(lambda: not alive(launched.child), "the light service to exit")
+        # It took its port-and-secret record with it.
+        assert not (Path.home() / f"Library/Application Support/Gaffer/run/service-{launched.child}.json").exists()
         # Running never changed the signed bundle (python -B writes no .pyc files).
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(launched.app)], check=True)
     finally:

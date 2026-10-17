@@ -39,7 +39,13 @@ The app carries its own Python 3.14 ([python-build-standalone](https://github.co
 
 The Swift shell starts the bundled Python service as its child process on `127.0.0.1` and shows its page. Because Gaffer starts the service, macOS treats Gaffer as the responsible app and asks for Bluetooth in Gaffer's name. The same Python started from Terminal is checked against Terminal instead. The service reads its stdin from a pipe only Gaffer holds, and exits when that pipe closes, so it stops however Gaffer ends, even if Gaffer crashes. Service logs go to `~/Library/Logs/Gaffer/service.log`.
 
+### Who can use the service
+
+The service listens on `127.0.0.1` only and refuses any Host header other than `127.0.0.1` or `localhost`, so a web page can't reach it by DNS rebinding. Gaffer makes a random secret at each launch and passes it to the service on stdin. Gaffer's window signs in once with `/session?key=<secret>`, which sets an HttpOnly, SameSite=Strict cookie; every other route answers 401 without it. Local tools can find the port and secret in `~/Library/Application Support/Gaffer/run/service-<pid>.json` (readable only by you, removed when the service stops). Phone access with a PIN comes later.
+
 ### Service API
+
+All routes need the session cookie.
 
 | Route | What it returns |
 | --- | --- |

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Runs Gaffer's Python light service from inside the app bundle.
 ///
@@ -7,9 +8,11 @@ import Foundation
 /// child's "responsible process": macOS then checks Bluetooth permission against
 /// Gaffer's Info.plist and shows the prompt in Gaffer's name.
 ///
-/// The child's stdin is a pipe whose write end only Gaffer holds. The service exits
-/// when that pipe closes, and the kernel closes it however Gaffer ends (Quit, crash,
-/// SIGINT, SIGKILL), so the service can't be left running.
+/// The child's stdin is a pipe whose write end only Gaffer holds. Its first line is
+/// a random session secret made at each launch; the window signs in with it once
+/// (see service/src/gaffer_service/session.py). The service exits when that pipe
+/// closes, and the kernel closes it however Gaffer ends (Quit, crash, SIGINT,
+/// SIGKILL), so the service can't be left running.
 final class ServiceProcess {
     enum Event {
         case ready(port: Int)
@@ -22,6 +25,14 @@ final class ServiceProcess {
     private var buffer = Data()
     private var announced = false
     private let onEvent: (Event) -> Void
+    /// Random secret for this launch: 32 bytes from the system's secure generator, as hex.
+    let secret: String = {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            fatalError("no secure random bytes")
+        }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }()
 
     init(onEvent: @escaping (Event) -> Void) {
         self.onEvent = onEvent
@@ -35,7 +46,7 @@ final class ServiceProcess {
         process.executableURL = python
         // -I: ignore PYTHON* variables and the user's site-packages. -B: never write
         // .pyc files into the signed bundle.
-        process.arguments = ["-I", "-B", "-m", "gaffer_service", "--exit-when-stdin-closes"]
+        process.arguments = ["-I", "-B", "-m", "gaffer_service", "--session-from-stdin"]
         process.environment = Self.cleanEnvironment()
         process.currentDirectoryURL = resources
         process.standardInput = stdinPipe
@@ -51,6 +62,7 @@ final class ServiceProcess {
             DispatchQueue.main.async { self?.onEvent(.stopped(status: status)) }
         }
         try process.run()
+        stdinPipe.fileHandleForWriting.write(Data((secret + "\n").utf8))
     }
 
     /// Stop the service and wait until it has gone.

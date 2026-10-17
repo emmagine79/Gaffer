@@ -40,9 +40,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handle(_ event: ServiceProcess.Event) {
         switch event {
         case .ready(let port):
-            let url = URL(string: "http://127.0.0.1:\(port)/")!
-            serviceURL = url
-            webView?.load(URLRequest(url: url))
+            guard let secret = service?.secret else { return }
+            serviceURL = URL(string: "http://127.0.0.1:\(port)/")!
+            // One-time sign-in link: sets the session cookie, then redirects to the page.
+            let signIn = URL(string: "http://127.0.0.1:\(port)/session?key=\(secret)")!
+            webView?.load(URLRequest(url: signIn))
         case .stopped(let status):
             if !quitting {
                 NSLog("Gaffer: light service stopped with status \(status)")
@@ -83,7 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func buildWindow() {
-        let web = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let config = WKWebViewConfiguration()
+        // Keep the session cookie in memory only; it dies with this launch.
+        config.websiteDataStore = .nonPersistent()
+        let web = WKWebView(frame: .zero, configuration: config)
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 420, height: 560),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -122,6 +127,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// A write to the service's stdin after it has gone must not end Gaffer.
+signal(SIGPIPE, SIG_IGN)
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
