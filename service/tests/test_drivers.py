@@ -279,9 +279,10 @@ class _Wire:
 
 
 async def test_a_light_whose_model_is_gone_is_never_sent_godox_bytes(tmp_path, demo_models):
-    """A Zhiyun model file that was deleted leaves an id like PL0102 behind. The light sits on the active
-    mesh network, so under the old fallback it was commanded through the Godox pump."""
-    hub = await _studio(tmp_path, orphan_model="PL0102")
+    """A Zhiyun model file that was deleted leaves an id like this behind (not a real model id, so no
+    Zhiyun driver in a later merge ever owns it). The light sits on the active mesh network, so under the
+    old fallback it was commanded through the Godox pump."""
+    hub = await _studio(tmp_path, orphan_model="GONE-MODEL")
     try:
         wire = _Wire(hub)
         orphan, key = _light(hub, "Orphan"), _light(hub, "Key light")
