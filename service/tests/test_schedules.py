@@ -6,6 +6,7 @@ the wall clock. The app runs in demo mode (no Bluetooth) and is reached as the M
 
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
 
@@ -82,15 +83,25 @@ def _delete_look(client, look_id):
 
 
 def _error_toast_when_the_clock_reaches(client, when):
-    """Move the clock with a window connected, and return the error toast that window is shown."""
+    """Move the clock with a window connected, and return the error toast that window is shown (fails after 5 s)."""
+    toasts: list[str] = []
+
+    def read(ws):
+        try:
+            while True:
+                message = ws.receive_json()
+                if message.get("type") == "toast" and message.get("kind") == "error":
+                    toasts.append(message["text"])
+                    return
+        except Exception:  # noqa: BLE001 - the socket closing at the end of the test ends the reader
+            return
+
     with client.websocket_connect(WS) as ws:
         ws.receive_json()  # hello
+        threading.Thread(target=read, args=(ws,), daemon=True).start()
         client.clock.set(when)
-        for _ in range(500):
-            message = ws.receive_json()
-            if message.get("type") == "toast" and message.get("kind") == "error":
-                return message["text"]
-    raise AssertionError("no error toast reached the window")
+        _wait(lambda: toasts, "an error toast reaching the window")
+    return toasts[0]
 
 
 def _save_schedule(client, schedule):
@@ -139,7 +150,7 @@ def test_a_schedule_that_is_not_valid_is_refused_and_stores_nothing(studio):
     for bad in ({**good, "name": " "}, {**good, "at": "25:00"}, {**good, "at": "9:5"}, {**good, "days": []},
                 {**good, "days": [7]}, {**good, "days": [0, 0]}, {**good, "action": "sunrise"},
                 {**good, "action": "look", "target": "no-such-look"}, {**good, "action": "look"},
-                {**good, "id": "constructor"}, {**good, "name": "x" * 81}, {**good, "at": "２２:００"}):
+                {**good, "id": "constructor"}, {**good, "name": "x" * 81}, {**good, "at": "09:3０"}):
         reply = _save_schedule(studio, bad)
         assert reply["type"] == "error", bad
         assert not any(p in reply["text"] for p in ("/Users/", "/private/", "/var/")), reply
