@@ -210,7 +210,8 @@ class PhoneListener:
             logger.warning("phone listener could not bind port %s: %r", self.port, err)
             raise PhoneUnavailable("Gaffer could not open its port to the network. Try again.") from err
         try:
-            config = uvicorn.Config(self.app, lifespan="off", log_level="warning", access_log=False,
+            # proxy_headers=False: the gate must see the real peer, not an address a header names (SPEC-024).
+            config = uvicorn.Config(self.app, lifespan="off", log_level="warning", access_log=False, proxy_headers=False,
                                     timeout_graceful_shutdown=self.graceful_seconds)
             server = uvicorn.Server(config)
             config.load()

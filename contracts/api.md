@@ -194,14 +194,15 @@ reconnects with back-off until the service process ends.
 
 ## Phone access
 
-Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback and `Host` is `127.0.0.1` or `localhost`; needs the launch secret cookie, no PIN) and a **phone** (anything else; needs the PIN cookie).
+Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie). A loopback connection is never a phone: a proxy on the Mac (`tailscale serve` or Funnel, `ssh -L`, a dev proxy) connects from loopback for visitors who could be anywhere. The service takes the peer address from the TCP connection only, never from `X-Forwarded-For`.
 
 A phone's request is refused when:
 
 | Case | Answer |
 | --- | --- |
 | Phone access is off | `403 phone_access_off` (socket closed with code 4403) |
-| The connection comes from a public address: not loopback, private IPv4 (RFC 1918), link-local (RFC 3927, RFC 4291), unique local IPv6 (RFC 4193) or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48). An IPv4-mapped IPv6 address counts as its IPv4 address. Checked before the Host and the PIN | `403 network_not_allowed` (socket 4403) |
+| A loopback connection carries an `X-Forwarded-*`, `Forwarded` or `Tailscale-*` header, whatever its `Host` and cookie | `403 network_not_allowed` (socket 4403) |
+| The connection does not come from a private IPv4 (RFC 1918), link-local (RFC 3927, RFC 4291), unique local IPv6 (RFC 4193) or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48) address. That includes a public address and, since SPEC-024, loopback with a `Host` other than `127.0.0.1` or `localhost` (while phone access is off, that case is `400 Invalid host header`, as before). An IPv4-mapped IPv6 address counts as its IPv4 address. Checked before the Host and the PIN | `403 network_not_allowed` (socket 4403) |
 | `Host` is not an address phone access listed (the Wi-Fi address, the Tailscale addresses and MagicDNS name) | `400 Invalid host header` (socket 4403) |
 | No valid PIN cookie, and the route is not one of the open ones below | `401 pin_required` (socket closed with code 4401 before it opens) |
 
