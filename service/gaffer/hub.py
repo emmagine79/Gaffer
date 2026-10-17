@@ -1000,7 +1000,7 @@ class Hub:
         # The G200 jumps to 100% when Max Mode comes on, and stays there when it goes off (Captain's live
         # check, 18 Oct 2026). Gaffer shows the 100%, and Max off puts the light back to its earlier level.
         if on and not was_on:
-            fixture.level_before_max = asked.brightness
+            fixture.level_before_max = fixture.state.brightness  # the newest level, even one set mid-write
             if fixture.state is asked:  # never over a level set while the write was on its way
                 self.set_state(fixture, fixture.state.model_copy(update={"brightness": 100.0}), "app")
         elif not on and was_on and fixture.level_before_max is not None:

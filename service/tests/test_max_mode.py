@@ -361,3 +361,7 @@ def test_a_slider_move_during_a_slow_max_on_write_is_kept(tmp_path, monkeypatch)
         ws.send_json({"type": "set", "light": light, "patch": {"brightness": 50}})  # while the write is on its way
         assert _until(ws, lambda m: m.get("rid") == 1)["type"] == "ack"
         assert _light(client, "Zhiyun panel")["state"]["brightness"] == 50
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 100}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 100, "Gaffer at 100%")
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 50  # back to the newest level, not 33
