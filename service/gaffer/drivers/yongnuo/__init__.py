@@ -376,8 +376,9 @@ class YongnuoDriver(Driver):
                         self._pending.setdefault(address, (light, state))  # a newer apply is already there and wins
                     else:
                         self._last[address] = state
-                        # Cut short, a power-on may not have landed: the next state sends it again.
-                        self._on[address] = bool(state.power) and complete
+                        # A power-on whose resends were cut short may not have landed: the next state sends it again.
+                        cut_short_on = not complete and self.encode_power(light, True) in frames
+                        self._on[address] = bool(state.power) and not cut_short_on
                         self._failures.pop(address, None)
                 if failed:
                     self._failures[address] = self._failures.get(address, 0) + 1

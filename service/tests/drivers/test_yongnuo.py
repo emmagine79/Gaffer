@@ -637,3 +637,25 @@ async def test_a_yn150_switched_on_then_dimmed_at_once_still_comes_on_when_it_mi
     driver.apply(yn, LightState(power=True, brightness=60, cct=Cct(kelvin=5600)))
     await driver.flush()
     assert LossyYN150.made.on is True
+
+
+async def test_dragging_a_yn150_that_is_already_on_sends_no_power_on_frames():
+    FakeTransport.sent = []
+    driver = None
+    yn = light("YN150", 4)
+    drag = []
+
+    async def next_drag_step(_seconds):
+        if drag:
+            driver.apply(yn, LightState(power=True, brightness=drag.pop(0), cct=Cct(kelvin=5600)))
+
+    driver = YongnuoDriver(transport_factory=FakeTransport, sleep=next_drag_step)
+    driver.apply(yn, LightState(power=True, brightness=80, cct=Cct(kelvin=5600)))
+    await driver.flush()  # switched on, every copy sent
+    power_on = "AE0106040156"
+    switching_on = hexes().count(power_on)
+    drag.extend([60, 50])
+    driver.apply(yn, LightState(power=True, brightness=70, cct=Cct(kelvin=5600)))
+    await driver.flush()
+    assert not drag  # each drag step cut the send before it short
+    assert hexes().count(power_on) == switching_on  # the drag added none
