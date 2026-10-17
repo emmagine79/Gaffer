@@ -75,6 +75,8 @@ interface Studio {
   moveLight: (id: string, x: number, y: number) => void
   apply: (patch: StatePatch, opts?: { fade?: number }) => void
   applyTo: (id: string, patch: StatePatch, opts?: { fade?: number }) => void
+  /** Show a light at this level now, sending nothing: the server has already been told. */
+  showLevel: (id: string, brightness: number) => void
   power: (on: boolean, fade?: number) => void
   powerOf: (id: string, on: boolean, fade?: number) => void
   send: (message: Record<string, unknown>) => void
@@ -256,6 +258,13 @@ export const useStudio = create<Studio>()((set, get) => ({
     const light = get().lights.find((l) => l.id === id)
     if (light) set((s) => withLights(s.selected, patchLight(s.lights, id, { state: merge(light.state, patch) })))
     socket.send({ type: 'set', light: id, patch, fade: opts?.fade ?? 0 })
+  },
+
+  showLevel: (id, brightness) => {
+    const light = get().lights.find((l) => l.id === id)
+    if (!light) return
+    const next = { ...light.state, brightness }
+    set((s) => ({ ...withLights(s.selected, patchLight(s.lights, id, { state: next })), ...(id === s.selected ? { state: next } : {}) }))
   },
 
   power: (on, fade = 0) => {

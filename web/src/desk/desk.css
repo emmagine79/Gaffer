@@ -1,0 +1,45 @@
+/* The lighting desk, from design/directions/b-desk.html, in Glass's tokens (styles/glass.css). */
+.desk { min-width: 0; }
+.d-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.d-head b { font-size: 15px; font-weight: 600; }
+.d-head span { font-size: 12px; color: var(--dim); }
+.d-strips { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 8px; padding: 8px; border-radius: 10px; background: var(--faint); }
+.d-strip {
+  min-width: 0; padding: 12px 8px 10px; border-radius: 8px;
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  background: var(--panel-solid); touch-action: pan-y; user-select: none; -webkit-user-select: none;
+}
+.d-strip.picked { box-shadow: 0 0 0 2px var(--busy); }
+.d-chip { width: 100%; height: 8px; margin-bottom: 10px; border-radius: 4px; background: var(--chip); box-shadow: 0 0 12px var(--chip); }
+.d-name {
+  max-width: 100%; padding: 0; border: 0; background: none; color: var(--ink);
+  font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.d-name:focus-visible, .d-pw:focus-visible, .d-look:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.d-model {
+  max-width: 100%; height: 28px; margin: 2px 0 10px; overflow: hidden; overflow-wrap: anywhere;
+  font-size: 11px; line-height: 14px; color: var(--dim);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.d-read { max-width: 100%; font-size: 28px; font-weight: 300; line-height: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-read small { font-size: 14px; color: var(--dim); }
+.d-k { margin: 4px 0 12px; font-size: 13px; color: var(--dim); }
+.d-fader { width: 44px; height: 170px; }
+html[data-surface='phone'] .d-fader { height: 240px; }
+.d-fader .slider-track { background: var(--faint); }
+.d-fader .slider-fill { background: color-mix(in srgb, var(--beam-draw) 85%, transparent); }
+.d-pw {
+  margin-top: 10px; width: 100%; padding: 5px 0; border: 0; border-radius: 5px;
+  font-size: 11px; color: var(--dim); background: var(--faint);
+}
+.d-pw.on { color: #1b1b1b; background: var(--ok); font-weight: 600; }
+.d-looks { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 6px; margin-top: 12px; }
+.d-look {
+  min-width: 0; padding: 9px 4px 7px; border: 0; border-radius: 6px; text-align: center;
+  font-size: 11px; color: var(--dim); background: var(--faint);
+}
+.d-look b { display: block; font-size: 16px; color: var(--ink); margin-bottom: 1px; }
+.d-look span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-look.on { background: var(--busy); color: #3a2a0f; }
+.d-look.on b { color: #2a1d07; }
+.d-hint { margin-top: 12px; font-size: 12px; color: var(--dim); }
