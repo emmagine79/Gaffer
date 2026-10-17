@@ -6,10 +6,11 @@ It prints one line, `GAFFER_SERVICE_READY port=N`, once it is listening. The Mac
 app reads that line to know where to point its window.
 
 With --session-from-stdin the first line of stdin is the session secret (see
-session.py), and the service ends as soon as stdin reaches end of file. The Mac
-app holds the other end of that pipe, and the kernel closes it when the app exits
-for any reason, including a crash or SIGKILL. So the service can never outlive
-Gaffer. Without the flag (for development) the service makes its own secret and
+session.py), and the service stops when stdin reaches end of file: cleanly, so the
+lights' last state is saved and the link let go, with a hard exit a few seconds later
+as a backstop. The Mac app holds the other end of that pipe, and the kernel closes it
+when the app exits for any reason, including a crash or SIGKILL. So the service can
+never outlive Gaffer. Without the flag (for development) the service makes its own secret and
 prints the sign-in link on stderr.
 
 While running, the service records its port and secret in a file only this user
@@ -27,11 +28,13 @@ import secrets
 import socket
 import sys
 import threading
+import time
 from pathlib import Path
 
 import uvicorn
 
 from .app import create_app
+from .lifetime import GRACE_SECONDS
 from .paths import AlreadyRunning, data_home, hold_data_folder
 from .session import protect, runtime_file, write_runtime_file
 
@@ -54,12 +57,20 @@ def _remove_runtime_file() -> None:
     runtime_file(os.getpid()).unlink(missing_ok=True)
 
 
-def _exit_when_stdin_closes() -> None:
+def _stop_when_stdin_closes(server: uvicorn.Server) -> None:
+    """Stop cleanly once stdin closes, so the hub saves the lights' state and drops the link.
+
+    A hard exit after lumen-studio's grace period is the backstop: the service must
+    never outlive Gaffer holding a light's only Bluetooth connection.
+    """
+
     def watch() -> None:
         try:
             while sys.stdin.buffer.read(4096):
                 pass
         finally:
+            server.should_exit = True
+            time.sleep(GRACE_SECONDS)
             _remove_runtime_file()
             os._exit(0)
 
@@ -130,7 +141,6 @@ def main(argv: list[str] | None = None) -> None:
         secret = sys.stdin.buffer.readline().strip().decode("ascii", "replace")
         if not secret:
             sys.exit("gaffer: no session secret on stdin")
-        _exit_when_stdin_closes()
     else:
         secret = secrets.token_urlsafe(32)
 
@@ -148,11 +158,13 @@ def main(argv: list[str] | None = None) -> None:
     port = sock.getsockname()[1]
 
     write_runtime_file(port, secret)
-    # Removed on a normal shutdown (SIGTERM, SIGINT) here, and on stdin end of file by the watcher.
+    # Removed on every clean shutdown (SIGTERM, SIGINT, stdin end of file), and by the watcher's backstop.
     app = create_app(demo=args.demo, data_dir=args.data, on_shutdown=_remove_runtime_file)
     # No access log: the one-time sign-in link carries the secret in its query string.
     server = uvicorn.Server(uvicorn.Config(protect(app, secret), log_level="info", access_log=False))
-    if not args.session_from_stdin:
+    if args.session_from_stdin:
+        _stop_when_stdin_closes(server)  # an end of file that came earlier is seen at once
+    else:
         print(f"Sign in: http://127.0.0.1:{port}/session?key={secret}", file=sys.stderr, flush=True)
     print(f"GAFFER_SERVICE_READY port={port}", flush=True)
     server.run(sockets=[sock])
