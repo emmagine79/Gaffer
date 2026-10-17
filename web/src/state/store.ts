@@ -10,7 +10,7 @@ export type TabId =
   | 'live' | 'white' | 'colour' | 'gels' | 'effects' | 'timeline' | 'sync'
   | 'scenes' | 'schedule' | 'mesh' | 'device' | 'lab' | 'guide'
 
-export interface Toast { id: number; text: string; kind: 'info' | 'error' | 'sync' | 'ok' }
+export interface Toast { id: number; text: string; kind: 'info' | 'error' | 'warn' | 'sync' | 'ok' }
 
 const LEASE_MS = 350
 const SELECTED_KEY = 'gaffer.selected'
@@ -312,7 +312,7 @@ export const useStudio = create<Studio>()((set, get) => ({
   toast: (text, kind = 'info') => {
     const id = ++toastSeq
     set((s) => ({ toasts: [...s.toasts.slice(-3), { id, text, kind }] }))
-    window.setTimeout(() => get().dismissToast(id), kind === 'error' ? 6000 : 3200)
+    window.setTimeout(() => get().dismissToast(id), kind === 'error' || kind === 'warn' ? 6000 : 3200)
   },
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
   setConnectionSheet: (open) => set({ connectionSheet: open }),
@@ -445,7 +445,7 @@ function handle(m: ServerMessage) {
       set((s) => ({ log: [...s.log.slice(-299), m.entry] }))
       break
     case 'toast':
-      useStudio.getState().toast(m.text, m.kind === 'sync' ? 'sync' : 'info')
+      useStudio.getState().toast(m.text, m.kind === 'sync' || m.kind === 'error' || m.kind === 'warn' ? m.kind : 'info')
       break
     case 'device':
       updateLight(m.light, { device: m.device })

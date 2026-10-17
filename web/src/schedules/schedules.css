@@ -1,0 +1,18 @@
+/* The schedule editor. Shares the look editor's panel (looks.css); colours follow the Mac's light or dark setting. */
+
+.sched-list { list-style: none; margin: 0; padding: 0; }
+.sched-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; align-items: center;
+  padding: 10px 0; border-top: 1px solid var(--faint);
+}
+.sched-row.is-off .sched-time, .sched-row.is-off .sched-info { opacity: 0.5; }
+.sched-time { font-size: 18px; font-variant-numeric: tabular-nums; }
+.sched-info { display: grid; min-width: 0; font-size: 12px; }
+.sched-name, .sched-what { overflow-wrap: anywhere; }
+.sched-row .looks-buttons { grid-column: 1 / -1; }
+.sched-new { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--faint); }
+.sched-days { display: flex; flex-wrap: wrap; gap: 4px; }
+.sched-days button {
+  padding: 5px 8px; border: 0; border-radius: 8px; font-size: 12px; color: var(--dim); background: var(--faint);
+}
+.sched-days button.is-on { background: var(--sel-bg); color: var(--sel-ink); font-weight: 600; }

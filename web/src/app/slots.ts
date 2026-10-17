@@ -10,7 +10,7 @@
  *   SPEC-010  looks with their fade web/src/looks/ (cards, keys 1-9 and 0, the window's look editor)
  *   SPEC-011  groups                groups/Groups.tsx          (done)
  *   SPEC-012  effects               tabs/EffectsTab.tsx         -> web/src/effects/
- *   SPEC-013  schedules             tabs/ScheduleTab.tsx        -> web/src/schedules/
+ *   SPEC-013  schedules             web/src/schedules/ (the window's schedule editor)
  *   SPEC-015  phone access          the phone surface is the bare URL (app/surface.ts)
  */
 
@@ -18,4 +18,3 @@ export { Desk as DeskSlot } from '../desk/Desk'
 export { AddLight } from '../add/AddLight'
 export { Groups } from '../groups/Groups'
 export { EffectsTab as Effects } from '../tabs/EffectsTab'
-export { ScheduleTab as Schedules } from '../tabs/ScheduleTab'

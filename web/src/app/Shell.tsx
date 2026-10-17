@@ -8,6 +8,7 @@ import { CueEditor } from '../cues/CueEditor'
 import { useCueKey } from '../cues/cues'
 import { LookEditor } from '../looks/LookEditor'
 import { useLookKeys } from '../looks/looks'
+import { ScheduleEditor } from '../schedules/ScheduleEditor'
 import { useTabKey } from '../desk/useTabKey'
 import { useStudio } from '../state/store'
 import { AddLight, DeskSlot, Groups } from './slots'
@@ -45,6 +46,7 @@ export function Shell() {
       </main>
       {SURFACE === 'window' && <LookEditor />}
       {SURFACE === 'window' && <CueEditor />}
+      {SURFACE === 'window' && <ScheduleEditor />}
       <AddLight />
       <Toasts />
     </div>

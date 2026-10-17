@@ -497,6 +497,8 @@ async def _upsert(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]
         raise CommandError("save looks with looks.save")  # they are checked, and the current look kept in step (looks.py)
     if collection == "cues":
         raise CommandError("save cues with cues.save")  # checked, and the active cue kept in step (cues.py)
+    if collection == "schedules":
+        raise CommandError("save schedules with schedules.save")  # they are checked (schedules.py)
     item = m.get("item")
     if not isinstance(item, dict) or not str(item.get("name", "")).strip():
         raise CommandError("items need a name")
@@ -516,6 +518,8 @@ async def _delete(hub: Hub, client: Client, m: dict[str, Any]) -> None:
         raise CommandError("delete looks with looks.delete")
     if collection == "cues":
         raise CommandError("delete cues with cues.delete")
+    if collection == "schedules":
+        raise CommandError("delete schedules with schedules.delete")
     hub.store.delete(collection, str(m.get("id")))
     hub._broadcast({"type": "store", "collection": collection, "items": hub.store.items(collection)})
 
