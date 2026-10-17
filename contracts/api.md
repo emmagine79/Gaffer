@@ -196,7 +196,7 @@ reconnects with back-off until the service process ends.
 
 ## Phone access
 
-Off until the Mac window switches it on. Once on, it stays on with the same PIN after Gaffer restarts, until it is switched off (Captain, 18 Oct 2026): the service keeps the setting, the PIN and the port in `phone.json` in its data folder, readable by the Mac user only, and takes the same port again at start so phones keep their address (any free port if it is taken). Quitting only closes the listener and signs phones out. If the port cannot be opened at start, Gaffer starts with phone access off. Switching off always closes access, and if the setting cannot be saved the file is removed. While it is on, the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie).
+Off until the Mac window switches it on. Once on, it stays on with the same PIN after Gaffer restarts, until it is switched off (Captain, 18 Oct 2026): the service keeps the setting, the PIN and the port in `phone.json` in its data folder, readable by the Mac user only, and takes the same port again at start so phones keep their address (any free port if it is taken on `127.0.0.1` or on all network addresses, `0.0.0.0` and `::`). Quitting only closes the listener and signs phones out. If phone access cannot be switched back on at start, Gaffer starts with phone access off and the status carries a `restore_failed` notice (see `notice` below). A change that cannot be saved never lets the older setting come back at the next start: switching off, New PIN or switching on removes `phone.json`, or when the folder cannot be written overwrites it in place with an "off" setting. Only if neither works does the status carry a `not_saved` notice. While it is on, the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie).
 
 What is guaranteed:
 
@@ -237,7 +237,7 @@ Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request 
 
 ```json
 {
-  "enabled": true, "pin": "042917", "locked": false, "checking": false, "tailscale": true,
+  "enabled": true, "pin": "042917", "locked": false, "checking": false, "tailscale": true, "notice": null,
   "targets": [
     {"kind": "wifi", "label": "Same Wi-Fi", "url": "http://192.168.1.20:8787/", "qr": "data:image/svg+xml;..."},
     {"kind": "tailscale", "label": "Away, over Tailscale", "url": "http://studio-mac.tail1234.ts.net:8787/", "qr": "data:image/svg+xml;..."}
@@ -247,6 +247,7 @@ Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request 
 
 - `POST /api/phone` with `{"enabled": true|false}` switches phone access on or off and answers with the status. Switching on makes a new PIN and opens the network port; `503 phone_unavailable` if the port cannot be opened. Switching off closes the port, signs every phone out and closes their sockets.
 - `POST /api/phone/pin` makes a new PIN, clears the wrong-guess count, signs every phone out and closes their sockets.
+- `notice` is `null`, or `{"code": "restore_failed" | "not_saved", "message": "<plain words>"}`, for the Mac window to show. `restore_failed`: phone access was on when Gaffer last closed and could not be switched back on at start (it is off now; the message says to turn it on again). `not_saved`: the last switch on, switch off or New PIN could not be saved and the old file could not be removed or overwritten either, so after a restart phone access may be as it was before. The next switch on, switch off or New PIN clears it. It never carries a path.
 - When off, `pin` is `null`, `targets` is empty and `tailscale` is `null`. `tailscale` is `false` when the `tailscale` tool is missing or not running; then there is no second target.
 - Nothing waits for the `tailscale` tool. Switching on answers at once with `checking: true`, `tailscale: null` and the Wi-Fi target only; the Tailscale target joins when the tool answers. Switching off, or the service stopping, ends the check and kills the tool. `GET /api/phone` also starts a new check (so opening the panel looks again), ending one that is still running. The last good Tailscale answer, and its names in the allowed Host set, stay in use when a check fails, hangs or is replaced, and also across switching access off and on. Only an answer from the tool that Tailscale is not running (or no tool at all) replaces it. `GET /api/phone?wait=1` does not start one; it answers when no check is running, however long that takes.
 - `GET /api/export` is Mac window only (it holds the lights' keys): a phone gets `403 mac_only`. `GET /api/health` carries no folder path.

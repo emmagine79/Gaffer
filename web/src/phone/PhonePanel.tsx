@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import './phone.css'
 
 interface Target { kind: 'wifi' | 'tailscale'; label: string; url: string; qr: string }
-interface PhoneStatus { enabled: boolean; pin: string | null; locked: boolean; checking: boolean; tailscale: boolean | null; targets: Target[] }
+/** Something the service wants the owner to know: phone access could not be reopened at start, or a change could not be saved. */
+interface Notice { code: 'restore_failed' | 'not_saved'; message: string }
+interface PhoneStatus { enabled: boolean; pin: string | null; locked: boolean; checking: boolean; tailscale: boolean | null; targets: Target[]; notice: Notice | null }
 
 /** An answer the service gave, so the panel can tell "this is a phone" (403 mac_only) from a failed request. */
 class PhoneError extends Error {
@@ -86,6 +88,7 @@ export function PhonePanel() {
           <h2 id="ph-title">Phone access</h2>
           <button type="button" className="ph-x" aria-label="Close" onClick={() => dialog.current?.close()}>Close</button>
         </header>
+        {status?.notice && <p className="ph-warn" role="alert">{status.notice.message}</p>}
         {!status?.enabled ? (
           <>
             <p className="ph-note">Control your lights from a phone on the same Wi-Fi, or away from home with Tailscale. Anyone who scans the code also needs the PIN.</p>
