@@ -11,6 +11,7 @@ interface ApiLight {
   name: string
   state: { brightness: number; power: boolean; mode: string; cct: { kelvin: number } }
   caps: { effects: { symbol: number; name: string }[]; features: { colour: boolean } }
+  engine: { kind: string | null }
 }
 
 const base = () => process.env.GAFFER_URL!
@@ -205,4 +206,22 @@ test('a built-in effect the model row does not list still gets a name', async ({
   await selectLight(page, 'Key light')
   await expect(page.locator('.g-hero')).toHaveText('Effect')
   await expect(page.locator('.g-sub')).toContainText('built-in effect 99')
+})
+
+// A brightness change sends `set`, which ends a playing Gaffer effect. The panel says so instead of ending it silently.
+test('while a Gaffer effect plays, Brightness is not offered, and the effect keeps playing until it is stopped', async ({ page }) => {
+  await open(page, 1280)
+  await selectLight(page, 'Yongnuo wand')
+  const slider = page.getByRole('slider', { name: 'Brightness' })
+  await expect(slider).toBeVisible()
+  await own(page).getByRole('button', { name: 'Flicker' }).click()
+  const control = page.locator('.g-ctl', { hasText: 'Brightness' })
+  await expect(control).toContainText('Not in use')
+  await expect(slider).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'More brightness' })).toHaveCount(0)
+  await page.waitForTimeout(500)
+  expect((await lightNamed(page, 'Yongnuo wand')).engine.kind).toBe('effect')
+  await control.getByRole('button', { name: 'Stop to adjust' }).click()
+  await expect(slider).toBeVisible()
+  await expect.poll(async () => (await lightNamed(page, 'Yongnuo wand')).engine.kind).toBeNull()
 })

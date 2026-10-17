@@ -5,6 +5,7 @@ import { Slider } from '../components/Slider'
 import { InlineSave } from '../components/InlineSave'
 import { ParamField } from '../components/ParamField'
 import { effectFit, usableEffects } from '../effects/fit'
+import { ownLabel } from '../effects/own'
 import type { BuiltinEffect, Caps, ParamSpec, SoftEffect } from '../lib/types'
 import { EMPTY, useStudio } from '../state/store'
 import './tabs.css'
@@ -95,7 +96,7 @@ function EngineEffects() {
                 onDoubleClick={() => start(fx)}
               >
                 <span className="fx-tile-glow" />
-                <span className="fx-tile-name">{fx.name}</span>
+                <span className="fx-tile-name">{ownLabel(fx.id) ?? fx.name}</span>
                 <span className="fx-tile-cat">{fx.category}{effectFit(fx, caps) && <span className="fx-tag">{effectFit(fx, caps)}</span>}</span>
                 {isRunning && <span className="tally fx-tile-tally" />}
               </button>
@@ -105,7 +106,7 @@ function EngineEffects() {
         <p className="hint">Double-click a tile to start it straight away.</p>
       </div>
 
-      <Panel className="fx-detail" title={selected.name} aside={running ? <span className="live-pill">Live</span> : null}>
+      <Panel className="fx-detail" title={ownLabel(selected.id) ?? selected.name} aside={running ? <span className="live-pill">Live</span> : null}>
         <p className="muted fx-desc">{selected.description}</p>
         <div className="fx-actions">
           {running ? (

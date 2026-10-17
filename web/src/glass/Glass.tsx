@@ -54,6 +54,7 @@ function LightTabs() {
 function LightPanel({ light }: { light: LightView }) {
   const state = useStudio((s) => s.state) ?? light.state
   const apply = useStudio((s) => s.apply)
+  const send = useStudio((s) => s.send)
   const power = useStudio((s) => s.power)
   const { caps } = light
   const f = caps.features
@@ -86,12 +87,19 @@ function LightPanel({ light }: { light: LightView }) {
       <p className="g-sub">{sentence(state, caps, running)}</p>
       <Lamp level={beamOf(state).level} />
 
-      <Control label="Brightness" aside={`${Math.round(state.brightness)}%`}>
-        <Stepper
-          className="g-bright" label="Brightness" value={state.brightness} min={0} max={100} step={1} jump={5}
-          onChange={(v) => apply({ brightness: v })}
-        />
-      </Control>
+      {running ? (
+        // The effect sets the brightness itself, and any brightness change would end it: say so rather than stop it silently.
+        <Control label="Brightness" aside="Not in use">
+          <button type="button" className="g-back" onClick={() => send({ type: 'engine.stop' })}>Stop to adjust</button>
+        </Control>
+      ) : (
+        <Control label="Brightness" aside={`${Math.round(state.brightness)}%`}>
+          <Stepper
+            className="g-bright" label="Brightness" value={state.brightness} min={0} max={100} step={1} jump={5}
+            onChange={(v) => apply({ brightness: v })}
+          />
+        </Control>
+      )}
 
       {showKelvin && (held ? (
         <Control label="Colour temperature" aside="Not in use">

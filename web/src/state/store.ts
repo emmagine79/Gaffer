@@ -285,7 +285,8 @@ export const useStudio = create<Studio>()((set, get) => ({
   },
 
   send: (message) => {
-    flush() // a slider change still waiting for its frame must not land after this (a late `set` cancels an effect just started)
+    // A slider change still waiting for its frame must not land after an effect starts: a late `set` cancels it.
+    if (message.type === 'engine.start') flush()
     socket.send(scoped(message))
   },
   request: (message, timeoutMs) => socket.request(scoped(message), timeoutMs),
