@@ -55,6 +55,9 @@ class _Light:
         self.address = address
         self.model = model
         self.link: Link | None = None
+        #: Bumped whenever the link is replaced or dropped; a disconnect callback
+        #: from an older link carries an older number and is ignored.
+        self.generation = 0
         self.reachable: bool | None = None
         self.wanted: LightState | None = None
         self.sent = _Sent()
@@ -89,6 +92,8 @@ class ZhiyunDriver(Driver):
         self._transport: Transport = transport or BleakTransport()
         self._sleep = sleep
         self._lights: dict[str, _Light] = {}
+        self._closing: set[asyncio.Future[None]] = set()
+        self._stopped = False
 
     # -- contract ------------------------------------------------------------
 
@@ -99,16 +104,25 @@ class ZhiyunDriver(Driver):
             return None
         return row["id"] if row else None
 
+    async def start(self) -> None:
+        self._stopped = False
+
     async def stop(self) -> None:
-        for st in list(self._lights.values()):
-            if st.task:
-                st.task.cancel()
-            if st.link:
-                await st.link.close()
-                st.link = None
+        self._stopped = True
+        states = list(self._lights.values())
+        tasks = [st.task for st in states if st.task]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for st in states:
+            st.idle.set()  # release anyone waiting in flush()
+            self._drop_link(st)
+        await asyncio.gather(*self._closing, return_exceptions=True)
         self._lights.clear()
 
     async def connect(self, light: Any) -> None:
+        if self._stopped:
+            raise ZhiyunError("stopped", "Gaffer is shutting down.")
         st = self._state_for(light)
         async with st.lock:
             await self._ensure_link(st)
@@ -116,6 +130,8 @@ class ZhiyunDriver(Driver):
             st.task = asyncio.create_task(self._worker(st))
 
     def apply(self, light: Any, state: LightState) -> None:
+        if self._stopped:
+            return
         st = self._state_for(light)
         st.wanted = state
         st.idle.clear()
@@ -125,19 +141,28 @@ class ZhiyunDriver(Driver):
 
     async def identify(self, light: Any) -> None:
         st = self._state_for(light)
-        wanted = st.wanted
-        restore = wanted or LightState(
-            power=bool(st.sent.on),
+        # With nothing applied yet the light's own state is unknown. The user is looking
+        # at it, so assume it was lit: never switch off a light we did not switch on.
+        restore = st.wanted or LightState(
+            power=st.sent.on is not False,
             brightness=st.sent.brightness if st.sent.brightness is not None else 50.0,
         )
+        pulse: LightState | None = None
         try:
             for level in IDENTIFY_LEVELS:
-                self.apply(light, restore.model_copy(update={"power": True, "brightness": level}))
+                pulse = restore.model_copy(update={"power": True, "brightness": level})
+                self.apply(light, pulse)
                 await self.flush(light)
+                if st.reachable is not True:
+                    pulse = None  # nothing was shown, so there is nothing to restore
+                    raise ZhiyunError("unreachable", "The light did not answer.")
                 await self._sleep(IDENTIFY_HOLD_SECONDS)
+                if st.wanted is not pulse:
+                    return  # someone else commanded the light: their state wins
         finally:
-            self.apply(light, restore)
-            await self.flush(light)
+            if pulse is not None and st.wanted is pulse:
+                self.apply(light, restore)
+                await self.flush(light)
 
     def status(self, light: Any) -> LightStatus:
         st = self._lights.get(light.id)
@@ -182,10 +207,17 @@ class ZhiyunDriver(Driver):
     def _lost(self, st: _Light) -> None:
         st.reachable = False
         st.sent = _Sent()
+        self._drop_link(st)
+        self._notify(st)
+
+    def _drop_link(self, st: _Light) -> None:
+        """Forget the current link and close it in the background."""
+        st.generation += 1
         link, st.link = st.link, None
         if link is not None:
-            asyncio.ensure_future(link.close())
-        self._notify(st)
+            closing = asyncio.ensure_future(link.close())
+            self._closing.add(closing)
+            closing.add_done_callback(self._closing.discard)
 
     def _notify(self, st: _Light) -> None:
         if self.context.notify:
@@ -195,22 +227,23 @@ class ZhiyunDriver(Driver):
         if st.link is not None and st.link.connected:
             return
         st.sent = _Sent()
+        self._drop_link(st)
+        generation = st.generation
         try:
             st.link = await self._transport.open(
-                st.address, lambda data: self._on_notify(st, data), lambda: self._on_lost(st)
+                st.address, lambda data: self._on_notify(st, data), lambda: self._on_lost(st, generation)
             )
             await self._handshake(st)
-        except LinkError:
+        except BaseException:
+            # Any failure, including a cancel, leaves no half-handshaken link to reuse.
             self._lost(st)
             raise
         st.reachable = True
         self._notify(st)
 
-    def _on_lost(self, st: _Light) -> None:
-        st.link = None
-        st.sent = _Sent()
-        st.reachable = False
-        self._notify(st)
+    def _on_lost(self, st: _Light, generation: int) -> None:
+        if generation == st.generation:  # a late callback from a replaced link changes nothing
+            self._lost(st)
 
     async def _handshake(self, st: _Light) -> None:
         """Identity and state queries, in the iOS app's order; the light drops commands without them."""

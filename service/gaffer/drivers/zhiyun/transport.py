@@ -78,16 +78,18 @@ class BleakTransport:
         try:
             async with asyncio.timeout(CONNECT_TIMEOUT):
                 await client.connect()
-        except (TimeoutError, BleakError, OSError) as err:
-            raise LinkError("connect_failed", "Could not connect to the light.") from err
-        try:
             service = client.services.get_service(SERVICE_UUID)
             write_char = service.get_characteristic(WRITE_CHAR_UUID) if service else None
             notify_char = service.get_characteristic(NOTIFY_CHAR_UUID) if service else None
             if write_char is None or notify_char is None:
                 raise LinkError("not_zhiyun", "The device does not offer the Zhiyun control service.")
-            await client.start_notify(notify_char, lambda _c, data: on_notify(bytes(data)))
-        except BaseException:
+            async with asyncio.timeout(WRITE_TIMEOUT):
+                await client.start_notify(notify_char, lambda _c, data: on_notify(bytes(data)))
+        except (TimeoutError, BleakError, OSError) as err:
+            # A timed-out connect may still finish later: release the client so it cannot hold the light.
+            await _BleakLink(client, None).close()
+            raise LinkError("connect_failed", "Could not connect to the light.") from err
+        except BaseException:  # LinkError, a cancel, anything else: never leave the client connected
             await _BleakLink(client, None).close()
             raise
         return _BleakLink(client, write_char)
