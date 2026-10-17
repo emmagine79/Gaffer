@@ -12,6 +12,7 @@ one that only records bytes.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from pathlib import Path
@@ -118,6 +119,10 @@ class YongnuoDriver(Driver):
         self._settled: dict[str, asyncio.Event] = {}
         self._backing_off: set[str] = set()
         self._kicks: dict[str, asyncio.Event] = {}
+        #: Light id to address, so ``forget_light(light_id)`` finds this driver's per-address state.
+        self._ids: dict[str, str] = {}
+        #: Tasks of callers (connect, identify) now working on a light, so forget can cancel them.
+        self._callers: dict[str, set[asyncio.Task]] = {}
         self._failures: dict[str, int] = {}
 
     # -- matching -------------------------------------------------------------
@@ -205,11 +210,49 @@ class YongnuoDriver(Driver):
                       self._held, self._reachable):
             table.clear()
         self._backing_off.clear()
+        self._callers.clear()
+
+    async def forget_light(self, light_id: str) -> None:
+        """Close the link held for this light, stop everything that writes to it, and drop what is kept.
+
+        When this returns the driver sends the light nothing more: its sender task and any connect or
+        identify in flight are cancelled first, and only then is the link released.
+        """
+        address = self._ids.pop(light_id, None)
+        if address is None:
+            return
+        me = asyncio.current_task()
+        tasks = [t for t in (self._workers.pop(address, None), *self._callers.pop(address, ())) if t is not None and t is not me]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        settled = self._settled.pop(address, None)
+        if settled is not None:
+            settled.set()  # releases a flush that was waiting on this light
+        for table in (self._pending, self._kicks, self._failures, self._on, self._last, self._held, self._reachable):
+            table.pop(address, None)
+        self._backing_off.discard(address)
+        await self._drop(address)
+
+    @contextlib.contextmanager
+    def _working_on(self, light: Any):
+        """Record the calling task as working on this light, and the light's id for forget_light."""
+        self._ids[light.id] = light.address
+        task = asyncio.current_task()
+        if task is None:
+            yield
+            return
+        self._callers.setdefault(light.address, set()).add(task)
+        try:
+            yield
+        finally:
+            self._callers.get(light.address, set()).discard(task)
 
     async def connect(self, light: Any) -> None:
         self._channel(light)
-        async with self._lock(light.address):
-            await self._open(light)
+        with self._working_on(light):
+            async with self._lock(light.address):
+                await self._open(light)
 
     def apply(self, light: Any, state: Any) -> None:
         """Queue ``state``; the light's sender task sends it. Bad input raises here, before anything is queued.
@@ -224,6 +267,7 @@ class YongnuoDriver(Driver):
 
     def _queue(self, light: Any, state: Any, *, replace: bool) -> None:
         address = light.address
+        self._ids[light.id] = address
         if replace:
             self._pending[address] = (light, state)
         else:
@@ -248,29 +292,30 @@ class YongnuoDriver(Driver):
         self._channel(light)
         self._model(light)
         address = light.address
-        async with self._lock(address):
-            state = self._last.get(address)
-            try:
-                kelvin = state.cct.kelvin if state else protocol.DEFAULT_MAX_KELVIN
-                power_on = self.encode_power(light, True)
-                for step, level in enumerate((100, 10, 100)):
-                    frames = [self.encode_level(light, kelvin, level)]
-                    if step == 0 and power_on is not None and not self._on.get(address, False):
-                        frames.insert(0, power_on)  # a light that is off ignores levels until it is switched on
-                    await self._transmit(light, frames)
-                    if power_on is not None:
-                        self._on[address] = True
-                    await self._sleep(0.3)
-                if state is None or address in self._pending:
-                    return
-                await self._transmit(light, self._frames(light, state))
-                self._on[address] = bool(state.power)
-            except BaseException:
-                if state is not None:
-                    # A pulse that broke off (error, cancel or stop) must not leave the light dim.
-                    # Queued, not sent here: nothing is written while stopped.
-                    self._queue(light, state, replace=False)
-                raise
+        with self._working_on(light):
+            async with self._lock(address):
+                state = self._last.get(address)
+                try:
+                    kelvin = state.cct.kelvin if state else protocol.DEFAULT_MAX_KELVIN
+                    power_on = self.encode_power(light, True)
+                    for step, level in enumerate((100, 10, 100)):
+                        frames = [self.encode_level(light, kelvin, level)]
+                        if step == 0 and power_on is not None and not self._on.get(address, False):
+                            frames.insert(0, power_on)  # a light that is off ignores levels until it is switched on
+                        await self._transmit(light, frames)
+                        if power_on is not None:
+                            self._on[address] = True
+                        await self._sleep(0.3)
+                    if state is None or address in self._pending:
+                        return
+                    await self._transmit(light, self._frames(light, state))
+                    self._on[address] = bool(state.power)
+                except BaseException:
+                    if state is not None and self._ids.get(light.id) == address:  # not once forgotten
+                        # A pulse that broke off (error, cancel or stop) must not leave the light dim.
+                        # Queued, not sent here: nothing is written while stopped.
+                        self._queue(light, state, replace=False)
+                    raise
 
     def status(self, light: Any) -> LightStatus:
         address = light.address

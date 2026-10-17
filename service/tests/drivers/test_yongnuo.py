@@ -541,3 +541,32 @@ async def test_input_that_arrives_while_a_send_is_failing_is_not_made_to_wait_ou
     script.release.set()
     await until(lambda: script.bytes_for(yn.address))
     assert script.bytes_for(yn.address) == ["AE0309070CE45BA006"]
+
+
+async def test_forgetting_a_light_closes_its_link_and_it_is_sent_nothing_more(rig):
+    from gaffer.lights import SavedLight
+
+    script, sleep, build = rig
+    driver = build()
+    # A real SavedLight, with the channel field SPEC-003 gave it, not a stand-in.
+    yn = SavedLight(id="light-1", name="Key", address="FAKE-KEY", radio_id="YNLUX100PRO", network="", node_address=0, channel=7)
+    other = light("YNLUX100PRO", 9)
+    driver.apply(yn, lit(30, 3300))
+    driver.apply(other, lit(40, 3300))
+    await driver.flush()
+    assert script.bytes_for(yn.address) == ["AE030907" "0CE4" "1EA000"]
+    sleep.gate.clear()
+    pulse = asyncio.ensure_future(driver.identify(yn))
+    await until(lambda: len(sleep.delays) == 1)  # mid-pulse, holding the light
+    driver.apply(yn, lit(60, 3300))  # and a new state is queued behind it
+    written = len(script.bytes_for(yn.address))
+    await driver.forget_light(yn.id)
+    sleep.gate.set()
+    for _ in range(100):
+        await asyncio.sleep(0)
+    with pytest.raises(asyncio.CancelledError):
+        await pulse
+    assert len(script.bytes_for(yn.address)) == written  # nothing after forget
+    assert not script.made[0].connected  # and its link is closed
+    assert driver.status(yn)["reachable"] is None
+    assert script.made[1].connected  # another light is untouched
