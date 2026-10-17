@@ -29,6 +29,11 @@ POWER_SETTLE_SECONDS = 0.1
 HANDSHAKE_STEP_SECONDS = 0.1
 #: How long a Max Mode read waits for the light's answer; the hub's Godox record reads wait the same.
 MAX_MODE_READ_SECONDS = 3.0
+#: How long a write waits for the light's answer before the next write goes out. One frame in flight at a
+#: time: Captain's G200 stopped taking Bluetooth commands after a fast mix of sliders and Max Mode while
+#: Gaffer wrote back to back (18 Oct 2026). Source: aaditagrawal/zhiyun-light-control (MIT), whose client
+#: sends a frame and waits for its answer, timeout 1.5 s (async_client.py, exchange_*).
+REPLY_TIMEOUT_SECONDS = 1.5
 # Identify pulse: brightness values and the hold time for each. Our choice, in the plan (call 10).
 IDENTIFY_LEVELS = (100.0, 15.0, 100.0, 15.0)
 IDENTIFY_HOLD_SECONDS = 0.35
@@ -94,6 +99,8 @@ class _Light:
         self.max_reply: asyncio.Future[bool] | None = None
         #: Counts Max Mode writes, so a read that was in flight across one is thrown away.
         self.max_writes = 0
+        #: The answer each write in flight waits for, by sequence number (the light echoes it).
+        self.replies: dict[int, asyncio.Future[None]] = {}
 
     @property
     def op(self) -> int:
@@ -114,11 +121,13 @@ class ZhiyunDriver(Driver):
         transport: Transport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         backoff_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        reply_timeout: float = REPLY_TIMEOUT_SECONDS,
     ) -> None:
         super().__init__(context)
         self._transport: Transport = transport or BleakTransport()
         self._sleep = sleep
         self._backoff_sleep = backoff_sleep
+        self._reply_timeout = reply_timeout
         self._lights: dict[str, _Light] = {}
         self._closing: set[asyncio.Future[None]] = set()
         self._connecting: set[asyncio.Future[None]] = set()
@@ -426,9 +435,22 @@ class ZhiyunDriver(Driver):
             await self._sleep(HANDSHAKE_STEP_SECONDS)
 
     async def _write(self, st: _Light, command: p.Command, payload: bytes) -> None:
+        """Write one frame, then wait for the light's answer (or ``reply_timeout``) before the next one."""
         if st.link is None:
             raise ZhiyunError("not_connected", "The light is not connected.")
-        await st.link.write(p.build_packet(command, payload, st.next_sequence()))
+        sequence = st.next_sequence()
+        if self._reply_timeout <= 0:
+            await st.link.write(p.build_packet(command, payload, sequence))
+            return
+        answer: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        st.replies[sequence] = answer
+        try:
+            await st.link.write(p.build_packet(command, payload, sequence))
+            await asyncio.wait_for(answer, self._reply_timeout)
+        except TimeoutError:
+            log.info("zhiyun light %s: no answer to %04x within %.1f s", st.id, int(command), self._reply_timeout)
+        finally:
+            st.replies.pop(sequence, None)
 
     async def _send_state(self, st: _Light, want: LightState) -> None:
         async with st.lock:
@@ -470,6 +492,9 @@ class ZhiyunDriver(Driver):
             p.Command.SET_COLOR_TEMP: ("kelvin", p.decode_color_temp_response),
             p.Command.POWER_STATE: ("on", p.decode_power_response),
         }
+        answer = st.replies.get(resp.sequence)
+        if answer is not None and not answer.done():
+            answer.set_result(None)
         if resp.command == p.Command.MAX_MODE and st.max_reply is not None and not st.max_reply.done():
             on = p.decode_max_mode_response(resp.payload)
             if on is not None:

@@ -118,7 +118,7 @@ async def until(condition) -> None:
 
 def make():
     transport = FakeTransport()
-    return ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=never), transport
+    return ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=never, reply_timeout=0), transport
 
 
 def on(brightness: float, kelvin: int) -> LightState:
@@ -421,7 +421,7 @@ async def test_identify_leaves_a_change_made_during_the_pulse_alone():
             driver.apply(light, on(20, 3000))  # a fader moves while the light pulses
 
     transport = FakeTransport()
-    driver = ZhiyunDriver(transport=transport, sleep=sleep)
+    driver = ZhiyunDriver(transport=transport, sleep=sleep, reply_timeout=0)
     light = Light()
     await driver.connect(light)
     driver.apply(light, A)
@@ -445,7 +445,7 @@ async def test_identify_on_a_light_that_drops_mid_pulse_does_not_keep_the_pulse_
                 transport.fail_writes = True  # the light drops after the first pulse level
 
     transport = FakeTransport()
-    driver = ZhiyunDriver(transport=transport, sleep=sleep, backoff_sleep=never)
+    driver = ZhiyunDriver(transport=transport, sleep=sleep, backoff_sleep=never, reply_timeout=0)
     light = Light()
     await driver.connect(light)
     driver.apply(light, on(80, 4300))
@@ -556,7 +556,7 @@ async def test_cancelling_a_connect_does_not_wait_for_the_client_to_finish_disco
 async def test_a_failed_send_is_tried_again_with_a_growing_back_off_until_the_light_answers():
     backoff = Backoff()
     transport = FakeTransport()
-    driver = ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=backoff)
+    driver = ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=backoff, reply_timeout=0)
     light = Light()
     await driver.connect(light)
     transport.fail_writes = True
@@ -578,7 +578,7 @@ async def test_a_failed_send_is_tried_again_with_a_growing_back_off_until_the_li
 async def test_a_light_that_drops_and_comes_back_gets_its_wanted_state_again():
     backoff = Backoff()
     transport = FakeTransport()
-    driver = ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=backoff)
+    driver = ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=backoff, reply_timeout=0)
     light = Light()
     await driver.connect(light)
     driver.apply(light, A)
@@ -619,7 +619,7 @@ async def test_identify_on_a_light_that_drops_mid_pulse_gets_its_own_state_back_
                 transport.fail_writes = True
 
     transport = FakeTransport()
-    driver = ZhiyunDriver(transport=transport, sleep=sleep, backoff_sleep=backoff)
+    driver = ZhiyunDriver(transport=transport, sleep=sleep, backoff_sleep=backoff, reply_timeout=0)
     light = Light()
     await driver.connect(light)
     driver.apply(light, on(80, 4300))
