@@ -1,0 +1,64 @@
+/*
+  Lumen Studio tokens.
+
+  The page is a photographic seamless (a paper backdrop) lit by the real light.
+  --lr/--lg/--lb is the light's live colour (0-255) and --ll its intensity (0-1),
+  written by useLiveTheme() from every state update. They are registered so
+  the browser interpolates them: colour changes glide instead of stepping.
+*/
+@property --lr { syntax: '<number>'; inherits: true; initial-value: 255; }
+@property --lg { syntax: '<number>'; inherits: true; initial-value: 196; }
+@property --lb { syntax: '<number>'; inherits: true; initial-value: 140; }
+@property --ll { syntax: '<number>'; inherits: true; initial-value: 0.4; }
+
+:root {
+  /* Base palette */
+  --seamless: 230 227 220;   /* lit paper, before the light tints it */
+  --room: #2b2c30;           /* the unlit studio */
+  --anodized: #1e1f23;       /* gear: panels and bars */
+  --anodized-2: #26272c;     /* raised controls on gear */
+  --anodized-3: #303137;     /* hover, wells */
+  --chalk: #ecedef;          /* primary text */
+  --graphite: #9a9ca3;       /* secondary text */
+  --graphite-dim: #6b6d74;
+  --hairline: rgb(255 255 255 / 0.07);
+  --tally: #ff3b30;          /* only for "live": an engine is driving the light */
+  --ok: #49d17d;
+  --warn: #ffb020;
+
+  /* The live light */
+  --live: rgb(var(--lr) var(--lg) var(--lb));
+  --live-soft: rgb(var(--lr) var(--lg) var(--lb) / 0.16);
+  --live-glow: rgb(var(--lr) var(--lg) var(--lb) / calc(0.25 + var(--ll) * 0.45));
+
+  /* Type: Archivo across its width axis */
+  --font: 'Archivo Variable', 'Archivo', system-ui, sans-serif;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.84rem;
+  --fs-md: 0.95rem;
+  --fs-lg: 1.17rem;
+  --fs-xl: 1.46rem;
+  --fs-2xl: 1.83rem;
+  --fs-3xl: 2.6rem;
+  --fs-4xl: 3.6rem;
+  --wide: 125%;
+  --semi-wide: 112%;
+  --narrow: 82%;
+
+  /* Shape: radius follows hierarchy, not one value everywhere */
+  --r-panel: 18px;
+  --r-control: 10px;
+  --r-chip: 5px;
+
+  --rail-w: 212px;
+  --master-h: 84px;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --t-light: 180ms;
+
+  color-scheme: dark;
+  transition: --lr var(--t-light) linear, --lg var(--t-light) linear, --lb var(--t-light) linear, --ll var(--t-light) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --t-light: 0ms; }
+}

@@ -1,0 +1,47 @@
+[project]
+name = "lumen-studio"
+version = "0.1.0"
+description = "A local web studio for real-time control of Godox Bluetooth Mesh lights"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{ name = "Ritik", email = "ritikrkcr7@gmail.com" }]
+requires-python = ">=3.14"
+keywords = ["godox", "bluetooth", "mesh", "lighting", "studio", "rgb"]
+dependencies = [
+    "fastapi>=0.142.2",
+    "godox-mesh-bt",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Rkcr7/lumen-studio"
+Issues = "https://github.com/Rkcr7/lumen-studio/issues"
+
+[project.scripts]
+lumen = "lumen_studio.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+godox-mesh-bt = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "packages/godox-mesh-bt/tests"]
+
+[tool.ruff]
+line-length = 100
+extend-exclude = ["packages/godox-mesh-bt"]

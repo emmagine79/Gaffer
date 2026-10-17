@@ -1,0 +1,43 @@
+Lumen Studio
+Copyright (c) 2026 Matt Gibson
+Copyright (c) 2026 Simon Cheng
+Copyright (c) 2026 Ritik (Rkcr7)
+
+Licensed under the MIT Licence; see LICENSE.
+
+WHERE THIS COMES FROM
+---------------------
+
+Lumen Studio is built on the work of two earlier projects, both MIT licensed:
+
+* godox-ul60bi-bt, the Python library and CLI that first spoke the Godox
+  Bluetooth Mesh protocol: provisioning, keys, encryption and the vendor
+  command set.
+  https://github.com/mattharrison/godox-ul60bi-bt
+
+* ha-godox-mesh, Simon Cheng's Home Assistant fork, which extended that
+  library from one light to the whole Godox mesh range and generated the
+  per-model capability and gel tables.
+  https://github.com/binary-person/ha-godox-mesh
+
+What is used from them:
+
+* packages/godox-mesh-bt/ is the library from ha-godox-mesh v0.2.8. The
+  first commit of this repository holds it unmodified; later commits show
+  every change made here.
+* src/lumen_studio/data/models.json and gels.json are that project's
+  generated capability and gel tables (capabilities_data.json and
+  color_chips_data.json), copied unchanged.
+* src/lumen_studio/data/gel-colours.json is the gel swatch list that project
+  fetched from Godox's public colour API (reverse-artifacts/color-chips.json).
+
+The web studio, the real-time engine, the effects, the sync pipeline and the
+launcher are new in this repository.
+
+TRADEMARKS
+----------
+
+"Godox" is a trademark of Godox Photo Equipment Co., Ltd. This project is not
+affiliated with, endorsed by, or sponsored by Godox Photo Equipment Co., Ltd.,
+nor by Telink Semiconductor. Product names are used only to identify
+compatible hardware. No Godox logos or brand assets are included.
