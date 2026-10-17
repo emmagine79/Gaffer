@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import type { Cue } from '../lib/types'
+import type { Surface } from '../app/surface'
 import { EMPTY, useStudio } from '../state/store'
 
 /** The saved cues. */
@@ -27,19 +28,23 @@ export function startCue(id: string) {
 
 /**
  * Space is Go while a cue is active (the Mac's Next cue shortcut works in any app; this is the page's own).
- * Ignored while a control has focus, because Space presses a focused button and moves a slider, and with a
- * modifier held, so the browser's shortcuts still work.
+ * Only the Gaffer window listens: the menu-bar panel is a popover people open to glance at, and the card asks
+ * for no shortcut on the phone. Ignored while a control has focus, because Space presses a focused button and
+ * moves a slider, with a modifier held, so the browser's shortcuts still work, and while a sheet or the command
+ * palette is open, because Space there must never fire lights behind it.
  */
-export function useCueKey() {
+export function useCueKey(surface: Surface) {
   useEffect(() => {
+    if (surface !== 'window') return
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== ' ' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return
       if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, button, a, summary, [contenteditable], [role=switch]')) return
-      if (!useStudio.getState().cue) return
+      const { cue, addLight, connectionSheet, palette } = useStudio.getState()
+      if (!cue || addLight || connectionSheet || palette) return
       e.preventDefault()
       goCue()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [surface])
 }

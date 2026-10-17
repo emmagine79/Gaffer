@@ -5,9 +5,8 @@ import { useLooks } from '../looks/looks'
 import { startCue, useCues } from './cues'
 import './cues.css'
 
-/** The longest cue name, steps and fade the service takes (service/gaffer/cues.py). */
+/** The longest cue name and fade the service takes (service/gaffer/cues.py). */
 const MAX_NAME = 80
-const MAX_STEPS = 200
 const MAX_FADE = 60
 
 interface Draft { look_id: string; fade: string }
@@ -84,7 +83,7 @@ function CueForm({ cue, label, children }: { cue: Cue | null; label: string; chi
         <select className="cues-input" aria-label={`Look to add to ${label}`} value={pick || looks[0]?.id || ''} onChange={(e) => setPick(e.target.value)}>
           {looks.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
         </select>
-        <button type="button" disabled={steps.length >= MAX_STEPS} onClick={add}>Add step</button>
+        <button type="button" onClick={add}>Add step</button>
         <button type="button" disabled={name.trim() === '' || steps.length === 0} onClick={() => void save()}>
           {cue ? 'Save cue' : 'Save as cue'}
         </button>

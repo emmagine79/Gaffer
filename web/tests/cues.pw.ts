@@ -91,7 +91,10 @@ test('Go steps a cue through its looks in Glass, on the desk and with Space, and
   await widthIsViewport(page, 375)
   await page.screenshot({ path: 'test-results/shots/cues-desk.png', fullPage: true })
 
-  // The in-page shortcut (Space, with no control focused) applies look 3.
+  // The in-page shortcut is the Gaffer window's: Space, with no control focused, applies look 3.
+  await page.setViewportSize({ width: 1280, height: 1000 })
+  await page.goto(`${base()}/?surface=window`)
+  await expect(page.getByText('Step 2 of 3')).toBeVisible()
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Space')
   await expect.poll(() => brightness(page)).toBe(43)
@@ -102,4 +105,67 @@ test('Go steps a cue through its looks in Glass, on the desk and with Space, and
   await page.getByRole('button', { name: 'Back' }).click()
   await expect.poll(() => brightness(page)).toBe(32)
   await expect(page.getByText('Step 2 of 3')).toBeVisible()
+})
+
+/** Over the page's own socket: save a cue of the given look names (in order) and make it the active one. */
+async function startCueOf(page: Page, names: string[]) {
+  await page.evaluate(async (wanted) => {
+    const ws = new WebSocket(`ws://${location.host}/ws`)
+    const hello = await new Promise<{ store: { looks: { id: string; name: string }[] } }>((open) => {
+      ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.type === 'hello') open(m) }
+    })
+    const steps = wanted.map((name) => ({ look_id: hello.store.looks.find((l) => l.name === name)!.id, fade_seconds: null }))
+    ws.send(JSON.stringify({ type: 'cues.save', cue: { id: 'show', name: 'Show', steps } }))
+    await new Promise((done) => setTimeout(done, 300))
+    ws.send(JSON.stringify({ type: 'cue.start', id: 'show' }))
+    await new Promise((done) => setTimeout(done, 300))
+    ws.close()
+  }, names)
+}
+
+test('Space does not fire Go in the menu-bar panel or behind the Add a light sheet, and Go names the look it will run', async ({ page }) => {
+  const lightId = await threeLooks(page)
+  // threeLooks gave the middle look an 80 character name; rename the set so the label can be read.
+  for (const [name, brightness] of [['Close', 55]] as const) {
+    await page.request.post(`${base()}/api/looks`, { data: { name, fade_seconds: 0, lights: { [lightId]: { power: true, brightness } } } })
+  }
+  await page.goto(`${base()}/`)
+  await startCueOf(page, ['Wide', 'Close', 'Warm'])
+
+  // Menu-bar panel: Space does nothing, so the light is not touched.
+  await page.setViewportSize({ width: 360, height: 700 })
+  await page.goto(`${base()}/?surface=menubar`)
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400)
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+
+  // Window with the Add a light sheet open and nothing focused: Space does nothing behind it.
+  await page.setViewportSize({ width: 1280, height: 1000 })
+  await page.goto(`${base()}/?surface=window`)
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+  await page.getByRole('button', { name: '+ Add' }).click()
+  await expect(page.getByRole('dialog', { name: 'Add a light' })).toBeVisible()
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400)
+  await page.keyboard.press('Escape')
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Go Wide/ })).toBeVisible()
+
+  // Go runs Wide. The look of step 2 is then deleted: the button must name Warm, the look Go will really run.
+  await page.getByRole('button', { name: /^Go Wide/ }).click()
+  await expect(page.getByText('Step 1 of 3')).toBeVisible()
+  await page.evaluate(async () => {
+    const ws = new WebSocket(`ws://${location.host}/ws`)
+    const hello = await new Promise<{ store: { looks: { id: string; name: string }[] } }>((open) => {
+      ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.type === 'hello') open(m) }
+    })
+    ws.send(JSON.stringify({ type: 'looks.delete', id: hello.store.looks.find((l) => l.name === 'Close')!.id }))
+    await new Promise((done) => setTimeout(done, 300))
+    ws.close()
+  })
+  await expect(page.getByRole('button', { name: /^Go Warm/ })).toBeVisible()
+  await page.getByRole('button', { name: /^Go Warm/ }).click()
+  await expect.poll(() => brightness(page)).toBe(43)
 })

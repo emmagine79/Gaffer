@@ -6,6 +6,8 @@ the cookie alone. A fake clock stands in for each light's clock so a 5 s fade ne
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import time
 
 import pytest
@@ -34,6 +36,20 @@ def shell(tmp_path):
         client.clock = FakeClock()  # type: ignore[attr-defined]
         for fixture in client.hub.fixtures.values():
             fixture.engine._clock = client.clock
+        yield client
+
+
+#: A cues.json somebody edited by hand: an entry whose steps are not a list.
+DAMAGED = [{"id": "interview", "name": "Interview", "steps": "oops"}]
+
+
+@pytest.fixture
+def hand_edited(tmp_path):
+    (tmp_path / "cues.json").write_text(json.dumps(DAMAGED), encoding="utf-8")
+    app = create_app(demo=True, data_dir=tmp_path)
+    with TestClient(protect(app, SECRET), base_url="http://127.0.0.1", cookies={COOKIE: SECRET}) as client:
+        client.hub = app.state.hub  # type: ignore[attr-defined]
+        client.file = tmp_path / "cues.json"  # type: ignore[attr-defined]
         yield client
 
 
@@ -159,7 +175,7 @@ def test_a_refused_cue_save_says_why_and_stores_nothing(shell):
     wide, *_ = _three_looks(shell)
     good = {"look_id": wide, "fade_seconds": None}
     bad = ({"name": " ", "steps": [good]}, {"name": "x" * 81, "steps": [good]}, {"name": "a\nb", "steps": [good]},
-           {"name": "ok", "steps": []}, {"name": "ok", "steps": [good] * 201},
+           {"name": "ok", "steps": []},
            {"name": "ok", "steps": [{"look_id": "nope", "fade_seconds": None}]},
            {"name": "ok", "steps": [{"look_id": wide, "fade_seconds": 61}]},
            {"name": "ok", "steps": [{"look_id": wide, "fade_seconds": True}]},
@@ -175,3 +191,142 @@ def test_a_refused_cue_save_says_why_and_stores_nothing(shell):
             pass
         assert m["type"] == "error"
     assert shell.hub.store.items("cues") == []
+
+
+def test_a_cue_can_be_edited_whatever_its_name_and_has_no_step_limit(shell):
+    """Ids made from names such as Constructor, or from an 80 character name saved twice, stay editable."""
+    wide, *_ = _three_looks(shell)
+    step = {"look_id": wide, "fade_seconds": None}
+    long_name = "x" * 80
+    ids = []
+    with shell.websocket_connect(WS) as ws:
+        for name in ("Constructor", "Prototype", "Active", long_name, long_name):
+            saved = _save_cue(ws, {"name": name, "steps": [step]})
+            assert saved["type"] == "ack", (name, saved)
+            edited = _save_cue(ws, {"id": saved["cue"]["id"], "name": name, "steps": [step, step]})
+            assert edited["type"] == "ack", (name, edited)
+            ids.append(saved["cue"]["id"])
+        many = _save_cue(ws, {"name": "Long show", "steps": [step] * 201})
+    assert many["type"] == "ack", many
+    assert len(set(ids)) == 5 and "active" not in ids and all(len(i) <= 80 for i in ids)
+
+
+def test_an_unreadable_entry_in_cues_json_is_neither_overwritten_nor_fatal(hand_edited):
+    wide, *_ = _three_looks(hand_edited)
+    with hand_edited.websocket_connect(WS) as ws:
+        saved = _save_cue(ws, {"name": "Interview", "steps": [{"look_id": wide, "fade_seconds": None}]})
+        assert saved["type"] == "ack", saved
+        assert saved["cue"]["id"] != "interview"
+        ws.send_json({"type": "cues.delete", "id": saved["cue"]["id"], "rid": 3})
+        while ws.receive_json().get("type") != "store":
+            pass
+    assert json.loads(hand_edited.file.read_text(encoding="utf-8")) == DAMAGED  # the hand-made entry is as it was
+
+
+def _delete_look(client, look_id):
+    with client.websocket_connect(WS) as ws:
+        ws.send_json({"type": "looks.delete", "id": look_id})  # no answer of its own: the store message follows
+        while (m := ws.receive_json()).get("type") != "store" or m.get("collection") != "looks":
+            pass
+
+
+def _start(client, cue):
+    with client.websocket_connect(WS) as ws:
+        ws.send_json({"type": "cue.start", "id": cue, "rid": 5})
+        while (m := ws.receive_json()).get("rid") != 5:
+            pass
+    assert m["type"] == "ack", m
+
+
+def _light(client, name):
+    return next(light for light in client.get("/api/lights").json()["lights"] if light["name"] == name)
+
+
+def test_go_passes_over_a_look_that_is_gone_or_has_no_saved_light(shell):
+    wide, close, warm = _three_looks(shell)
+    cue = _cue(shell, [{"look_id": wide, "fade_seconds": None}, {"look_id": close, "fade_seconds": None},
+                       {"look_id": warm, "fade_seconds": None}])
+    _start(shell, cue)
+    assert shell.post("/api/cues/active/go").json()["look"]["id"] == wide
+    _delete_look(shell, close)
+    third = shell.post("/api/cues/active/go")
+    assert third.status_code == 200 and third.json()["look"]["id"] == warm and third.json()["cue"]["step"] == 3
+
+    # A look written with only lights that are no longer saved (a hand edit) is passed over the same way.
+    shell.hub.store.upsert("looks", {"id": "ghost", "name": "Ghost", "fade_seconds": 0.0, "lights": {"not-a-saved-light": {"power": True}}})
+    ghost_cue = _cue(shell, [{"look_id": "ghost", "fade_seconds": None}, {"look_id": warm, "fade_seconds": None}], name="Ghost then warm")
+    first = shell.post(f"/api/cues/{ghost_cue}/go")
+    assert first.status_code == 200 and first.json()["look"]["id"] == warm
+
+
+def test_go_fails_and_stays_put_when_the_next_look_s_lights_cannot_be_reached(shell):
+    key, fill = _light(shell, "Key light"), _light(shell, "Fill")
+    on_key = shell.post("/api/looks", json={"name": "On key", "fade_seconds": 0, "lights": {key["id"]: {"power": True, "brightness": 30.0}}}).json()["look"]["id"]
+    on_fill = shell.post("/api/looks", json={"name": "On fill", "fade_seconds": 0, "lights": {fill["id"]: {"power": True, "brightness": 70.0}}}).json()["look"]["id"]
+    cue = _cue(shell, [{"look_id": on_key, "fade_seconds": None}, {"look_id": on_fill, "fade_seconds": None}])
+    _start(shell, cue)
+    fixture = shell.hub.fixtures[key["id"]]
+    mesh = fixture.light.network
+    fixture.light = dataclasses.replace(fixture.light, network="0000ffff")  # saved on another mesh: out of reach
+    fill_before = _light(shell, "Fill")["state"]
+
+    refused = shell.post("/api/cues/active/go")
+    assert refused.status_code == 409 and refused.json()["error"] == "lights_unreachable", refused.text
+    assert _light(shell, "Fill")["state"] == fill_before and shell.hub.look is None  # the second look did not run instead
+
+    fixture.light = dataclasses.replace(fixture.light, network=mesh)
+    again = shell.post("/api/cues/active/go")
+    assert again.status_code == 200 and again.json()["look"]["id"] == on_key and again.json()["cue"]["step"] == 1
+
+
+def test_a_go_for_another_cue_that_fails_leaves_the_active_cue_alone(shell):
+    wide, close, _ = _three_looks(shell)
+    running = _cue(shell, [{"look_id": wide, "fade_seconds": None}, {"look_id": wide, "fade_seconds": None}], name="Running")
+    broken = _cue(shell, [{"look_id": close, "fade_seconds": None}], name="Broken")
+    _start(shell, running)
+    assert shell.post("/api/cues/active/go").json()["cue"]["step"] == 1
+    _delete_look(shell, close)
+
+    refused = shell.post(f"/api/cues/{broken}/go")
+    assert refused.status_code == 409 and refused.json()["error"] == "cue_steps_gone"
+    next_step = shell.post("/api/cues/active/go")  # still the cue that was running, still at step 1
+    assert next_step.status_code == 200 and next_step.json()["cue"] == {"id": running, "name": "Running", "step": 2, "steps": 2, "next": None}
+
+
+def test_saving_the_active_cue_keeps_its_place_unless_a_step_that_has_run_changed(shell):
+    a, b, c = _three_looks(shell)
+    d = _save_look(shell, "Cool", 80.0, 0)
+    step = lambda look, fade=None: {"look_id": look, "fade_seconds": fade}  # noqa: E731
+    cue = _cue(shell, [step(a), step(b), step(c), step(d)])
+    _start(shell, cue)
+    for _ in range(2):
+        shell.post("/api/cues/active/go")  # a and b have run
+
+    with shell.websocket_connect(WS) as ws:
+        # Rename it and change a step still to come: the next Go is still step 3.
+        assert _save_cue(ws, {"id": cue, "name": "Renamed", "steps": [step(a), step(b), step(c), step(d, 4)]})["type"] == "ack"
+    third = shell.post("/api/cues/active/go")
+    assert third.json()["look"]["id"] == c and third.json()["cue"]["step"] == 3
+
+    # Remove step 1: what has run is no longer what it was, so the cue goes back to the top, not on to step 3.
+    with shell.websocket_connect(WS) as ws:
+        assert _save_cue(ws, {"id": cue, "name": "Renamed", "steps": [step(b), step(c), step(d, 4)]})["type"] == "ack"
+    top = shell.post("/api/cues/active/go")
+    assert top.json()["look"]["id"] == b and top.json()["cue"]["step"] == 1
+
+
+def test_the_cue_message_names_the_look_the_next_go_runs(shell):
+    wide, close, warm = _three_looks(shell)
+    cue = _cue(shell, [{"look_id": wide, "fade_seconds": None}, {"look_id": close, "fade_seconds": None},
+                       {"look_id": warm, "fade_seconds": None}])
+    _start(shell, cue)
+    shell.post("/api/cues/active/go")
+    with shell.websocket_connect(WS) as ws:
+        ws.send_json({"type": "looks.delete", "id": close})  # the look of step 2 goes while the cue is on step 1
+        ws.send_json({"type": "cue.back", "rid": 9})  # refused at the first step; its answer marks the end of the frames above
+        seen = []
+        while (m := ws.receive_json()).get("rid") != 9:
+            seen.append(m)
+    frames = [m for m in seen if m["type"] == "cue"]
+    assert frames and frames[-1]["next"] == {"id": warm, "name": "Warm"} and frames[-1]["step"] == 1
+    assert shell.post("/api/cues/active/go").json()["look"]["id"] == warm  # and that is the look Go runs

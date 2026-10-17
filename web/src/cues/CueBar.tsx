@@ -1,20 +1,15 @@
 import { useStudio } from '../state/store'
-import { backCue, goCue, startCue, useCues } from './cues'
-import { useLooks } from '../looks/looks'
+import { backCue, goCue, startCue } from './cues'
 import './cues.css'
 
 /**
- * The cue's Go button, under Glass and under the desk, drawn only while a cue is active. It says which
- * look the next press applies; at the end of the list it offers to start the cue again instead.
+ * The cue's Go button, under Glass and under the desk, drawn only while a cue is active. It names the look
+ * the next press applies, as the service worked it out (steps whose look is gone are passed over there);
+ * at the end of the list it offers to start the cue again instead.
  */
 export function CueBar() {
   const active = useStudio((s) => s.cue)
-  const cues = useCues()
-  const looks = useLooks()
   if (!active) return null
-  const steps = cues.find((c) => c.id === active.id)?.steps ?? []
-  const next = steps[active.step]
-  const nextName = next ? looks.find((l) => l.id === next.look_id)?.name : undefined
   const done = active.step >= active.steps
   return (
     <section className="cue-bar" aria-label={`Cue ${active.name}`} data-step={active.step}>
@@ -28,7 +23,7 @@ export function CueBar() {
           <button type="button" className="cue-go" onClick={() => startCue(active.id)}>Start again</button>
         ) : (
           <button type="button" className="cue-go" onClick={goCue}>
-            Go<span className="cue-next">{nextName ? ` ${nextName}` : ''}</span>
+            Go<span className="cue-next">{active.next ? ` ${active.next.name}` : ''}</span>
           </button>
         )}
       </div>

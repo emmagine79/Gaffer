@@ -27,7 +27,7 @@ export function Shell() {
   const state = useStudio((s) => s.state)
   const beam = state ? beamOf(state).css : NO_LIGHT
   useLookKeys()
-  useCueKey()
+  useCueKey(SURFACE)
   const choose = (next: View) => {
     setView(next)
     rememberView(SURFACE, next)

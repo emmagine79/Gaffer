@@ -285,7 +285,7 @@ export type ServerMessage =
   | { type: 'device'; light: string; device: Device }
   | { type: 'settings'; settings: Settings }
   | { type: 'look'; id: string | null; name: string | null }
-  | { type: 'cue'; id: string | null; name: string | null; step: number | null; steps: number | null }
+  | { type: 'cue'; id: string | null; name: string | null; step: number | null; steps: number | null; next: { id: string; name: string } | null }
   | { type: 'store'; collection: Collection; items: StoredItem[] }
   | { type: 'groups'; groups: Group[] }
   | { type: 'nearby'; nearby: Nearby[]; scanning: boolean }
