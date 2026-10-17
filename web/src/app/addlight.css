@@ -70,6 +70,10 @@
 .pairing-done { margin: 20px auto 0; max-width: 520px; display: grid; gap: 16px; text-align: left; }
 .pairing-model { display: grid; gap: 8px; }
 
+.godox-import { display: grid; gap: 12px; padding: 4px 0; }
+.godox-steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; overflow-wrap: anywhere; }
+.godox-import textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; }
+
 /* Kept from lumen shell.css for the add-light sheet until SPEC-008 restyles it. */
 .signal { display: inline-flex; align-items: flex-end; gap: 2px; height: 15px; }
 .signal i { width: 3px; border-radius: 1px; background: var(--anodized-3); }
