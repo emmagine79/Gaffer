@@ -48,6 +48,7 @@ class Fixture:
         self.adopting = True  # first contact this run: read the light before writing it
         self.request_at: dict[int, float] = {}
         self.stream_source: str | None = None
+        self.own_values = False  # a look's fade is running: group mirroring leaves this light alone (looks.py)
 
     @property
     def id(self) -> str:

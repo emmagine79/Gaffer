@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import threading
 from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
 
 from gaffer.app import create_app
+from gaffer.hub import Client
 from gaffer.session import COOKIE, protect
 
 SECRET = "test-secret-for-looks"
@@ -203,17 +205,77 @@ def test_an_unreadable_entry_in_looks_json_is_neither_overwritten_nor_fatal(hand
     assert json.loads(hand_edited.file.read_text(encoding="utf-8")) == HAND_EDITED  # the hand-made entries are as they were
 
 
-def test_a_look_that_cannot_be_worked_out_moves_no_light_and_sets_no_look(shell):
-    look = _save_three(shell, "Slow", 2)
+def test_a_light_whose_values_cannot_be_worked_out_is_skipped_and_the_others_still_move(shell):
+    look = _save_three(shell, "Slow", 0)
     fixtures = shell.hub.fixtures
     ids = {n: _lights(shell)[n]["id"] for n in THREE}
-    before = {n: fixtures[i].state for n, i in ids.items()}
-    fixtures[ids["Backlight"]].caps = None  # the last light's model data is unusable, whatever the cause
-    with pytest.raises(Exception):
-        shell.post(f"/api/looks/{look}/apply")
-    for name in ("Key light", "Fill"):
-        assert fixtures[ids[name]].engine.kind is None and fixtures[ids[name]].state == before[name], name
-    assert shell.hub.look is None
+    before = fixtures[ids["Backlight"]].state
+    fixtures[ids["Backlight"]].caps = None  # this light's model data is unusable, whatever the cause
+    reply = shell.post(f"/api/looks/{look}/apply")
+    assert reply.status_code == 200 and reply.json()["skipped"] == [ids["Backlight"]]
+    assert fixtures[ids["Backlight"]].state == before
+    assert [fixtures[ids[n]].state.brightness for n in ("Key light", "Fill")] == [THREE["Key light"], THREE["Fill"]]
+    assert shell.hub.look == {"id": look, "name": "Slow"}
+
+
+def test_grouped_lights_each_get_their_own_look_values_at_once_and_through_a_fade(shell):
+    clock = FakeClock()
+    for fixture in shell.hub.fixtures.values():
+        fixture.engine._clock = clock
+    ids = {n: _lights(shell)[n]["id"] for n in ("Key light", "Fill")}
+    shell.hub.save_group({"name": "Pair", "members": [ids["Fill"], ids["Key light"]], "enabled": True}, leader=ids["Key light"])
+    fixtures = shell.hub.fixtures
+
+    def look(name, fade, key, fill):  # Fill is listed first: a mirror from Key must not be the last word
+        patches = {ids["Fill"]: {"power": True, "brightness": fill}, ids["Key light"]: {"power": True, "brightness": key}}
+        reply = shell.post("/api/looks", json={"name": name, "fade_seconds": fade, "lights": patches})
+        return reply.json()["look"]["id"]
+
+    assert shell.post(f"/api/looks/{look('At once', 0, 21, 34)}/apply").status_code == 200
+    assert (fixtures[ids["Key light"]].state.brightness, fixtures[ids["Fill"]].state.brightness) == (21, 34)
+
+    assert shell.post(f"/api/looks/{look('Faded', 2, 45, 60)}/apply").status_code == 200
+    _tick_lights(shell)  # the leader's first frame: it must not stop or overwrite the follower's own fade
+    assert fixtures[ids["Fill"]].engine.kind == "transition" and fixtures[ids["Key light"]].engine.kind == "transition"
+    clock.now += 3
+    _tick_lights(shell)
+    assert (fixtures[ids["Key light"]].state.brightness, fixtures[ids["Fill"]].state.brightness) == (45, 60)
+    assert fixtures[ids["Fill"]].own_values is False  # mirroring is back once the fade is over
+
+
+def test_the_apps_own_tick_loop_finishes_a_fade_under_a_fake_clock(shell):
+    """The loop that ticks the engines (not a hand-made tick) runs the 2 s fade out once the clock passes 2 s."""
+    clock = FakeClock()
+    for fixture in shell.hub.fixtures.values():
+        fixture.engine._clock = clock
+    done = threading.Event()
+    ended: set[str] = set()
+
+    class Tap(Client):
+        def push(self, message):
+            if message.get("type") == "engine" and message["engine"]["kind"] is None:
+                ended.add(message["light"])
+                if len(ended) >= len(THREE):
+                    done.set()
+
+    shell.hub.clients.add(Tap())
+    look = _save_three(shell, "Slow", 2)
+    assert shell.post(f"/api/looks/{look}/apply").status_code == 200
+    clock.now += 3
+    assert done.wait(10), "the engines' tick loop never finished the fade"
+    now = _lights(shell)
+    assert all(now[n]["engine"]["kind"] is None and now[n]["state"]["brightness"] == b for n, b in THREE.items())
+
+
+def test_all_off_over_the_socket_names_the_lights_that_stayed_on(shell):
+    _save_three(shell, "Talking head", 0)
+    away = shell.hub.fixtures[_lights(shell)["Backlight"]["id"]]
+    away.light = dataclasses.replace(away.light, network="0000ffff")
+    with shell.websocket_connect(WS) as ws:
+        ws.receive_json(), ws.receive_json()  # hello, look
+        ws.send_json({"type": "all.off", "rid": 7})
+        reply = next(m for m in iter(ws.receive_json, None) if m.get("rid") == 7)
+    assert reply == {"type": "ack", "of": "all.off", "skipped": [away.id], "rid": 7}
 
 
 def test_a_light_off_the_network_is_left_alone_and_all_off_does_not_claim_it_is_off(shell):

@@ -12,9 +12,18 @@ export function applyLook(id: string) {
   useStudio.getState().send({ type: 'looks.apply', id })
 }
 
-/** Every light off at once. */
-export function allOff() {
-  useStudio.getState().send({ type: 'all.off' })
+/** Every light off at once. Says so when a light could not be reached and so stayed on. */
+export async function allOff() {
+  const { request, toast, lights } = useStudio.getState()
+  try {
+    const reply = (await request({ type: 'all.off' })) as { skipped?: string[] }
+    const names = (reply.skipped ?? []).map((id) => lights.find((l) => l.id === id)?.name ?? 'A light')
+    if (names.length > 0) {
+      toast(`${names.join(', ')} could not be reached and ${names.length === 1 ? 'is' : 'are'} still on.`, 'error')
+    }
+  } catch (err) {
+    toast((err as Error).message, 'error')
+  }
 }
 
 /** A key press that belongs to a text box, not to the looks. */
