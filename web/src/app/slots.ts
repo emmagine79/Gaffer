@@ -6,7 +6,7 @@
  * its own folder (web/src/<area>/) and swaps the import here and in app/Shell.tsx.
  *
  *   SPEC-007  lighting desk         done: web/src/desk/
- *   SPEC-008  add a light           app/AddLight.tsx            -> web/src/addlight/
+ *   SPEC-008  add a light           done: web/src/add/
  *   SPEC-010  looks with their fade web/src/looks/ (cards, keys 1-9 and 0, the window's look editor)
  *   SPEC-011  groups                groups/Groups.tsx          (done)
  *   SPEC-012  effects               tabs/EffectsTab.tsx         -> web/src/effects/
@@ -15,7 +15,7 @@
  */
 
 export { Desk as DeskSlot } from '../desk/Desk'
-export { AddLight } from './AddLight'
+export { AddLight } from '../add/AddLight'
 export { Groups } from '../groups/Groups'
 export { EffectsTab as Effects } from '../tabs/EffectsTab'
 export { ScheduleTab as Schedules } from '../tabs/ScheduleTab'
