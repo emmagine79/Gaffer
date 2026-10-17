@@ -37,6 +37,8 @@ STANDIN = Path(__file__).with_name("standin_service.py")
 KEY_CODES = {"1": 18, "2": 19, "0": 29, "space": 49}
 # The card says the title changes "within a second" of a look being applied.
 TITLE_WITHIN_SECONDS = 1.0
+SHORTCUT_SOURCE = Path(__file__).parents[1] / "Sources" / "Shortcuts.swift"
+STORE_CHECK = Path(__file__).with_name("shortcut_store_check.swift")
 
 
 def trash(path: Path) -> None:
@@ -71,12 +73,12 @@ class Shell:
         assert out.returncode == 0, f"could not read the menu bar: {out.stderr.strip()}"
         return out.stdout.strip()
 
-    def wait_title(self, expected: str) -> float:
-        """Seconds from now until the menu bar shows `expected`; the read itself is included."""
+    def wait_title(self, expected: str) -> None:
+        """Wait until the menu bar shows `expected`."""
         start = time.monotonic()
         while time.monotonic() - start < WAIT_SECONDS:
             if self.title() == expected:
-                return time.monotonic() - start
+                return
         raise AssertionError(f"menu bar title is {self.title()!r}, wanted {expected!r}")
 
 
@@ -90,7 +92,27 @@ def frontmost() -> str:
     return run("osascript", "-e", 'tell application "System Events" to get name of first process whose frontmost is true').strip()
 
 
-def launch(tmp: Path, *open_args: str) -> Shell:
+def frontmost_bundle() -> str:
+    """Bundle id of the app in front. System Events' own answer never names a menu-bar-only app like Gaffer."""
+    asn = run("lsappinfo", "front").strip()
+    info = run("lsappinfo", "info", "-only", "bundleid", asn)
+    return info.split('bundleID="')[1].split('"')[0] if 'bundleID="' in info else ""
+
+
+def tell_gaffer(shell: Shell, script: str) -> str:
+    """Run AppleScript inside `tell <the Gaffer copy>` through System Events and return what it prints."""
+    full = f'tell application "System Events" to tell (first process whose unix id is {shell.gaffer})\n{script}\nend tell'
+    out = subprocess.run(["osascript", "-e", full], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr.strip()
+    return out.stdout.strip()
+
+
+def bring_to_front(shell: Shell) -> None:
+    tell_gaffer(shell, "set frontmost to true")
+    wait_for(lambda: frontmost_bundle() == shell.bundle_id, "Gaffer to come to the front")
+
+
+def launch(tmp: Path, *open_args: str, saved_settings: dict | None = None) -> Shell:
     real = tmp / "path with space" / "real"
     real.mkdir(parents=True)
     copy = real / "Gaffer.app"
@@ -123,6 +145,9 @@ def launch(tmp: Path, *open_args: str) -> Shell:
     launcher.chmod(0o755)
     subprocess.run(["codesign", "--force", "--sign", "-", "--identifier", bundle_id, str(copy)],
                    check=True, capture_output=True)
+
+    if saved_settings:  # what an earlier run, or a hand edit, left in this copy's own settings
+        subprocess.run(["defaults", "import", bundle_id, "-"], input=plistlib.dumps(saved_settings), check=True)
 
     subprocess.run(["open", "-n", "-g", str(app), *(["--args", *open_args] if open_args else [])], check=True)
     pattern = f"{tmp.parent.name}/{tmp.name}/.*Gaffer.app/Contents/MacOS/Gaffer"
@@ -164,12 +189,16 @@ def shell(tmp_path):
 
 
 def test_menu_bar_title_follows_the_look_applied_from_the_web_page(shell):
-    """Criterion 1: the menu-bar title changes within a second when a look is applied."""
+    """Criterion 1: the menu-bar title changes within a second when a look is applied.
+
+    The bound is the card's. It is checked by reading the title once, after the second is up,
+    so a slow Accessibility read can only make the check later, never fail it by itself.
+    """
     assert shell.title() == ""  # no look yet: icon only
-    shell.api("POST", "/api/looks/interview/apply")  # what the web page does
-    assert shell.wait_title("Interview") <= TITLE_WITHIN_SECONDS
-    shell.api("POST", "/api/looks/sunset/apply")
-    assert shell.wait_title("Sunset") <= TITLE_WITHIN_SECONDS
+    for look_id, name in (("interview", "Interview"), ("sunset", "Sunset")):
+        shell.api("POST", f"/api/looks/{look_id}/apply")  # what the web page does
+        time.sleep(TITLE_WITHIN_SECONDS)
+        assert shell.title() == name
 
 
 def test_menu_bar_recovers_when_the_socket_drops(shell):
@@ -198,7 +227,7 @@ def test_a_global_shortcut_works_while_another_app_is_frontmost(shell):
 
     press("space")  # Next cue: the first look of the cue list
     shell.wait_title("Talking head")
-    assert frontmost() != "Gaffer", "a global shortcut must not pull Gaffer to the front"
+    assert frontmost_bundle() != shell.bundle_id, "a global shortcut must not pull Gaffer to the front"
 
 
 def test_panel_and_window_are_live_views_of_the_same_service(shell):
@@ -216,3 +245,60 @@ def test_the_shell_never_links_core_bluetooth():
     linked = run("otool", "-L", str(BUILT_APP / "Contents/MacOS/Gaffer"))
     assert "AppKit" in linked and "WebKit" in linked  # the command read the right file
     assert "CoreBluetooth" not in linked
+
+
+def test_a_corrupt_saved_shortcut_does_not_stop_gaffer_starting(tmp_path):
+    """A hand-edited or damaged setting must fall back to the default key, not crash every launch."""
+    corrupt = {"look1": {"keyCode": 5_000_000_000, "modifiers": 5_000_000_000, "label": "x"}}
+    launched = launch(tmp_path, saved_settings={"shortcuts.v1": corrupt})  # waits for the shell to come up
+    try:
+        assert alive(launched.gaffer)
+        press("1")  # Look 1: back to Control-Option-1
+        launched.wait_title("Talking head")
+    finally:
+        stop(launched)
+
+
+def test_closing_settings_while_recording_leaves_the_shortcuts_working(shell):
+    """Closing Settings mid-recording must give every global shortcut back (a shoot needs All off)."""
+    bring_to_front(shell)
+    tell_gaffer(shell, 'keystroke "," using command down')  # Settings
+    wait_for(lambda: "Gaffer Settings" in tell_gaffer(shell, "get name of every window"), "Settings to open")
+    tell_gaffer(shell, 'click button "⌃⌥2" of window "Gaffer Settings"')  # Look 2: start recording
+    wait_for(lambda: "Press the keys" in tell_gaffer(shell, 'get name of every button of window "Gaffer Settings"'),
+             "the button to start recording")
+    tell_gaffer(shell, 'click (first button of window "Gaffer Settings" whose subrole is "AXCloseButton")')
+    wait_for(lambda: "Gaffer Settings" not in tell_gaffer(shell, "get name of every window"), "Settings to close")
+
+    press("2")  # Look 2 is Control-Option-2: Interview
+    shell.wait_title("Interview")
+
+
+def test_cut_copy_paste_and_select_all_work_in_the_web_view(shell):
+    """The window is a web view: Cmd-A, Cmd-C and Cmd-V must work in its text boxes.
+
+    This puts text on the clipboard; the test puts the old text back afterwards.
+    """
+    saved = subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
+    subprocess.run(["pbcopy"], input="sentinel", text=True, check=True)
+    try:
+        bring_to_front(shell)
+        tell_gaffer(shell, 'keystroke "abc"')  # the page focuses its text box when it loads
+        wait_for(lambda: shell.state()["reports"]["window"]["note"] == "abc", "the text box to take the typing")
+        tell_gaffer(shell, 'keystroke "a" using command down\nkeystroke "c" using command down\nkey code 124')
+        tell_gaffer(shell, 'keystroke "v" using command down')  # paste what Cmd-C copied
+        wait_for(lambda: shell.state()["reports"]["window"]["note"] == "abcabc", "Cmd-C then Cmd-V to repeat the text")
+    finally:
+        subprocess.run(["pbcopy"], input=saved, text=True)
+
+
+def test_a_look_with_a_different_label_still_counts_as_the_same_shortcut(tmp_path):
+    """Settings refuses a key combination another action holds, whatever label was saved with it."""
+    work = tmp_path / "storecheck"
+    work.mkdir()
+    shutil.copy(STORE_CHECK, work / "main.swift")
+    binary = work / "check"
+    subprocess.run(["swiftc", "-O", "-swift-version", "5", str(SHORTCUT_SOURCE), str(work / "main.swift"),
+                    "-o", str(binary)], check=True, capture_output=True, cwd=work)
+    out = subprocess.run([str(binary)], capture_output=True, text=True, check=True, cwd=work)
+    assert out.stdout.strip() == "Look 1"

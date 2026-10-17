@@ -46,6 +46,11 @@ final class RecorderButton: NSButton {
         setAccessibilityLabel(shortcut.map { "Shortcut \($0.display)" } ?? "No shortcut")
     }
 
+    /// End recording without saving. The window calls this when it closes or loses focus.
+    func cancelRecording() {
+        recording = false
+    }
+
     override func resignFirstResponder() -> Bool {
         recording = false
         return super.resignFirstResponder()
@@ -89,7 +94,7 @@ final class RecorderButton: NSButton {
 }
 
 /// The Settings window: one row per global shortcut.
-final class SettingsWindowController: NSWindowController {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let store: ShortcutStore
     private let hotKeys: HotKeyCenter
     private var recorders: [ShortcutAction: RecorderButton] = [:]
@@ -103,6 +108,7 @@ final class SettingsWindowController: NSWindowController {
         window.title = "Gaffer Settings"
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        window.delegate = self
         window.contentView = buildContent()
         window.setContentSize(window.contentView!.fittingSize)
         window.center()
@@ -183,6 +189,16 @@ final class SettingsWindowController: NSWindowController {
         store.resetAll()
         for action in ShortcutAction.all { recorders[action]?.shortcut = store.shortcut(for: action) }
         refreshProblems(hotKeys.reload())
+    }
+
+    // Closing the window, or switching to another app, does not resign the first
+    // responder, so the button would stay in "recording" with every global shortcut
+    // let go (hotKeys.suspend). End it here so reload() puts them back.
+    func windowWillClose(_ notification: Notification) { cancelAllRecording() }
+    func windowDidResignKey(_ notification: Notification) { cancelAllRecording() }
+
+    private func cancelAllRecording() {
+        for recorder in recorders.values { recorder.cancelRecording() }
     }
 
     func show() {

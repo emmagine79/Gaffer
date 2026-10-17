@@ -11,7 +11,8 @@ Python standard library only, because the app runs it with the test's own Python
 
 Test-only routes (same cookie rule), used by mac/tests/test_shell.py:
   GET  /test/state      what happened: calls, lights, current look, page reports
-  POST /test/report     the demo page tells what it saw (surface, look name, colour scheme)
+  POST /test/report     the demo page tells what it saw (surface, look name, colour scheme,
+                        what is in its text box)
   POST /test/drop-ws    close every WebSocket from the service side
 """
 
@@ -41,14 +42,17 @@ CUE = ["talking-head", "interview", "sunset"]
 HTML = """<!doctype html><meta charset="utf-8"><meta name="color-scheme" content="light dark">
 <title>Gaffer stand-in</title>
 <style>:root{color-scheme:light dark}body{font:16px -apple-system,sans-serif;padding:16px}</style>
-<h1 id="look">No look</h1><p id="surface"></p>
+<h1 id="look">No look</h1><p id="surface"></p><input id="note" autofocus>
 <script>
 const surface = new URLSearchParams(location.search).get('surface');
 document.getElementById('surface').textContent = 'surface: ' + surface;
 const scheme = () => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 let name = null;
-const report = () => fetch('/test/report', {method: 'POST', body: JSON.stringify({surface, name, scheme: scheme()})});
+const note = document.getElementById('note');
+const report = () => fetch('/test/report', {method: 'POST', body: JSON.stringify({
+  surface, name, scheme: scheme(), note: note.value})});
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', report);
+note.addEventListener('input', report);
 const ws = new WebSocket('ws://' + location.host + '/ws');
 ws.onmessage = (e) => {
   const m = JSON.parse(e.data);

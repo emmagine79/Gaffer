@@ -120,11 +120,13 @@ final class ShortcutStore {
         let saved = defaults.dictionary(forKey: key)?[action.storageKey] as? [String: Any]
         guard let saved else { return action.defaultShortcut }
         if saved["cleared"] as? Bool == true { return nil }
-        guard let code = saved["keyCode"] as? Int, let mods = saved["modifiers"] as? Int,
-              let label = saved["label"] as? String, code >= 0, mods >= 0 else {
+        // UInt32(exactly:) is nil for a negative or too-large number; plain UInt32(_:) would trap.
+        guard let code = (saved["keyCode"] as? Int).flatMap({ UInt32(exactly: $0) }),
+              let mods = (saved["modifiers"] as? Int).flatMap({ UInt32(exactly: $0) }),
+              let label = saved["label"] as? String else {
             return action.defaultShortcut  // unreadable entry: fall back, never crash
         }
-        return Shortcut(keyCode: UInt32(code), modifiers: UInt32(mods), label: label)
+        return Shortcut(keyCode: code, modifiers: mods, label: label)
     }
 
     func set(_ shortcut: Shortcut?, for action: ShortcutAction) {
@@ -144,7 +146,12 @@ final class ShortcutStore {
 
     /// The other action that already uses this key combination, if any.
     func owner(of shortcut: Shortcut, besides action: ShortcutAction) -> ShortcutAction? {
-        ShortcutAction.all.first { $0 != action && self.shortcut(for: $0) == shortcut }
+        // The key and modifiers decide, not the label: the label is only how the key was shown
+        // when it was saved, and the system refuses a second hot key on the same combination.
+        ShortcutAction.all.first {
+            guard $0 != action, let other = self.shortcut(for: $0) else { return false }
+            return other.keyCode == shortcut.keyCode && other.modifiers == shortcut.modifiers
+        }
     }
 }
 
