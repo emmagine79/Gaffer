@@ -36,7 +36,7 @@ def test_each_model_is_classified_from_its_catalogue_modes(radio_id, kind):
 
 def test_the_index_covers_the_whole_catalogue_sorted_by_name():
     rows = models_index()
-    assert len(rows) == 186
+    assert sum(r["driver"] == "godox" for r in rows) == 186  # lumen's table; other brands' model files come on top
     assert [r["name"].lower() for r in rows] == sorted(r["name"].lower() for r in rows)
     assert {"radio_id", "name", "kind", "kind_label"} <= set(rows[0])
 
