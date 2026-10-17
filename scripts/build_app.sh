@@ -118,7 +118,7 @@ uv pip install --quiet --python "$BUNDLED_PY" --break-system-packages --no-deps 
 SITE="$("$BUNDLED_PY" -I -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 ditto --noextattr --noqtn "$ROOT/web/dist" "$SITE/gaffer/web"
 # Take out what differs on every build (this Mac's paths, install times, old .pyc files).
-"$BUNDLED_PY" -I "$ROOT/scripts/bundle_tool.py" prune "$PYDIR" "$DISCARD"
+"$BUNDLED_PY" -I -B "$ROOT/scripts/bundle_tool.py" prune "$PYDIR" "$DISCARD"
 
 say "Licences"
 # MIT requires the licence to travel with the code: lumen-studio's NOTICE and the others'
@@ -126,12 +126,12 @@ say "Licences"
 cp "$ROOT/NOTICE" "$C/Resources/NOTICE"
 ditto --noextattr --noqtn "$ROOT/THIRD-PARTY" "$C/Resources/THIRD-PARTY"
 cp "$ROOT/LICENSE" "$C/Resources/LICENSE"
-"$BUNDLED_PY" -I "$ROOT/scripts/bundle_tool.py" licences "$C/Resources" "$PYDIR" "$ROOT"
+"$BUNDLED_PY" -I -B "$ROOT/scripts/bundle_tool.py" licences "$C/Resources" "$PYDIR" "$ROOT"
 
 # Compile once now; the app runs Python with -B so it never writes into the signed bundle.
 # checked-hash .pyc files carry no date, and -s/-p give every file the same recorded path,
 # so the result does not depend on where the build ran.
-"$BUNDLED_PY" -I -m compileall -q -j 0 --invalidation-mode checked-hash \
+"$BUNDLED_PY" -I -B -m compileall -q -f -j 0 --invalidation-mode checked-hash \
     -s "$PYDIR" -p "/Gaffer.app/Contents/Resources/python" "$PYDIR/lib/python3.14" >/dev/null
 
 say "Swift shell"
@@ -157,7 +157,7 @@ say "Manifest (the app before signing)"
 xattr -cr "$APP"
 fix_dates_and_modes
 MANIFEST="$DIST/Gaffer-$VERSION.manifest.txt"
-"$BUNDLED_PY" -I "$ROOT/scripts/bundle_tool.py" manifest "$APP" > "$WORK/manifest.txt"
+"$BUNDLED_PY" -I -B "$ROOT/scripts/bundle_tool.py" manifest "$APP" > "$WORK/manifest.txt"
 to_trash "$MANIFEST"
 mv "$WORK/manifest.txt" "$MANIFEST"
 
