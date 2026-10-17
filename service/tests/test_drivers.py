@@ -16,9 +16,12 @@ from fastapi.testclient import TestClient
 
 from gaffer import demo, drivers
 from gaffer.app import create_app
+from gaffer.catalog import configure_models
 from gaffer.drivers.godox import GodoxDriver
+from gaffer.hub import Hub
 from gaffer.lights import LightLibrary, SavedLight
 from gaffer.state import Cct, LightState
+from gaffer.store import Store
 
 # Access payloads (vendor opcode F01102 + Godox frame) the vendor app was captured sending, as recorded in
 # godox-mesh-bt's tests (test_v2_commands.py, test_access_layer.py). Hardcoded: a changed byte must fail.
@@ -66,19 +69,23 @@ async def test_godox_apply_writes_the_recorded_payloads_for_power_brightness_and
     await driver.start()
     driver.attach_sender(sender)
 
-    async def settle():
-        for _ in range(60):
+    async def until(count):
+        for _ in range(1000):
+            if len(sent) >= count:
+                return
             await asyncio.sleep(0.005)
+        raise AssertionError(f"only {len(sent)} of {count} writes arrived")
 
     try:
-        for state in (
-            LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=5600)),
-            LightState(power=True, brightness=80, mode="cct", cct=Cct(kelvin=5600)),
-            LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=3200)),
-            LightState(power=False, brightness=50, mode="cct", cct=Cct(kelvin=3200)),
+        # Each state writes: power on + 50% at 5600 K, then one write per change, then power off.
+        for state, writes in (
+            (LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=5600)), 2),
+            (LightState(power=True, brightness=80, mode="cct", cct=Cct(kelvin=5600)), 3),
+            (LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=3200)), 4),
+            (LightState(power=False, brightness=50, mode="cct", cct=Cct(kelvin=3200)), 5),
         ):
             driver.apply(light, state)
-            await settle()
+            await until(writes)
     finally:
         await driver.stop()
 
@@ -126,7 +133,6 @@ def test_a_bad_model_file_is_skipped_with_a_reason_and_changes_nothing(tmp_path,
     _write(tmp_path, "zhiyun", "PROTO.json", _model("__proto__"))
     _write(tmp_path, "zhiyun", "WRONGDRIVER.json", _model("WRONGDRIVER", "yongnuo"))
     _write(tmp_path, "zhiyun", "NEGATIVE.json", _model("NEGATIVE", min_kelvin=-5))
-    _write(tmp_path, "zhiyun", "HUGE.json", _model("HUGE", note="x" * (2 << 20)))
     blocked = _write(tmp_path, "godox", f"{BI_COLOUR}.json", _model(BI_COLOUR, "godox", brand="Godox", name="Should not apply"))
     blocked.chmod(0)
     try:
@@ -136,11 +142,11 @@ def test_a_bad_model_file_is_skipped_with_a_reason_and_changes_nothing(tmp_path,
         blocked.chmod(0o644)
     ids = {m["id"] for m in listing["models"]}
     assert "GOOD" in ids
-    assert not ids & {"BROKEN", "WRONGSTEM", "OTHER", "CONSTRUCTOR", "..", "__PROTO__", "WRONGDRIVER", "NEGATIVE", "HUGE"}
+    assert not ids & {"BROKEN", "WRONGSTEM", "OTHER", "CONSTRUCTOR", "..", "__PROTO__", "WRONGDRIVER", "NEGATIVE"}
     assert next(m for m in listing["models"] if m["id"] == BI_COLOUR)["name"] != "Should not apply"
     skipped = {s["file"]: s["reason"] for s in listing["skipped"]}
     assert set(skipped) == {f"zhiyun/{n}.json" for n in (
-        "BROKEN", "WRONGSTEM", "CONSTRUCTOR", "DOTS", "PROTO", "WRONGDRIVER", "NEGATIVE", "HUGE")} | {f"godox/{BI_COLOUR}.json"}
+        "BROKEN", "WRONGSTEM", "CONSTRUCTOR", "DOTS", "PROTO", "WRONGDRIVER", "NEGATIVE")} | {f"godox/{BI_COLOUR}.json"}
     text = json.dumps(listing)
     assert not any(bad in text for bad in ("/Users/", "/private/", "/var/", str(tmp_path)))
 
@@ -222,3 +228,103 @@ def test_a_lights_channel_survives_save_and_load(tmp_path):
 
     library.save_light(dataclasses.replace(light, channel=7))
     assert LightLibrary(tmp_path).get(light.id).channel == 7
+
+
+# -- the hub hands lights between drivers, and never to the wrong brand ------------------------------
+
+
+@pytest.fixture
+def demo_models():
+    configure_models([], demo.DEMO_MODELS)  # what create_app does in demo mode
+    yield
+    configure_models()
+
+
+async def _studio(tmp_path, *, orphan_model=None):
+    """A demo hub over a seeded library: four Godox lights (nodes 2, 4, 6, 8), a Zhiyun and a Yongnuo stand-in."""
+    library = LightLibrary(tmp_path)
+    demo.seed(library)
+    if orphan_model:
+        library.add_paired(network_id=library.lights[0].network, address="DE:MO:00:00:00:77", radio_id=orphan_model,
+                           node_address=40, num_elements=1, device_key="", name="Orphan")
+    hub = Hub(Store(tmp_path), library, demo=True, scanner=demo.DemoScanner())
+    await hub.start()
+    for _ in range(400):
+        if hub.controller is not None:
+            return hub
+        await asyncio.sleep(0.01)
+    raise AssertionError("never connected")
+
+
+def _light(hub, name):
+    return next(f for f in hub.fixtures.values() if f.light.name == name)
+
+
+class _Wire:
+    """Stands in for the mesh link: records the node of every frame the Godox pump writes."""
+
+    def __init__(self, hub):
+        self.nodes: list[int | None] = []
+        hub.godox.attach_sender(self.send)
+
+    async def send(self, frame, node):
+        self.nodes.append(node)
+
+    async def first_write_to(self, node):
+        for _ in range(1000):
+            if node in self.nodes:
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError(f"nothing was written to node {node}")
+
+
+async def test_a_light_whose_model_is_gone_is_never_sent_godox_bytes(tmp_path, demo_models):
+    """A Zhiyun model file that was deleted leaves an id like PL0102 behind. The light sits on the active
+    mesh network, so under the old fallback it was commanded through the Godox pump."""
+    hub = await _studio(tmp_path, orphan_model="PL0102")
+    try:
+        wire = _Wire(hub)
+        orphan, key = _light(hub, "Orphan"), _light(hub, "Key light")
+        hub.set_state(orphan, LightState(power=True, brightness=40), "test")
+        hub.set_state(key, LightState(power=True, brightness=40), "test")  # queued after it: when this is out, the orphan's would be too
+        await wire.first_write_to(key.node)
+        assert orphan.node not in wire.nodes
+        assert orphan.reachable is False
+    finally:
+        await hub.stop()
+
+
+async def test_a_light_given_another_brands_model_is_let_go_by_the_godox_pump(tmp_path, demo_models):
+    hub = await _studio(tmp_path)
+    try:
+        fill, key = _light(hub, "Fill"), _light(hub, "Key light")
+        hub.godox.attach_sender(None)  # the mesh link is down: writes queue up
+        hub.set_state(fill, LightState(power=True, brightness=40), "test")
+        hub.set_model(fill.id, "ZY-DEMO")
+        wire = _Wire(hub)  # the link comes back
+        hub.set_state(key, LightState(power=True, brightness=40), "test")
+        await wire.first_write_to(key.node)
+        assert fill.node not in wire.nodes
+        for _ in range(200):  # and the new driver opened its own link, as it does at start-up
+            if fill.reachable:
+                break
+            await asyncio.sleep(0.005)
+        assert fill.reachable is True
+    finally:
+        await hub.stop()
+
+
+async def test_forgetting_a_light_clears_what_its_own_driver_kept(tmp_path, demo_models):
+    hub = await _studio(tmp_path)
+    try:
+        key, zhiyun = _light(hub, "Key light"), _light(hub, "Zhiyun panel")
+        stand_in = hub.registry.get("demo")
+        hub.godox.mark_heard(key.id)
+        assert key.reachable is True and zhiyun.id in stand_in.applied
+        key_light = key.light
+        await hub.forget(key.id)
+        await hub.forget(zhiyun.id)
+        assert hub.godox.status(key_light)["reachable"] is None  # a light paired again under this id starts unheard
+        assert zhiyun.id not in stand_in.applied
+    finally:
+        await hub.stop()

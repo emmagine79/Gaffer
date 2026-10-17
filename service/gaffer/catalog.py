@@ -221,10 +221,13 @@ def v3_param_schema(symbol: int) -> tuple[dict[str, Any], ...]:
 # same id as a row replaces the row. One bad file is skipped with a reason; it never
 # stops the rest, and an unreadable file changes nothing.
 
-#: Gaffer's own bounds. No platform or contract names one for these.
-MAX_MODEL_FILE_BYTES = 1 << 20
-MAX_MODEL_FILES = 5000
-_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
+#: A model or driver id is also a file or folder name, and a file's stem must equal its id. So the
+#: characters are the ones that are safe in a file name (no separators, no dots). No length is set
+#: here: the file system already limits a name, and no Gaffer contract gives a shorter one.
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+#: A Godox radio id is four upper-case hex digits: ``discovery.radio_id_from_manufacturer`` builds it
+#: as ``f"{hi:02X}{lo:02X}"`` from the two bytes in the advertisement. Any other id is not Godox's.
+_GODOX_RADIO_ID = re.compile(r"[0-9A-F]{4}")
 _SERVICE = re.compile(r"[0-9a-f]{4}|[0-9a-f]{8}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 _RESERVED_IDS = frozenset({"constructor", "prototype", "proto", "tostring", "valueof", "hasownproperty"})
 
@@ -250,14 +253,14 @@ def _check_row(raw: dict[str, Any], folder: str) -> tuple[str, dict[str, Any]]:
     if driver != folder:
         raise ModelFileError("driver does not match the folder")
     brand = raw.get("brand")
-    if not isinstance(brand, str) or not brand.strip() or len(brand) > 64:
-        raise ModelFileError("brand must be a short text")
+    if not isinstance(brand, str) or not brand.strip():
+        raise ModelFileError("brand must be text")
     name = raw.get("name")
-    if not isinstance(name, str) or not name.strip() or len(name) > 120:
-        raise ModelFileError("name must be a short text")
+    if not isinstance(name, str) or not name.strip():
+        raise ModelFileError("name must be text")
     for key in ("min_kelvin", "max_kelvin"):
         value = raw.get(key)
-        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100_000:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:  # kelvin starts at zero
             raise ModelFileError(f"{key} must be a whole number")
     if raw["min_kelvin"] > raw["max_kelvin"]:
         raise ModelFileError("min_kelvin is above max_kelvin")
@@ -268,8 +271,8 @@ def _check_row(raw: dict[str, Any], folder: str) -> tuple[str, dict[str, Any]]:
     if not isinstance(match, dict) or set(match) - {"name_prefix", "service"}:
         raise ModelFileError("match may hold only name_prefix and service")
     prefix = match.get("name_prefix")
-    if prefix is not None and (not isinstance(prefix, str) or not 0 < len(prefix) <= 64):
-        raise ModelFileError("match.name_prefix must be a short text")
+    if prefix is not None and (not isinstance(prefix, str) or not prefix):
+        raise ModelFileError("match.name_prefix must be text")
     service = match.get("service")
     if service is not None and (not isinstance(service, str) or not _SERVICE.fullmatch(service.lower())):
         raise ModelFileError("match.service must be a Bluetooth UUID")
@@ -288,8 +291,6 @@ def _read_model_file(path: Path, folder: str) -> tuple[str, dict[str, Any]]:
         raise ModelFileError("cannot be read") from None
     if not stat.S_ISREG(info.st_mode):
         raise ModelFileError("is not a plain file")
-    if info.st_size > MAX_MODEL_FILE_BYTES:
-        raise ModelFileError("is too large")
     try:
         raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
@@ -308,7 +309,6 @@ def _scan_model_dir(root: Path, rows: dict[str, dict[str, Any]], skipped: list[d
         folders = sorted(p for p in root.iterdir() if not p.name.startswith("."))
     except OSError:
         return  # no models folder is normal
-    seen = 0
     for folder in folders:
         try:
             if not folder.is_dir() or folder.is_symlink() or not _ID.fullmatch(folder.name):
@@ -319,10 +319,6 @@ def _scan_model_dir(root: Path, rows: dict[str, dict[str, Any]], skipped: list[d
             continue
         for path in files:
             label = f"{folder.name}/{path.name}"
-            seen += 1
-            if seen > MAX_MODEL_FILES:
-                skipped.append({"file": label, "reason": "too many model files"})
-                continue
             try:
                 model_id, row = _read_model_file(path, folder.name)
             except Exception as err:  # one bad file never stops the rest
@@ -393,9 +389,13 @@ def _unknown(radio_id: str) -> ModelCaps:
     understood everywhere. Built-in effects are left out because their symbols
     mean different things on different models.
     """
-    label = f"Godox light ({radio_id})" if radio_id else "Godox light"
+    # A Godox model id has one shape (see ``_GODOX_RADIO_ID``). An id of any other shape belongs to some
+    # other brand's model whose file is gone or failed to load; it must not be commanded as a Godox
+    # light, so it names a driver that does not exist and gets the stand-in that sends nothing.
+    godox = not radio_id or bool(_GODOX_RADIO_ID.fullmatch(radio_id))
+    label = (f"Godox light ({radio_id})" if radio_id else "Godox light") if godox else f"Unknown light ({radio_id})"
     return ModelCaps(
-        radio_id=radio_id, name=label, chip="", min_kelvin=2800, max_kelvin=6500, gm_min=0, gm_max=0,
+        radio_id=radio_id, name=label, driver="godox" if godox else "unknown", brand="Godox" if godox else "", chip="", min_kelvin=2800, max_kelvin=6500, gm_min=0, gm_max=0,
         modes=("cct",), effect_version=0, effects=(), fan_modes=(), color_chip_version=0, rgb_display=0,
         rgb_channels=(), battery=False, known=False,
     )

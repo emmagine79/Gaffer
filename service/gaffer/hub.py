@@ -237,8 +237,10 @@ class Hub:
         task = self._engine_tasks.pop(light_id, None)
         if task is not None:
             task.cancel()
-        if fixture is not None and self.on_mesh(fixture):
-            self.godox.drop(fixture.node)
+        if fixture is not None:
+            if self.on_mesh(fixture):
+                self.godox.drop(fixture.node)
+            fixture.driver.forget_light(light_id)
 
     def fixture(self, light_id: str | None) -> Fixture:
         if light_id is None:
@@ -854,9 +856,18 @@ class Hub:
     def _set_model(self, light_id: str, radio_id: str, *, source: str) -> None:
         light = self.library.set_model(light_id, radio_id, source=source)
         fixture = self.fixture(light_id)
+        old_driver, was_on_mesh = fixture.driver, self.on_mesh(fixture)
         fixture.light = light
         fixture.engine.stop(restore=False)
         fixture.use_caps(model_caps(radio_id))
+        if fixture.driver is not old_driver:
+            # The model belongs to another brand: the old driver lets go of the light (a queued mesh write
+            # must not reach it later), and the new one opens its own link as it does at start-up.
+            if was_on_mesh:
+                self.godox.drop(fixture.node)
+            old_driver.forget_light(light_id)
+            if self._started and fixture.driver is not self.godox:
+                self._tasks.append(asyncio.create_task(self._connect_other(fixture)))
         if self.on_network(fixture):
             if self.on_mesh(fixture):
                 self.godox.forget(fixture.node)

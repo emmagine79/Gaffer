@@ -103,3 +103,8 @@ class Driver(ABC):
     @abstractmethod
     def status(self, light: SavedLight) -> LightStatus:
         """``{"reachable": bool | None, "held": bool}`` for this light."""
+
+    def forget_light(self, light_id: str) -> None:
+        """The hub no longer has this light with this driver (forgotten, paired again, or given another
+        model). Drop anything kept for it: queued writes, a link, a last-heard time. The id can come
+        back later, so a stale entry would be read as the new light's. Default: nothing kept."""
