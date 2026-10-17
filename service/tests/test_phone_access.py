@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import stat
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -416,8 +417,8 @@ def switchable_tailscale(folder: Path) -> tuple[str, Path]:
     mode.write_text("good")
     script = folder / "tailscale"
     script.write_text(
-        f'#!/bin/sh\ncase "$(cat {mode})" in\n good) cat {folder}/good.json;;\n stopped) cat {folder}/stopped.json;;\n'
-        f' broken) exit 1;;\n hung) exec sleep 120;;\nesac\n')  # 120 s: ends by itself if a test run dies
+        f'#!/bin/sh\ncase "$(cat {mode})" in\n good) touch {folder}/answered; cat {folder}/good.json;;\n stopped) cat {folder}/stopped.json;;\n'
+        f' broken) exit 1;;\n hung) touch {folder}/hung; exec sleep 120;;\nesac\n')  # 120 s: ends by itself if a test run dies
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return str(script), mode
 
@@ -462,8 +463,17 @@ def test_opening_the_panel_again_replaces_a_check_that_never_answered(tmp_path):
     with studio_with(tmp_path, cli) as s:
         on = s.mac.post("/api/phone", json={"enabled": True}).json()
         assert on["checking"] is True and on["tailscale"] is None
+        hung = tmp_path / "hung"
+        while not hung.exists():  # the hung tool has started
+            time.sleep(0.01)
         mode.write_text("good")  # Tailscale comes back; the next time the panel opens, the stuck check is replaced
         assert s.mac.get("/api/phone").status_code == 200
+        answered = tmp_path / "answered"
+        for _ in range(300):  # 3 s: only so that a check that is never replaced fails the test instead of hanging it
+            if answered.exists():
+                break
+            time.sleep(0.01)
+        assert answered.exists(), "the stuck check was not replaced"
         status = s.mac.get("/api/phone?wait=1").json()
         assert status["checking"] is False and status["tailscale"] is True
         assert [t["kind"] for t in status["targets"]] == ["wifi", "tailscale"]
