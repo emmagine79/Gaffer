@@ -288,3 +288,80 @@ def test_a_slider_move_while_the_light_answers_is_not_overwritten_by_max_mode(tm
         client.portal.call(lambda: [answer() for answer in list(held)])  # the light answers late: Max on
         _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
         assert _light(client, "Zhiyun panel")["state"]["brightness"] == 40
+
+
+def test_max_on_in_gaffer_shows_full_power_and_max_off_goes_back_to_the_earlier_level(studio):
+    """Captain, 18 Oct: at 33% he switched Max on in Gaffer. The G200 went to 100% by itself and stayed
+    there after Max off, while Gaffer showed 33% throughout. He chose: Max off goes back to 33%."""
+    client, wire = studio
+    with client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 33}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 33, "Gaffer at 33%")
+
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": True}, 1)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 100
+
+        before = len(wire.writes)
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 33
+        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS for w in wire.writes[before:]),
+              "the light to be told 33% again")
+        sent = [zy.parse_frame(w) for w in wire.writes[before:] if zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS]
+        assert round(zy.decode_brightness_response(sent[-1].payload)) == 33
+
+
+def test_max_off_when_max_is_already_off_keeps_the_current_level(studio):
+    """Review round 1: a saved level must not come back once Max Mode has already ended (here, by power-off)."""
+    client, wire = studio
+    with client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 33}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 33, "Gaffer at 33%")
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": True}, 1)["type"] == "ack"
+        ws.send_json({"type": "power", "light": light, "on": False})  # ends Max Mode on the light
+        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is False, "Max Mode to end at power-off")
+        ws.send_json({"type": "power", "light": light, "on": True})
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 70}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 70, "Gaffer at 70%")
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 70
+
+
+def test_a_slider_move_during_a_slow_max_on_write_is_kept(tmp_path, monkeypatch):
+    """Review round 1: Max on must not put 100% over a level set while its write was on the way."""
+    import asyncio
+
+    monkeypatch.setattr(demo, "PACE", 0.05)
+
+    class SlowWire(Wire):
+        async def open(self, address, on_notify, on_lost):
+            writes = self.writes
+
+            class SlowLink(Link):
+                async def write(self, data):
+                    frame = zy.parse_frame(bytes(data))
+                    if frame.command == zy.Command.MAX_MODE and frame.payload != zy.encode_query():
+                        await asyncio.sleep(1.0)  # a light slow to take the write
+                    writes.append(bytes(data))
+
+            return SlowLink(writes)
+
+    wire = SlowWire()
+    app = create_app(demo=True, data_dir=tmp_path)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 33}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 33, "Gaffer at 33%")
+        ws.send_json({"type": "light.max_mode", "light": light, "on": True, "rid": 1})
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 50}})  # while the write is on its way
+        assert _until(ws, lambda m: m.get("rid") == 1)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 50
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 100}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 100, "Gaffer at 100%")
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 50  # back to the newest level, not 33

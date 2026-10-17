@@ -48,6 +48,8 @@ class Fixture:
         self.adopting = True  # first contact this run: read the light before writing it
         self.request_at: dict[int, float] = {}
         self.stream_source: str | None = None
+        #: The level the light had before Gaffer saw Max Mode come on; Max off in Gaffer goes back to it.
+        self.level_before_max: float | None = None
         self.own_values = False  # a look's fade is running: group mirroring leaves this light alone (looks.py)
 
     @property
