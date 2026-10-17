@@ -44,7 +44,7 @@ A model file is one row of lumen's `models.json` plus these keys:
 | Key | Type | Rule |
 | --- | --- | --- |
 | `id` | string | Required. 1 to 32 characters from `A-Z a-z 0-9 _ -`, starting with a letter or digit. Case-insensitive. Must equal the file name without `.json`. `constructor`, `prototype` and similar names are refused. |
-| `driver` | string | Required. Must equal the folder name, and name a folder under `service/gaffer/drivers/`. |
+| `driver` | string | Required. Must equal the folder name. It should name a folder under `service/gaffer/drivers/`; if it does not, the light is unreachable. |
 | `brand` | string | Required. 1 to 64 characters. Shown to people. |
 | `name` | string | Required. 1 to 120 characters. |
 | `min_kelvin`, `max_kelvin` | integer | Required. 0 to 100000, `min_kelvin` not above `max_kelvin`. |
