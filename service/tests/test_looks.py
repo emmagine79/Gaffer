@@ -274,7 +274,8 @@ def test_all_off_over_the_socket_names_the_lights_that_stayed_on(shell):
     with shell.websocket_connect(WS) as ws:
         ws.receive_json(), ws.receive_json()  # hello, look
         ws.send_json({"type": "all.off", "rid": 7})
-        reply = next(m for m in iter(ws.receive_json, None) if m.get("rid") == 7)
+        # The ack is the next thing that matters; a `look` frame first would mean all.off answered nothing.
+        reply = next(m for m in iter(ws.receive_json, None) if m.get("rid") == 7 or m["type"] == "look")
     assert reply == {"type": "ack", "of": "all.off", "skipped": [away.id], "rid": 7}
 
 

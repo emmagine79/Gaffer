@@ -76,6 +76,6 @@ test('a fourth look is one tap away under More looks, and the window edits looks
   await name.fill('Renamed')
   await name.blur()
   await expect.poll(async () => (await (await page.request.get(`${base()}/api/looks`)).json()).looks[3].name).toBe('Renamed')
-  await page.getByLabel('Delete look 4').click()
+  await page.getByLabel('Remove look 4').click()
   await expect.poll(async () => (await (await page.request.get(`${base()}/api/looks`)).json()).looks.length).toBe(3)
 })
