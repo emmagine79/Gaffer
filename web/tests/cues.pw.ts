@@ -180,12 +180,6 @@ test('Space does not fire Go while a fader is focused or just after it was dragg
   await expect(page.getByText('Step 0 of 3')).toBeVisible()
   const fader = page.getByRole('slider', { name: 'Brightness' })
 
-  // A fader with keyboard focus keeps Space.
-  await fader.focus()
-  await page.keyboard.press('Space')
-  await page.waitForTimeout(400)
-  await expect(page.getByText('Step 0 of 3')).toBeVisible()
-
   // Dragging a fader hands focus back to the page; Space still must not fire Go.
   const box = (await fader.boundingBox())!
   await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2)
@@ -193,6 +187,12 @@ test('Space does not fire Go while a fader is focused or just after it was dragg
   await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2, { steps: 5 })
   await page.mouse.up()
   await expect(fader).not.toBeFocused()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400)
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+
+  // A fader with keyboard focus keeps Space.
+  await fader.focus()
   await page.keyboard.press('Space')
   await page.waitForTimeout(400)
   await expect(page.getByText('Step 0 of 3')).toBeVisible()
