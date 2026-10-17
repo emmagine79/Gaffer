@@ -7,7 +7,7 @@
  *
  *   SPEC-007  lighting desk         done: web/src/desk/
  *   SPEC-008  add a light           app/AddLight.tsx            -> web/src/addlight/
- *   SPEC-010  looks with their fade glass/LookCards.tsx reads lumen scenes until looks exist
+ *   SPEC-010  looks with their fade web/src/looks/ (cards, keys 1-9 and 0, the window's look editor)
  *   SPEC-011  groups                groups/Groups.tsx          (done)
  *   SPEC-012  effects               tabs/EffectsTab.tsx         -> web/src/effects/
  *   SPEC-013  schedules             tabs/ScheduleTab.tsx        -> web/src/schedules/
