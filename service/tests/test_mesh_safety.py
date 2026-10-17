@@ -77,7 +77,7 @@ def test_a_saved_light_that_was_reset_shows_as_ready_to_pair(tmp_path):
 
 
 async def test_writes_queued_for_one_network_never_reach_the_next():
-    pump = CommandPump(model_caps("008F"), max_rate=1000)
+    pump = CommandPump(model_caps("008F"), max_rate=1000, sleep=lambda _s: asyncio.sleep(0))
     pump.submit(LightState(cct=Cct(kelvin=3200)), node=2)
     job = pump.submit_aux(lambda: asyncio.sleep(0))
     pump.reset()

@@ -135,7 +135,7 @@ async def _drain(pump: CommandPump, ticks: int = 20) -> None:
 
 
 async def test_pump_coalesces_to_the_latest_state(caps):
-    pump = CommandPump(caps, max_rate=1000)
+    pump = CommandPump(caps, max_rate=1000, sleep=lambda _s: asyncio.sleep(0))
     sender = FakeSender()
     task = asyncio.create_task(pump.run())
     for k in range(2000, 2100):
@@ -149,7 +149,7 @@ async def test_pump_coalesces_to_the_latest_state(caps):
 
 async def test_pump_detaches_on_failure_and_resends_on_reattach(caps):
     failures: list[Exception] = []
-    pump = CommandPump(caps, max_rate=1000, on_send_failure=failures.append)
+    pump = CommandPump(caps, max_rate=1000, sleep=lambda _s: asyncio.sleep(0), on_send_failure=failures.append)
     task = asyncio.create_task(pump.run())
     pump.attach(FakeSender(fail_after=1))
     pump.submit(LightState())
@@ -165,7 +165,7 @@ async def test_pump_detaches_on_failure_and_resends_on_reattach(caps):
 
 
 async def test_aux_jobs_run_and_resolve(caps):
-    pump = CommandPump(caps, max_rate=1000)
+    pump = CommandPump(caps, max_rate=1000, sleep=lambda _s: asyncio.sleep(0))
     task = asyncio.create_task(pump.run())
     pump.attach(FakeSender())
 
@@ -219,7 +219,7 @@ async def test_a_write_from_a_dead_link_cannot_detach_the_new_one(caps):
         raise ConnectionError("old link died")
 
     failures: list[Exception] = []
-    pump = CommandPump(caps, max_rate=1000, on_send_failure=failures.append)
+    pump = CommandPump(caps, max_rate=1000, sleep=lambda _s: asyncio.sleep(0), on_send_failure=failures.append)
     task = asyncio.create_task(pump.run())
     pump.attach(slow_failing)
     pump.submit(LightState())
@@ -230,3 +230,25 @@ async def test_a_write_from_a_dead_link_cannot_detach_the_new_one(caps):
     await _drain(pump)
     task.cancel()
     assert pump.attached and failures == []
+
+
+async def test_a_godox_light_gets_time_to_switch_on_before_its_level_frame(caps):
+    # Captain, 18 Oct 2026: the LA150Bi often needed several presses of On. Its level frame followed the
+    # power-on 33 ms later; ha-godox-mesh (MIT) gives a light 0.1 s to finish switching on first.
+    now = [0.0]
+    sent: list[tuple[float, bytes]] = []
+
+    async def advance(seconds: float) -> None:
+        now[0] += seconds
+
+    async def send(frame: bytes, _node: int | None) -> None:
+        sent.append((now[0], frame))
+
+    pump = CommandPump(caps, max_rate=30, clock=lambda: now[0], sleep=advance)
+    task = asyncio.create_task(pump.run())
+    pump.attach(send)
+    pump.submit(LightState(power=True, brightness=60))
+    await _drain(pump)
+    task.cancel()
+    assert [frame for _at, frame in sent][:1] == [POWER_ON] and len(sent) == 2
+    assert sent[1][0] - sent[0][0] >= 0.1
