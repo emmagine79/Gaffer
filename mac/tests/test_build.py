@@ -46,7 +46,8 @@ def build(checkout: Path, dist: Path, tmp: Path, home: Path, **extra_env):
 
 
 def requirement(app: Path) -> str:
-    return sh("codesign", "-d", "-r-", app).stderr.strip()
+    out = sh("codesign", "-d", "-r-", app).stderr  # also prints the app's path, which differs
+    return next(line for line in out.splitlines() if line.startswith("designated =>"))
 
 
 def python_cdhash(app: Path) -> str:
