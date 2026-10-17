@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import contextlib
 import json
 import re
 import sqlite3
@@ -29,8 +30,11 @@ from godox_mesh_bt.state import MeshState
 # name (whatever the installer typed in the app), separates a Godox light from noise.
 GODOX_COMPANY_ID = "0211"
 
-#: The most one file or pasted text can be. It is uvicorn's WebSocket message limit
-#: (``ws_max_size``, 16 MiB), which the file travels in, so a bigger one never arrives.
+#: The most one WebSocket message can carry: uvicorn's default ``ws_max_size`` (16 MiB, uvicorn 0.54
+#: ``Config``). A bigger message makes uvicorn close the socket (code 1009) before any handler runs, so
+#: the page cannot be told why. The web page checks its file against this before sending
+#: (``web/src/add/GodoxImport.tsx``); a file travels as base64, 4 characters for every 3 bytes, so the
+#: largest one that can arrive is a little under 12 MiB. These checks only guard the text that did arrive.
 MAX_BYTES = 16 * 1024 * 1024
 
 #: Bluetooth Mesh unicast addresses run 0x0001 to 0x7FFF (Mesh Protocol spec, 3.4.2.2).
@@ -67,6 +71,21 @@ def _key(value: Any) -> str | None:
     return None
 
 
+def _is_godox(cid: Any) -> bool:
+    """Whether a node's company id is Godox's, written as ``"0211"``, ``"0x0211"`` or the number 529."""
+    if isinstance(cid, bool):
+        return False
+    if isinstance(cid, int):
+        return cid == int(GODOX_COMPANY_ID, 16)
+    if not isinstance(cid, str):
+        return False
+    text = cid.strip().lower().removeprefix("0x")
+    try:
+        return int(text, 16) == int(GODOX_COMPANY_ID, 16)
+    except ValueError:
+        return False
+
+
 def parse_mesh_export(text: str) -> MeshImport:
     if len(text) > MAX_BYTES:
         raise ImportProblem("That file is too large to be a Godox export.")
@@ -92,7 +111,7 @@ def parse_mesh_export(text: str) -> MeshImport:
     nodes: list[FoundNode] = []
     seen: set[int] = set()
     for node in data.get("nodes") or []:
-        if not isinstance(node, dict) or str(node.get("cid", "")).upper() != GODOX_COMPANY_ID:
+        if not isinstance(node, dict) or not _is_godox(node.get("cid")):
             continue  # the app's own provisioner entry, or some other vendor's node
         try:
             address = int(str(node["unicastAddress"]), 16)
@@ -125,7 +144,7 @@ def mesh_json_from_db(data: bytes) -> str:
         raise ImportProblem("That file is too large to be a Godox database.")
     foreign = ImportProblem("That file is not the Godox app's GodoxLight.db.")
     try:
-        with sqlite3.connect(":memory:") as db:
+        with contextlib.closing(sqlite3.connect(":memory:")) as db:  # ``with db`` would not close it
             db.deserialize(data)
             db.execute("PRAGMA query_only = ON")
             rows = db.execute("SELECT meshJson FROM Project ORDER BY rowid").fetchall()

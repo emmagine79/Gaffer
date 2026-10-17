@@ -144,7 +144,7 @@ export function AddLight() {
               onChange={(e) => importKeys(e.target.files?.[0], importFor ?? manualAddress)} />
 
             {godox ? (
-              <GodoxImport onDone={() => { setGodox(false); setOpen(false) }} />
+              <GodoxImport onDone={() => { setGodox(false); setOpen(false) }} onBack={() => setGodox(false)} />
             ) : target ? (
               <div className="pairing">
                 <div className={`pairing-visual ${made ? 'is-done' : failed ? 'is-failed' : ''}`}>

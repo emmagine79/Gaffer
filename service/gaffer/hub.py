@@ -873,7 +873,8 @@ class Hub:
     async def import_godox(self, client: Client, message: dict[str, Any]) -> tuple[list[SavedLight], list[str]]:
         """Save every Godox light in the Godox app's export. A light that cannot be added is skipped, not fatal."""
         try:
-            plans = light_plans(mesh_import_from_message(message))
+            # Parsing a file of several megabytes would stall every light's updates if it ran on the event loop.
+            plans = light_plans(await asyncio.to_thread(mesh_import_from_message, message))
         except ImportProblem as err:
             raise HubError(str(err)) from err
         saved: list[SavedLight] = []
