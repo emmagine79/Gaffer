@@ -86,6 +86,14 @@ The light objects in `hello`, `lights` and `/api/export` gain:
 - `channel`: integer or null. The radio channel a light is set to, for brands that need one told to them (Yongnuo). Saved with the light.
 - `caps.driver`, `caps.brand`, `caps.match`, `caps.driver_data`.
 
+### Sync groups (WebSocket `/ws`)
+
+A group is `{id, name, members: [light id], props, enabled}`. `props` are any of `power`, `brightness`, `white`, `colour`, `effects`. A light is in one group at a time. `hello` and every change carry the list: `{"type": "groups", "groups": [...]}`.
+
+- `{"type": "group.save", "group": {...}, "leader": "<light id>"}` creates a group (no `id`) or updates one. Answers `{"type": "ack", "of": "group.save", "group": {...}}`. Names are cut to 40 characters. When a group is joined or re-enabled, its other members take the `leader` light's shared properties.
+- `{"type": "group.delete", "id": "<group id>"}` removes the group. Its lights no longer follow each other.
+- While a group is enabled with two or more members, any `set` on one member moves the others (only the shared `props`).
+
 ## Mac shell
 
 The Swift shell (`mac/`) and the Python service (`service/`) follow this file.
