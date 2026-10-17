@@ -12,7 +12,8 @@
   color: var(--ink); font: inherit; font-size: 15px; font-weight: 600;
   overflow: hidden; text-overflow: ellipsis;
 }
-.grp-name:hover, .grp-name:focus-visible { border-bottom-color: var(--dim); outline: none; }
+.grp-name:hover { border-bottom-color: var(--dim); }
+/* Keyboard focus keeps the page-wide ring (styles/glass.css :focus-visible). */
 .grp-delete { flex: none; border: 0; background: transparent; color: var(--dim); font-size: 12.5px; padding: 4px 6px; border-radius: 6px; }
 .grp-delete:hover, .grp-delete:focus-visible { color: var(--ink); background: var(--faint); }
 .grp-label { font-size: 12px; color: var(--dim); margin-top: 4px; }

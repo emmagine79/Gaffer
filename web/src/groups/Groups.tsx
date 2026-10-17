@@ -37,7 +37,11 @@ function GroupCard({ group }: { group: Group }) {
           maxLength={NAME_MAX}
           aria-label="Group name"
           onChange={(e) => setName(e.target.value)}
-          onBlur={() => name.trim() && name !== group.name && save({ name })}
+          onBlur={() => {
+            const trimmed = name.trim()
+            setName(trimmed || group.name) // a blank name goes back to the saved one
+            if (trimmed && trimmed !== group.name) save({ name: trimmed })
+          }}
         />
         <button
           type="button"
@@ -96,6 +100,14 @@ function GroupCard({ group }: { group: Group }) {
   )
 }
 
+/** The first "Group N" no group already uses, so deleting Group 1 never makes a second Group 2. */
+function newName(groups: Group[]) {
+  const used = new Set(groups.map((g) => g.name))
+  let n = 1
+  while (used.has(`Group ${n}`)) n++
+  return `Group ${n}`
+}
+
 /** Lights that follow each other: move any one and the rest take the properties the group shares. */
 export function Groups() {
   const groups = useStudio((s) => s.groups)
@@ -103,15 +115,17 @@ export function Groups() {
   const selected = useStudio((s) => s.selected)
   const send = useStudio((s) => s.send)
 
-  /** The light on screen plus the next light that is in no group, so a new group does something at once. */
+  // A light follows one group, so a new group is made only from lights that are in none.
+  const free = lights.filter((l) => !groups.some((g) => g.members.includes(l.id))).map((l) => l.id)
+
+  /** The light on screen (if it is free) plus the next free light, so a new group does something at once. */
   const create = () => {
-    const free = lights.filter((l) => !groups.some((g) => g.members.includes(l.id))).map((l) => l.id)
-    const first = free.includes(selected ?? '') ? selected! : free[0]
-    const second = free.find((id) => id !== first)
-    const members = first && second ? [first, second] : selected ? [selected] : []
+    if (free.length < 2) return
+    const first = selected && free.includes(selected) ? selected : free[0]
+    const second = free.find((id) => id !== first)!
     send({
       type: 'group.save',
-      group: { name: `Group ${groups.length + 1}`, members, props: ['power', 'brightness', 'white', 'colour'], enabled: true },
+      group: { name: newName(groups), members: [first, second], props: ['power', 'brightness', 'white', 'colour'], enabled: true },
       leader: selected,
     })
   }
@@ -120,8 +134,9 @@ export function Groups() {
     <section className="grps" aria-label="Groups">
       <div className="grps-head">
         <h2 className="grps-title">Groups</h2>
-        <button type="button" className="g-tab" onClick={create} disabled={lights.length < 2}>+ New group</button>
+        <button type="button" className="g-tab" onClick={create} disabled={free.length < 2}>+ New group</button>
       </div>
+      {lights.length >= 2 && free.length < 2 && <p className="g-dim">A new group needs two lights that are in no group yet.</p>}
       {groups.length === 0 ? (
         <p className="g-dim">
           {lights.length < 2
