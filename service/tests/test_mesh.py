@@ -121,7 +121,7 @@ async def test_lights_take_turns_so_a_busy_one_cannot_starve_the_rest():
 
 
 async def test_diffing_is_per_light():
-    pump = CommandPump(RGB, max_rate=1000)
+    pump = CommandPump(RGB, max_rate=1000, sleep=lambda _s: asyncio.sleep(0))  # no power-on settle
     recorder = Recorder()
     pump.attach(recorder)
     task = asyncio.create_task(pump.run())

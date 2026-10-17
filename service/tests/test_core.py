@@ -230,3 +230,25 @@ async def test_a_write_from_a_dead_link_cannot_detach_the_new_one(caps):
     await _drain(pump)
     task.cancel()
     assert pump.attached and failures == []
+
+
+async def test_a_godox_light_gets_time_to_switch_on_before_its_level_frame(caps):
+    # Captain, 18 Oct 2026: the LA150Bi often needed several presses of On. Its level frame followed the
+    # power-on 33 ms later; ha-godox-mesh (MIT) gives a light 0.1 s to finish switching on first.
+    now = [0.0]
+    sent: list[tuple[float, bytes]] = []
+
+    async def advance(seconds: float) -> None:
+        now[0] += seconds
+
+    async def send(frame: bytes, _node: int | None) -> None:
+        sent.append((now[0], frame))
+
+    pump = CommandPump(caps, max_rate=30, clock=lambda: now[0], sleep=advance)
+    task = asyncio.create_task(pump.run())
+    pump.attach(send)
+    pump.submit(LightState(power=True, brightness=60))
+    await _drain(pump)
+    task.cancel()
+    assert [frame for _at, frame in sent][:1] == [POWER_ON] and len(sent) == 2
+    assert sent[1][0] - sent[0][0] >= 0.1

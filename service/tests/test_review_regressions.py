@@ -28,7 +28,7 @@ def test_reselecting_the_old_value_after_a_panel_change_is_sent(caps):
         async def sender(frame: bytes, dst: int | None = None) -> None:
             sent.append(frame)
 
-        pump = CommandPump(caps, max_rate=1000)
+        pump = CommandPump(caps, max_rate=1000, sleep=lambda _s: asyncio.sleep(0))  # no power-on settle
         task = asyncio.create_task(pump.run())
         pump.attach(sender)
         s5600 = apply_patch(LightState(), {"cct": {"kelvin": 5600}}, caps)

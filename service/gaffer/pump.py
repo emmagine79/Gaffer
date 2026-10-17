@@ -35,6 +35,13 @@ logger = logging.getLogger(__name__)
 Sender = Callable[[bytes, int | None], Awaitable[None]]
 AuxJob = Callable[[], Awaitable[Any]]
 
+#: Seconds a light gets to finish switching on before it is sent anything else. On some Godox
+#: chip families a command that lands while the light is still off is stored, or breaks the next
+#: power-on (ha-godox-mesh PW-05, PW-06). Source: binary-person/ha-godox-mesh (MIT),
+#: custom_components/godox_mesh/const.py POWER_ON_SETTLE_SECONDS. Captain's LA150Bi often needed
+#: several presses of On when the level frame followed straight after power-on (18 Oct 2026).
+POWER_ON_SETTLE_S = 0.1
+
 
 def plan_frames(
     desired: LightState,
@@ -90,10 +97,12 @@ class CommandPump:
         max_rate: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
         on_send_failure: Callable[[Exception], None] | None = None,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self.caps = caps
         self.max_rate = max_rate
         self._clock = clock
+        self._sleep = sleep
         self._on_send_failure = on_send_failure
         #: Pending state per light, in the order lights are next served.
         self._desired: dict[int | None, tuple[LightState, ModelCaps]] = {}
@@ -245,6 +254,10 @@ class CommandPump:
             now = self._clock()
             self._last_send_at = now
             self.stats.record_send(now)
+            if frame == power_frame(True) and frame is not frames[-1]:
+                await self._sleep(POWER_ON_SETTLE_S)  # let it finish switching on before the level frame
+                if generation != self._generation:
+                    return
         self._last_power[node] = desired.power
         if desired.power:
             self._last_mode_frame[node] = frames[-1]
