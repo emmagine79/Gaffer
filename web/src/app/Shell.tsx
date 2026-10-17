@@ -3,6 +3,9 @@ import { beamOf } from '../glass/describe'
 import { Footer } from '../glass/Footer'
 import { Glass } from '../glass/Glass'
 import { OtherLights } from '../glass/OtherLights'
+import { CueBar } from '../cues/CueBar'
+import { CueEditor } from '../cues/CueEditor'
+import { useCueKey } from '../cues/cues'
 import { LookEditor } from '../looks/LookEditor'
 import { useLookKeys } from '../looks/looks'
 import { useStudio } from '../state/store'
@@ -23,6 +26,7 @@ export function Shell() {
   const state = useStudio((s) => s.state)
   const beam = state ? beamOf(state).css : NO_LIGHT
   useLookKeys()
+  useCueKey()
   const choose = (next: View) => {
     setView(next)
     rememberView(SURFACE, next)
@@ -32,10 +36,12 @@ export function Shell() {
       <main className="glass" style={{ '--beam': beam } as CSSProperties} data-view={view}>
         <ViewSwitch view={view} onChange={choose} />
         {view === 'glass' ? <Glass /> : <DeskSlot />}
+        <CueBar />
         <Footer surface={SURFACE} />
         {SURFACE === 'phone' && view === 'glass' && <OtherLights />}
       </main>
       {SURFACE === 'window' && <LookEditor />}
+      {SURFACE === 'window' && <CueEditor />}
       <AddLight />
       <Toasts />
     </div>

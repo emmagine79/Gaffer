@@ -192,6 +192,7 @@ class Hub:
         self._save_due = 0.0
         self._switch_lock = asyncio.Lock()
         self.look: dict[str, str] | None = None  # the look on now ({id, name}); see looks.py
+        self.cue: dict[str, Any] | None = None  # the active cue ({id, step}); see cues.py
 
         self.registry = build_drivers(DriverContext(demo=demo, data_dir=getattr(store, "root", None)), demo=demo)
         godox = self.registry.get("godox")

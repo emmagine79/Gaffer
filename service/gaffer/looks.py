@@ -154,11 +154,12 @@ def delete(hub: Hub, look_id: str) -> None:
         set_current(hub, None)
 
 
-def apply(hub: Hub, look_id: str) -> dict[str, Any]:
+def apply(hub: Hub, look_id: str, fade: float | None = None) -> dict[str, Any]:
     """Run every light in the look to its values. A light that cannot take its part is skipped
-    and named in ``skipped``; the others still move. Raises CommandError when none could."""
+    and named in ``skipped``; the others still move. Raises CommandError when none could.
+    ``fade`` replaces the look's own fade for this run (a cue step's fade, SPEC-014)."""
     look = find(hub, look_id)
-    fade = float(look["fade_seconds"])
+    fade = float(look["fade_seconds"] if fade is None else fade)
     skipped: list[str] = []
     done = 0
     for light_id, patch in look["lights"].items():

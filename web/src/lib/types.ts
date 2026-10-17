@@ -215,6 +215,9 @@ export interface StoredItem { id: string; name: string; created?: number; update
 export interface Scene extends StoredItem { state?: LightState; effect?: string; params?: Record<string, unknown> }
 /** A saved look (SPEC-010): a patch for each of several lights, and its own fade in seconds. */
 export interface Look extends StoredItem { fade_seconds: number; lights: Record<string, StatePatch> }
+/** One step of a cue (SPEC-014): a look, and a fade that replaces the look's own (null keeps it). */
+export interface CueStep { look_id: string; fade_seconds: number | null }
+export interface Cue extends StoredItem { steps: CueStep[] }
 export interface Preset extends StoredItem { effect: string; params: Record<string, unknown> }
 export interface Keyframe { t: number; state: StatePatch; ease: string }
 export interface Timeline extends StoredItem { keyframes: Keyframe[]; loop: boolean; duration: number }
@@ -237,9 +240,10 @@ export interface StoreSnapshot {
   schedules: Schedule[]
   swatches: Swatch[]
   looks?: Look[]
+  cues?: Cue[]
 }
 
-export type Collection = 'scenes' | 'presets' | 'timelines' | 'schedules' | 'swatches' | 'looks'
+export type Collection = 'scenes' | 'presets' | 'timelines' | 'schedules' | 'swatches' | 'looks' | 'cues'
 
 export interface LogEntry { t: number; kind: string; text: string }
 
@@ -281,6 +285,7 @@ export type ServerMessage =
   | { type: 'device'; light: string; device: Device }
   | { type: 'settings'; settings: Settings }
   | { type: 'look'; id: string | null; name: string | null }
+  | { type: 'cue'; id: string | null; name: string | null; step: number | null; steps: number | null }
   | { type: 'store'; collection: Collection; items: StoredItem[] }
   | { type: 'groups'; groups: Group[] }
   | { type: 'nearby'; nearby: Nearby[]; scanning: boolean }

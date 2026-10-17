@@ -17,7 +17,7 @@ from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import looks
+from . import cues, looks
 from .commands import CommandError, dispatch
 from .guard import LOCAL_HOSTS, LOOPBACK, host_allowed, origin_allowed
 from .catalog import configure_models, models_catalog, skipped_model_files
@@ -180,6 +180,15 @@ def create_app(
         await looks.all_off(hub)
         return {"ok": True}
 
+    @app.post("/api/cues/{cue_id}/go")
+    async def go_cue(cue_id: str) -> Any:
+        """Run the cue's next step. The id ``active`` means the running cue (the Mac shortcut Ctrl-Option-Space)."""
+        try:
+            done = cues.go(hub, cue_id)
+        except cues.CueError as err:
+            return _error(err.status, err.code, str(err))
+        return {"ok": True, **done}
+
     @app.get("/api/bluetooth")
     async def bluetooth() -> dict[str, Any]:
         return {"permission": bluetooth_permission()}
@@ -255,6 +264,7 @@ def create_app(
         await ws.send_text(json.dumps(hub.hello(client), separators=(",", ":")))
         # The Mac menu bar ignores hello and reads this frame instead: the current look, as the socket opens.
         client.push(looks.frame(hub))
+        client.push(cues.frame(hub))
         hub.clients.add(client)
 
         async def writer() -> None:

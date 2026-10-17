@@ -120,7 +120,7 @@ never holds a path, a stack or a raw exception.
 | `GET /api/looks` | `200 {"looks":[{"id":"talking-head","name":"Talking head"}, ...]}` in slot order. Slot 1 is the first entry. Empty list is valid. | SPEC-010 |
 | `POST /api/looks/{id}/apply` | `200 {"ok":true,"look":{"id":"...","name":"..."}}`. Unknown id: `404 {"error":"look_not_found"}`. No request body. `{id}` is percent-encoded. | SPEC-010 |
 | `POST /api/all-off` | `200 {"ok":true}`. Turns every light off. | SPEC-010 |
-| `POST /api/cues/active/go` | `200 {"ok":true,"look":{"id":"...","name":"..."}}` after stepping to the next look. No active cue list: `409 {"error":"no_active_cue"}`. | SPEC-014. Its card names `POST /api/cues/{id}/go`, so that route must also accept the id `active`. |
+| `POST /api/cues/active/go` | `200 {"ok":true,"look":{"id":"...","name":"..."}}` after stepping to the next look. No active cue list: `409 {"error":"no_active_cue"}`. | SPEC-014. Same route as `POST /api/cues/{id}/go` below, with the id `active`. |
 
 If a route answers with an error, a shortcut press beeps once and the shell shows the
 service's `message` (or a plain one of its own) in the right-click menu. It never retries.
@@ -187,3 +187,24 @@ The current look is the one last applied. It is held in memory: after a restart 
 `GET /?surface=menubar|window|bare` is the page for each surface. The service serves the same page for all three; the page reads `surface` itself (`web/src/app/surface.ts`). Only `window` shows the look editor.
 
 Every HTTP request that is not a GET, HEAD or OPTIONS is refused with `403 {"error":"origin_not_allowed"}` when it carries an `Origin` header that is not the service's own origin (same check as `/ws`), because `SameSite` does not separate localhost ports. A request with no `Origin` (the Mac shell) is allowed. `POST /api/looks` also needs `Content-Type: application/json` (`415 json_required` otherwise).
+
+## Cues (SPEC-014)
+
+A cue is `{"id", "name", "steps": [{"look_id", "fade_seconds"}]}`, saved in the `cues` collection (also in `hello.store.cues` and `store` messages). A step applies its look through `looks.apply`; a step's `fade_seconds` replaces the look's own fade, and `null` keeps the look's. A cue has 1 to 200 steps, a name of up to 80 characters, each step fade from 0 to 60 seconds, and each step names a saved look. A look deleted after the cue was saved is passed over at Go.
+
+The service holds one active cue and how many of its steps have run (`step`: 0 is the top, `steps` is the end). It is in memory: after a restart no cue is active. Start makes a cue active at the top and applies nothing. Go applies the next step. Go never waits, so two Go presses at once run two steps, never the same one twice.
+
+| Method and path | Answer |
+| --- | --- |
+| `POST /api/cues/{id}/go` | Runs the next step. `200 {"ok":true,"look":{"id","name"},"skipped":[<light ids>],"cue":{"id","name","step","steps"}}`. An id other than the active cue starts that cue first, then runs its first step. The id `active` is the running cue (the Mac shell's Next cue shortcut). No cue running: `409 {"error":"no_active_cue"}`. Last step already run: `409 {"error":"cue_finished"}` and nothing changes. Unknown id: `404 {"error":"cue_not_found"}`. No look in the cue can be applied: `409 {"error":"cue_steps_gone"}`. |
+
+WebSocket messages from the page:
+
+- `{"type":"cue.start","id"}`: make the cue active at the top. Answers `{"type":"ack","of":"cue.start","cue":{...}}`.
+- `{"type":"cue.go"}`: the same as the route with `active`. Answers `{"type":"ack","of":"cue.go","look","skipped","cue"}`.
+- `{"type":"cue.back"}`: apply the step before the one that ran last. At the first step: an `error` message.
+- `{"type":"cues.save","cue":{...}}` and `{"type":"cues.delete","id"}`: save (the `id` may be left out for a new cue, and cannot be `active`) and delete. Deleting the active cue makes no cue active. `store.upsert` and `store.delete` refuse the `cues` collection.
+
+WebSocket message to every client: `{"type":"cue","id","name","step","steps"}`. All four are `null` when no cue is active. It is sent once as the socket opens, straight after the `look` message, and again each time the cue, its step or its saved steps change.
+
+The page shows Go and Back under Glass and under the desk while a cue is active, and the Space key does Go when no control has focus. Only the `window` surface shows the cue editor. The non-GET Origin check (above) covers the Go route.
