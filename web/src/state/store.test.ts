@@ -117,6 +117,11 @@ describe('selection and ordering survive reconnects and quick input', () => {
     expect(set?.light).toBe('key')
   })
 
+  it('shows a warning or error toast from the service as one, not as plain info', () => {
+    for (const kind of ['warn', 'error']) ws().onmessage?.({ data: JSON.stringify({ type: 'toast', kind, text: `${kind} text` }) } as MessageEvent)
+    expect(useStudio.getState().toasts.slice(-2).map((t) => [t.kind, t.text])).toEqual([['warn', 'warn text'], ['error', 'error text']])
+  })
+
   it('moves the link only when asked', () => {
     useStudio.getState().select('fill')
     useStudio.getState().select('fill', { connect: true })

@@ -9,6 +9,7 @@ import os
 import secrets
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from datetime import datetime
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -17,7 +18,7 @@ from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import looks
+from . import looks, schedules  # noqa: F401 - schedules registers its WebSocket commands
 from .commands import CommandError, dispatch
 from .guard import LOCAL_HOSTS, LOOPBACK, host_allowed, origin_allowed
 from .phone import PhoneAccess, phone_routes
@@ -77,12 +78,16 @@ def create_app(
     advert_scanner: Any = None,
     on_shutdown: Callable[[], None] | None = None,
     phone: PhoneAccess | None = None,
+    clock: Callable[[], datetime] | None = None,
+    schedule_interval: float = 10.0,
 ) -> FastAPI:
     """The studio app. ``hosts`` adds names it may be reached by, and ``phone`` (SPEC-015) adds the
     addresses phone access lists while it is on, and the routes that switch it on and off.
 
     ``advert_scanner`` answers /api/scan (the Bluetooth scan that tags brand families); demo mode
     uses canned adverts so it never starts a Bluetooth scan. ``on_shutdown`` runs when the app stops.
+    ``clock`` is the wall clock the schedules read (local time by default); tests pass a fake one,
+    with a short ``schedule_interval``, so a schedule fires without waiting.
     """
     named = LOCAL_HOSTS | frozenset(h.lower() for h in hosts)
 
@@ -99,7 +104,7 @@ def create_app(
 
         seed(library)
         scanner = scanner or DemoScanner()
-    hub = Hub(store, library, demo=demo, scanner=scanner, pairer=pairer, fps=fps)
+    hub = Hub(store, library, demo=demo, scanner=scanner, pairer=pairer, fps=fps, clock=clock, schedule_interval=schedule_interval)
     advert_scanner = advert_scanner or (DemoAdvertScanner() if demo else AdvertScanner())
 
     @asynccontextmanager
