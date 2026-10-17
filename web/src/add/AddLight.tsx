@@ -157,11 +157,19 @@ export function AddLight() {
     }
   }
 
+  /** Resolves once no scan is running. A scan that is running answers a new one with its partial list. */
+  const scanSettled = () => new Promise<void>((resolve) => {
+    if (!useStudio.getState().scanning) return resolve()
+    const stop = useStudio.subscribe((s) => { if (!s.scanning) { stop(); resolve() } })
+  })
+
   /** Reset view: listen again first. The scan from before the reset still says "paired with something else". */
   const resetThenPair = async (n: Nearby) => {
     const mine = ++attempt.current
     setStage({ at: 'reset', n, check: 'checking' })
     try {
+      await scanSettled() // the scan that is running began before the reset: judge only from a fresh one
+      if (mine !== attempt.current) return
       const reply = (await request({ type: 'lights.scan', seconds: 8 }, 20000)) as { nearby?: Nearby[] }
       if (mine !== attempt.current) return
       const fresh = reply.nearby?.find((x) => x.address === n.address)
@@ -318,8 +326,8 @@ export function AddLight() {
                   <Key kind="primary" disabled={stage.check === 'checking'} onClick={() => void resetThenPair(stage.n)}>
                     <Link2 size={15} /> {stage.check === 'still' ? 'Try again' : 'Pair'}
                   </Key>
-                  <Key onClick={() => { setImportFor(stage.n.address); fileRef.current?.click() }}><FileKey2 size={14} /> Import keys</Key>
-                  <Key kind="ghost" onClick={() => setStage({ at: 'list' })}>Back to the list</Key>
+                  <Key onClick={() => { attempt.current++; setImportFor(stage.n.address); fileRef.current?.click() }}><FileKey2 size={14} /> Import keys</Key>
+                  <Key kind="ghost" onClick={() => { attempt.current++; setStage({ at: 'list' }) }}>Back to the list</Key>
                 </div>
                 <p className="ad-hint">Import keys is only for people who have the Godox app.</p>
               </div>
