@@ -40,23 +40,28 @@ class LookNotFound(CommandError):
     """No look has that id."""
 
 
-def _slug(name: str) -> str:
+def slug(name: str, fallback: str = "look") -> str:
+    """An id made from a name: lower case letters, digits and single dashes, at most MAX_NAME long."""
     ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:MAX_NAME] or "look"
+    return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:MAX_NAME] or fallback
 
 
-def _valid_id(look_id: Any) -> bool:
-    """The one rule for a look id, whether the client sent it or we made it from the name."""
-    return isinstance(look_id, str) and len(look_id) <= MAX_NAME and bool(_ID.fullmatch(look_id)) and look_id not in _RESERVED_IDS
+def valid_id(item_id: Any, reserved: frozenset[str] | set[str] = frozenset()) -> bool:
+    """The one rule for the id of a look or a cue, whether the client sent it or we made it from the name.
+    ``reserved`` adds ids one collection keeps for itself (a cue cannot be called 'active')."""
+    return (isinstance(item_id, str) and len(item_id) <= MAX_NAME and bool(_ID.fullmatch(item_id))
+            and item_id not in _RESERVED_IDS and item_id not in reserved)
 
 
-def _unique_id(hub: Hub, name: str) -> str:
+def unique_id(hub: Hub, collection: str, name: str, fallback: str = "look",
+              reserved: frozenset[str] | set[str] = frozenset()) -> str:
+    """An id for a new item of ``collection`` that is valid and not yet used."""
     # Every id in the file counts, also those of entries a hand-edit left unreadable: all_looks hides
-    # those, and a new look must not take their id and overwrite them.
-    taken = {x["id"] for x in hub.store.items(COLLECTION) if isinstance(x, dict) and isinstance(x.get("id"), str)}
-    base = _slug(name)
+    # those, and a new item must not take their id and overwrite them.
+    taken = {x["id"] for x in hub.store.items(collection) if isinstance(x, dict) and isinstance(x.get("id"), str)}
+    base = slug(name, fallback)
     candidate, n = base, 2
-    while candidate in taken or not _valid_id(candidate):
+    while candidate in taken or not valid_id(candidate, reserved):
         suffix = f"-{n}"
         candidate = base[: MAX_NAME - len(suffix)].rstrip("-") + suffix  # still within the id length limit
         n += 1
@@ -85,6 +90,16 @@ def find(hub: Hub, look_id: str) -> dict[str, Any]:
     raise LookNotFound("There is no look with that id.")
 
 
+def runnable(hub: Hub, look_id: str) -> dict[str, Any] | None:
+    """The look, or None when a cue should pass it over: it is gone, or none of its lights is saved any more.
+    A look whose lights are saved but out of reach is not passed over: applying it says so (SPEC-014)."""
+    try:
+        look = find(hub, look_id)
+    except LookNotFound:
+        return None
+    return look if any(isinstance(light_id, str) and light_id in hub.fixtures for light_id in look["lights"]) else None
+
+
 def capture(hub: Hub) -> dict[str, dict[str, Any]]:
     """What every light is doing now, as a look's ``lights``."""
     return {f.id: f.state.model_dump() for f in hub.fixtures.values()}
@@ -108,7 +123,7 @@ def checked(hub: Hub, raw: Any) -> dict[str, Any]:
     if look_id is None or look_id == "":
         look_id = None
     else:
-        if not _valid_id(look_id):
+        if not valid_id(look_id):
             raise CommandError("A look id uses letters, numbers, - and _ only.")
         existing = next((x for x in all_looks(hub) if x["id"] == look_id), None)
 
@@ -130,7 +145,7 @@ def checked(hub: Hub, raw: Any) -> dict[str, Any]:
             raise CommandError("A look can only name lights that are saved in Gaffer.")
         _fitted(fixture, patch)  # the light can take it, or this raises now rather than at apply time
 
-    return {"id": look_id or _unique_id(hub, name), "name": name, "fade_seconds": float(fade), "lights": lights}
+    return {"id": look_id or unique_id(hub, COLLECTION, name), "name": name, "fade_seconds": float(fade), "lights": lights}
 
 
 def set_current(hub: Hub, look: dict[str, Any] | None) -> None:
@@ -146,6 +161,9 @@ def frame(hub: Hub) -> dict[str, Any]:
 
 def _broadcast_store(hub: Hub) -> None:
     hub._broadcast({"type": "store", "collection": COLLECTION, "items": hub.store.items(COLLECTION)})
+    from . import cues  # cues imports this module
+
+    cues.republish(hub)  # the look the cue's Go will run next may have been renamed or deleted
 
 
 def save(hub: Hub, raw: Any) -> dict[str, Any]:
@@ -176,14 +194,15 @@ def _run(hub: Hub, fixture: Any, target: Any, fade: float) -> None:
         hub.set_state(fixture, target, "app", mirror=False)
 
 
-def apply(hub: Hub, look_id: str) -> dict[str, Any]:
+def apply(hub: Hub, look_id: str, fade: float | None = None) -> dict[str, Any]:
     """Run every light in the look to its values. A light that is not saved, not on the network or
     whose values cannot be worked out is skipped and named in ``skipped``; the others still move.
     All values are worked out before any light starts, so a light that cannot be worked out never
     leaves the others half moved. A driver error while a light is starting is not rolled back.
-    Raises CommandError when no light could move."""
+    Raises CommandError when no light could move.
+    ``fade`` replaces the look's own fade for this run (a cue step's fade, SPEC-014)."""
     look = find(hub, look_id)
-    fade = float(look["fade_seconds"])
+    fade = float(look["fade_seconds"] if fade is None else fade)
     skipped: list[str] = []
     plan = []
     for light_id, patch in look["lights"].items():
