@@ -84,6 +84,24 @@ def test_a_yongnuo_light_cannot_be_saved_without_a_channel(client):
         light = _until(ws, _ack("lights.add"))["light"]
     saved = next(l for l in _lights(client) if l["id"] == light)
     assert saved["channel"] == 5 and saved["model"] == "YN150Li (demo)"
+    with client.websocket_connect("/ws") as later:  # a page opened now is told it is saved, with no channel to ask for
+        entry = next(n for n in _until(later, lambda m: m["type"] == "hello")["nearby"] if n["address"] == yongnuo["address"])
+    assert (entry["relation"], entry["needs_channel"]) == ("saved", False)
+
+
+def test_flashing_a_light_ends_its_effect_and_puts_it_back_as_the_studio_had_it(client):
+    with client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        panel = next(l["id"] for l in _lights(client) if l["name"] == "Zhiyun panel")
+        ws.send_json({"type": "set", "light": panel, "patch": {"brightness": 30}})
+        ws.send_json({"type": "engine.start", "light": panel, "effect": "breathe"})
+        _until(ws, lambda m: m["type"] == "engine" and m["light"] == panel and m["engine"]["kind"] == "effect")
+        ws.send_json({"type": "lights.identify", "light": panel, "rid": 2})
+        _until(ws, _ack("lights.identify"))
+    hub = client.app.state.hub
+    assert hub.fixture(panel).engine.kind is None  # an effect would have kept writing through the pulse
+    assert hub.fixture(panel).state.brightness == 30
+    assert hub.registry.get("demo").applied[panel].brightness == 30  # what the driver puts the light back to
 
 
 def test_a_light_held_by_an_official_app_is_reported_and_clears(client):
@@ -187,3 +205,31 @@ async def test_flashing_a_scanned_light_reaches_its_own_driver_with_commands_tha
     finally:
         await zhiyun.stop()
         await yongnuo.stop()
+
+
+class ChattyScanner:
+    """A scan where one Yongnuo light advertises twenty times while a Zhiyun light advertises once."""
+
+    devices = {}
+    busy = False
+
+    async def scan(self, seconds, on_found=None, on_other=None):
+        chatter = SimpleNamespace(address="00000000-0000-0000-0000-0000000000a2", name="YN150Li")
+        for strength in range(20):
+            on_other(chatter, SimpleNamespace(local_name="YN150Li", rssi=-60 - strength, service_uuids=[], manufacturer_data={}))
+        quiet = SimpleNamespace(address="00000000-0000-0000-0000-0000000000a1", name="PL109_C75E")
+        on_other(quiet, SimpleNamespace(local_name="PL109_C75E", rssi=-60, service_uuids=[], manufacturer_data={}))
+        return []
+
+
+async def test_a_light_that_advertises_over_and_over_is_listed_to_the_page_once(tmp_path):
+    hub = Hub(Store(tmp_path), LightLibrary(tmp_path), demo=False, scanner=ChattyScanner())
+    page = Client()
+    hub.clients.add(page)
+    await hub.scan(2)
+    messages = []
+    while not page.queue.empty():
+        messages.append(page.queue.get_nowait())
+    lists = [m for m in messages if m["type"] == "nearby" and m["scanning"] and m["nearby"]]
+    assert len(lists) == 2  # one for each light, not one for each advert
+    assert {n["model"]: n["rssi"] for n in messages[-1]["nearby"]} == {"MOLUS G200": -60, "YN150": -79}  # the last word on strength

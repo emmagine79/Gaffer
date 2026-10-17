@@ -796,6 +796,8 @@ class Hub:
             self.nearby[nearby.address] = entry
             self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": True})
 
+        told: dict[str, tuple[str | None, str]] = {}  # what each other-brand light was last listed as
+
         def heard_other(device: Any, adv: Any) -> None:
             advert = Advert(
                 address=str(device.address), name=adv.local_name or device.name, rssi=adv.rssi,
@@ -805,7 +807,14 @@ class Hub:
             match = self.registry.match(advert)
             if match is None or not model_caps(match[1]).known:
                 return
-            found(Nearby(advert.address.upper(), advert.name, advert.rssi, "new", match[1], None, time.time()))
+            address = advert.address.upper()
+            if told.get(address) == (advert.name, match[1]) and address in self.nearby:
+                # The same light saying the same thing: keep its strength current, but do not re-list it to
+                # every client on each advert (a light advertises several times a second).
+                self.nearby[address]["rssi"], self.nearby[address]["seen_at"] = advert.rssi, time.time()
+                return
+            told[address] = (advert.name, match[1])
+            found(Nearby(address, advert.name, advert.rssi, "new", match[1], None, time.time()))
 
         try:
             await self.scanner.scan(seconds, found, heard_other)
@@ -846,7 +855,7 @@ class Hub:
         client.selected = light.id
         if self._started:
             self._spawn(self._connect_other(fixture))
-        seen["relation"], seen["light_id"] = "saved", light.id
+        seen["relation"], seen["light_id"], seen["needs_channel"] = "saved", light.id, False  # true only for a new light
         self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": self.scanning})
         self._broadcast_lights()
         self._log("lights", f"added {light.name} ({caps.brand} {caps.name})")
@@ -866,6 +875,11 @@ class Hub:
             return driver.id
         self._identifying.add(light_id)
         try:
+            # An effect would keep writing through the pulse, so it ends first (the light goes back to what it
+            # showed before). The driver then puts the light back to the fixture's state, not to its own default.
+            fixture.engine.stop()
+            if driver is not self.godox or not fixture.adopting:  # a mesh light not read yet has no state of ours to trust
+                driver.apply(fixture.light, fixture.state)
             await asyncio.wait_for(driver.identify(fixture.light), timeout=IDENTIFY_SECONDS)
         except TimeoutError:
             raise HubError(f"{fixture.light.name} did not answer. Check it is on and close by.") from None

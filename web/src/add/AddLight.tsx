@@ -5,7 +5,7 @@ import { ModelPicker } from '../components/ModelPicker'
 import type { Nearby } from '../lib/types'
 import { useStudio } from '../state/store'
 import { KIND_SHORT, LightGlyph, formOf } from '../visuals/LightGlyph'
-import { ImportSlot } from './ImportSlot'
+import { GodoxImport } from './GodoxImport'
 import './add.css'
 
 const KIND_RGB = { rgb: [0.62, 0.45, 1], colour: [0.3, 0.85, 0.9], bicolour: [1, 0.8, 0.55], daylight: [0.95, 0.96, 1], unsupported: [0.5, 0.5, 0.5] } as const
@@ -40,7 +40,8 @@ function readKeys(file: File): Promise<Record<string, unknown>> {
 }
 
 type Flash = 'idle' | 'flashing' | 'done' | 'failed'
-type Stage = { at: 'list' } | { at: 'pick'; n: Nearby } | { at: 'pair'; n: Nearby } | { at: 'made'; id: string }
+/** `added` is true for a light saved with `lights.add` (Zhiyun, Yongnuo): only that can be undone with "Not this one". */
+type Stage = { at: 'list' } | { at: 'godox' } | { at: 'pick'; n: Nearby } | { at: 'pair'; n: Nearby } | { at: 'made'; id: string; added: boolean }
 
 function Key({ children, onClick, disabled, kind = 'plain' }: {
   children: ReactNode; onClick?: () => void; disabled?: boolean; kind?: 'plain' | 'primary' | 'ghost'
@@ -113,9 +114,9 @@ export function AddLight() {
   }
 
   /** Reached with a saved light: show it, put its name in the field, and flash it. */
-  const arrived = (id: string | null, mine: number) => {
+  const arrived = (id: string | null, mine: number, added: boolean) => {
     if (!id) return
-    setStage({ at: 'made', id })
+    setStage({ at: 'made', id, added })
     setName(useStudio.getState().lights.find((l) => l.id === id)?.name ?? '')
     select(id)
     void flashIt(id, mine)
@@ -126,7 +127,7 @@ export function AddLight() {
     setWorking(true)
     try {
       const reply = await request({ type: 'lights.add', address: n.address, ...(n.needs_channel ? { channel: Number(channel) } : {}) }, 20000)
-      if (mine === attempt.current) arrived((reply as { light?: string }).light ?? null, mine)
+      if (mine === attempt.current) arrived((reply as { light?: string }).light ?? null, mine, true)
     } catch (err) {
       if (mine === attempt.current) toast((err as Error).message, 'error')
     } finally {
@@ -139,7 +140,7 @@ export function AddLight() {
     setStage({ at: 'pair', n })
     try {
       const reply = await request({ type: 'lights.pair', address: n.address, name: '' }, 90000)
-      if (mine === attempt.current) arrived((reply as { light?: string }).light ?? null, mine)
+      if (mine === attempt.current) arrived((reply as { light?: string }).light ?? null, mine, false)
     } catch (err) {
       if (mine === attempt.current) toast((err as Error).message, 'error')
     }
@@ -244,8 +245,8 @@ export function AddLight() {
                     </div>
                   )}
                 </div>
-                <ImportSlot />
                 <footer className="ad-foot">
+                  <Key onClick={() => setStage({ at: 'godox' })}><FileKey2 size={14} /> Import from the Godox app</Key>
                   <span className="ad-label">Have a keys file from the CLI or Home Assistant?</span>
                   <div className="ad-manual">
                     <input className="ad-input" value={manualAddress} onChange={(e) => setManualAddress(e.target.value)} placeholder="Light address, AA:BB:CC:DD:EE:FF" aria-label="Light address" />
@@ -258,6 +259,10 @@ export function AddLight() {
                   </details>
                 </footer>
               </>
+            )}
+
+            {stage.at === 'godox' && (
+              <GodoxImport onDone={close} onBack={() => setStage({ at: 'list' })} />
             )}
 
             {stage.at === 'pick' && (
@@ -330,7 +335,7 @@ export function AddLight() {
                 <div className="ad-actions">
                   <Key kind="primary" onClick={() => finish()}>Done <ArrowRight size={15} /></Key>
                   <Key onClick={() => void flashIt(made.id, attempt.current)} disabled={flash === 'flashing'}><Zap size={15} /> Flash again</Key>
-                  <Key kind="ghost" onClick={() => notThisOne()}>Not this one</Key>
+                  {stage.at === 'made' && stage.added && <Key kind="ghost" onClick={() => notThisOne()}>Not this one</Key>}
                 </div>
               </div>
             ) : <p className="ad-sub">Connecting...</p>)}

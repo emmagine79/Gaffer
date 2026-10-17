@@ -105,6 +105,9 @@ test('AC1: a factory-reset Godox light pairs, flashes and takes a name', async (
     await expect(sheet.getByRole('heading', { name: 'TL60 added' })).toBeVisible({ timeout: 20000 })
     await expect(sheet.getByText('It flashed. Is this the light you meant?')).toBeVisible({ timeout: 20000 })
     expect(identified).toEqual([expect.objectContaining({ driver: 'godox' })])
+    // A paired Godox light now holds our network keys: forgetting it would strand it, so there is no undo.
+    await expect(sheet.getByRole('button', { name: 'Flash again' })).toBeVisible()
+    await expect(sheet.getByRole('button', { name: 'Not this one' })).toHaveCount(0)
     await sheet.getByLabel('Name').fill('Tube')
     await sheet.getByRole('button', { name: 'Done' }).click()
     await expect(page.getByRole('navigation', { name: 'Lights' }).getByRole('button', { name: 'Tube', exact: true })).toBeVisible()
@@ -112,6 +115,20 @@ test('AC1: a factory-reset Godox light pairs, flashes and takes a name', async (
     await forget(page, 'Tube')
   }
 })
+
+// SPEC-009: the Godox app import stays reachable from the add sheet.
+for (const width of [375, 1280]) {
+  test(`the add sheet opens the Godox app import and comes back to the list at ${width}px`, async ({ page }) => {
+    await open(page, width)
+    const sheet = await openSheet(page)
+    await sheet.getByRole('button', { name: 'Import from the Godox app' }).click()
+    await expect(sheet.getByRole('heading', { name: 'Import from the Godox app' })).toBeVisible()
+    await expect(sheet.getByRole('button', { name: 'Choose GodoxLight.db' })).toBeVisible()
+    await fitsTheScreen(page)
+    await sheet.getByRole('button', { name: 'Back to the list' }).click()
+    await expect(sheet.getByRole('heading', { name: 'Add a light' })).toBeVisible()
+  })
+}
 
 // AC2: a demo Yongnuo light cannot be saved without a channel.
 test('AC2: a Yongnuo light needs a channel before it is added', async ({ page }) => {
