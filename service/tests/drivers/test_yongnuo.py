@@ -616,3 +616,24 @@ async def test_a_yn150_that_misses_the_power_on_frame_still_comes_on():
     driver.apply(yn, LightState(power=True, brightness=60, cct=Cct(kelvin=5600)))
     await driver.flush()
     assert LossyYN150.made.on is True
+
+
+async def test_a_yn150_switched_on_then_dimmed_at_once_still_comes_on_when_it_missed_the_power_on():
+    # Tapping power on and dragging brightness straight after cuts the resends short; the power-on must still land.
+    driver = None
+    yn = light("YN150", 4)
+    armed = []
+
+    async def drag_during_first_gap(_seconds):
+        if armed:
+            armed.clear()
+            driver.apply(yn, LightState(power=True, brightness=30, cct=Cct(kelvin=5600)))
+
+    driver = YongnuoDriver(transport_factory=LossyYN150, sleep=drag_during_first_gap)
+    driver.apply(yn, LightState(power=False, brightness=60, cct=Cct(kelvin=5600)))
+    await driver.flush()
+    LossyYN150.made.misses = 1  # the power-on frame is the one it misses
+    armed.append(True)  # the brightness drag lands in the gap after the power-on frame
+    driver.apply(yn, LightState(power=True, brightness=60, cct=Cct(kelvin=5600)))
+    await driver.flush()
+    assert LossyYN150.made.on is True

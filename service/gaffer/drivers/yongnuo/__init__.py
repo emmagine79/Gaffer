@@ -370,13 +370,14 @@ class YongnuoDriver(Driver):
                         logger.warning("a Yongnuo light's state could not be encoded; dropped")  # retrying cannot help
                         continue
                     try:
-                        await self._transmit(light, frames, lambda: address in self._pending)
+                        complete = await self._transmit(light, frames, lambda: address in self._pending)
                     except Exception:  # noqa: BLE001 - _transmit recorded it; keep the state and try again later
                         failed = True
                         self._pending.setdefault(address, (light, state))  # a newer apply is already there and wins
                     else:
                         self._last[address] = state
-                        self._on[address] = bool(state.power)
+                        # Cut short, a power-on may not have landed: the next state sends it again.
+                        self._on[address] = bool(state.power) and complete
                         self._failures.pop(address, None)
                 if failed:
                     self._failures[address] = self._failures.get(address, 0) + 1
@@ -432,25 +433,26 @@ class YongnuoDriver(Driver):
         self._tell(light)
         return transport
 
-    async def _transmit(self, light: Any, frames: list[bytes], superseded: Callable[[], bool] = lambda: False) -> None:
+    async def _transmit(self, light: Any, frames: list[bytes], superseded: Callable[[], bool] = lambda: False) -> bool:
         """Open the link if needed and write ``frames``, then send them ``resends`` more times, a gap apart.
 
         A missed power-on frame left the light off (Captain's live check, 18 Oct 2026), so every frame
         goes again. The resends stop early once ``superseded()`` says a newer state is waiting.
-        The caller holds the light's lock.
+        Returns whether every copy went. The caller holds the light's lock.
         """
         address = light.address
         transport = await self._open(light)
         if transport is None:  # demo: nothing is written
-            return
+            return True
         try:
             for attempt in range(1 + self._resends):
-                if attempt and superseded():
-                    break
                 for index, frame in enumerate(frames):
                     if attempt or index:
                         await self._sleep(FRAME_GAP_S)
+                    if attempt and superseded():
+                        return False  # checked after the gap: a stale copy never follows a newer state
                     await transport.write(frame)
+            return True
         except Exception:
             self._reachable[address] = False
             await self._drop(address)  # bleak may still say "connected"; the next send starts a fresh link
