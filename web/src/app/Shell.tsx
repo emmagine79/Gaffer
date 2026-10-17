@@ -5,6 +5,7 @@ import { Glass } from '../glass/Glass'
 import { OtherLights } from '../glass/OtherLights'
 import { LookEditor } from '../looks/LookEditor'
 import { useLookKeys } from '../looks/looks'
+import { ScheduleEditor } from '../schedules/ScheduleEditor'
 import { useStudio } from '../state/store'
 import { AddLight, DeskSlot } from './slots'
 import { readSurface, rememberView, rememberedView, type Surface, type View } from './surface'
@@ -36,6 +37,7 @@ export function Shell() {
         {SURFACE === 'phone' && view === 'glass' && <OtherLights />}
       </main>
       {SURFACE === 'window' && <LookEditor />}
+      {SURFACE === 'window' && <ScheduleEditor />}
       <AddLight />
       <Toasts />
     </div>
