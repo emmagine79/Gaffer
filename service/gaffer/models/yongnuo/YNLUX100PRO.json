@@ -1,0 +1,39 @@
+{
+ "id": "YNLUX100PRO",
+ "driver": "yongnuo",
+ "brand": "Yongnuo",
+ "name": "YNLUX100PRO",
+ "match": {
+  "name_prefix": "YNLUX100",
+  "service": "f000aa60-0451-4000-b000-000000000000"
+ },
+ "driver_data": {
+  "frame_variant": "decimal",
+  "note": "Decimal frames, verified on this model by asidjwiaijd/yongnuo-light-control (MIT). Power off sends brightness 0. The name prefix is a guess from the model name; no advert from this model has been seen."
+ },
+ "attachment": false,
+ "battery": false,
+ "brightness_steps": 100,
+ "chip": "",
+ "color_chip_version": 0,
+ "control_modes": [],
+ "effect_version": 0,
+ "effects": [],
+ "fan": false,
+ "fan_modes": [],
+ "frequencies": [],
+ "gm_max": 0,
+ "gm_min": 0,
+ "max_kelvin": 6500,
+ "min_kelvin": 2700,
+ "modes": [
+  "cct"
+ ],
+ "poll_cct_default": false,
+ "readback_default": false,
+ "rgb_channels": [],
+ "rgb_display": 0,
+ "selfie_max_kelvin": 0,
+ "selfie_min_kelvin": 0,
+ "smoothness_modes": []
+}
