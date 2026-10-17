@@ -2,7 +2,7 @@
 
 Data flow, one direction each way:
 
-    browser --ws--> commands -> fixture state / engine -> pump -> link -> mesh -> light
+    browser --ws--> commands -> fixture state / engine -> driver (Godox: pump -> link -> mesh) -> light
     light --mesh--> link -> Hub._on_access (by source address) -> fixture -> broadcast --ws--> browsers
 
 Each light is a :class:`Fixture` with its own state and effect engine. Only
@@ -28,6 +28,8 @@ from godox_mesh_bt.crypto import k3
 from godox_mesh_bt.state import MeshState
 
 from .catalog import model_caps, models_index
+from .drivers import Driver, DriverContext, build_drivers
+from .drivers.godox import GodoxDriver
 from .effects import REGISTRY
 from .effects.profile import effect_profile
 from .fixture import Fixture, gel_key
@@ -35,7 +37,6 @@ from .lights import LightLibrary, SavedLight
 from .link import LinkManager, Member, SequenceVault
 from .mirror import ALL_PROPS, mirror
 from .pairing import Pairer, pair_light
-from .pump import CommandPump
 from .scheduler import run_scheduler
 from .state import LightState, StateError, apply_patch
 from .store import Store
@@ -179,7 +180,6 @@ class Hub:
         self.clients: set[Client] = set()
         self.log: deque[dict[str, Any]] = deque(maxlen=300)
         self.fixtures: dict[str, Fixture] = {}
-        self.controller: Any = None
         self.nearby: dict[str, dict[str, Any]] = {}
         self.scanning = False
         self.pairing: dict[str, Any] | None = None
@@ -192,12 +192,17 @@ class Hub:
         self._save_due = 0.0
         self._switch_lock = asyncio.Lock()
 
+        self.registry = build_drivers(DriverContext(demo=demo, data_dir=getattr(store, "root", None)), demo=demo)
+        godox = self.registry.get("godox")
+        if not isinstance(godox, GodoxDriver):
+            raise RuntimeError("the Godox driver did not load")
+        self.godox: GodoxDriver = godox
+        self.godox.configure(max_rate=float(store.settings["max_rate"]), on_send_failure=self._on_send_failure)
+
         for light in library.lights:
             self._add_fixture(light)
         active = library.active or (library.lights[0] if library.lights else None)
         self.network: str | None = active.network if active else None
-        self.pump = CommandPump(model_caps(""), max_rate=float(store.settings["max_rate"]),
-                                on_send_failure=self._on_send_failure)
         self.link: Any = self._make_link()
 
     # -- fixtures --------------------------------------------------------------------
@@ -213,19 +218,49 @@ class Hub:
 
     def _add_fixture(self, light: SavedLight) -> Fixture:
         fixture = Fixture(light, self._saved_state(light), on_engine_state=self._apply_engine,
-                          on_engine_change=self._engine_changed, fps=self.fps)
+                          on_engine_change=self._engine_changed, driver_for=self.driver_for, fps=self.fps)
         self.fixtures[light.id] = fixture
         if self._started:
             self._engine_tasks[light.id] = asyncio.create_task(fixture.engine.run())
         return fixture
 
-    def _drop_fixture(self, light_id: str) -> None:
+    def driver_for(self, caps: Any) -> Driver:
+        """The driver a model names. A driver that is not installed gives a stand-in, never another brand's."""
+        return self.registry.for_driver(caps.driver)
+
+    @property
+    def controller(self) -> Any:
+        return self.godox.controller
+
+    async def _drop_fixture(self, light_id: str) -> None:
         fixture = self.fixtures.pop(light_id, None)
         task = self._engine_tasks.pop(light_id, None)
         if task is not None:
             task.cancel()
-        if fixture is not None and self.on_network(fixture):
-            self.pump.drop(fixture.node)
+        if fixture is not None:
+            if self.on_mesh(fixture):
+                self.godox.drop(fixture.node)
+            # A hub-owned task, shielded: a cancelled request cannot leave the driver holding the light.
+            await asyncio.shield(self._spawn(self._release(fixture.driver, light_id)))
+
+    async def _release(self, driver: Driver, light_id: str) -> None:
+        """Tell a driver to let go of a light. Like every other driver call, one failing, or hanging past
+        the hub's stop budget, never stops the hub."""
+        try:
+            await asyncio.wait_for(driver.forget_light(light_id), timeout=LINK_STOP_SECONDS)
+        except TimeoutError:
+            logger.error("driver %s did not let go of light %s within %s s", driver.id, light_id, LINK_STOP_SECONDS)
+            self._log("error", f"the {driver.id} driver was slow to let go of a light")
+        except Exception:  # noqa: BLE001 - the rest of the forget or hand-over must still happen
+            logger.exception("driver %s failed to let go of light %s", driver.id, light_id)
+            self._log("error", f"the {driver.id} driver did not let go of a light")
+
+    def _spawn(self, coro: Any) -> asyncio.Task[Any]:
+        """A task the hub cancels when it stops and forgets when it finishes."""
+        task = asyncio.create_task(coro)
+        self._tasks.append(task)
+        task.add_done_callback(lambda t: self._tasks.remove(t) if t in self._tasks else None)
+        return task
 
     def fixture(self, light_id: str | None) -> Fixture:
         if light_id is None:
@@ -241,15 +276,21 @@ class Hub:
         return next(iter(self.fixtures), None)
 
     def on_network(self, fixture: Fixture) -> bool:
-        return self.network is not None and fixture.light.network == self.network
+        """Whether commands can reach this light now. A mesh light must sit on the link's network;
+        any other brand's light is commanded by its own driver and has no network to be on."""
+        return self.on_mesh(fixture) if fixture.driver is self.godox else True
+
+    def on_mesh(self, fixture: Fixture) -> bool:
+        """A Godox light on the network the link is on."""
+        return fixture.driver is self.godox and self.network is not None and fixture.light.network == self.network
 
     def _by_node(self) -> dict[int, Fixture]:
-        return {f.node: f for f in self.fixtures.values() if self.on_network(f)}
+        return {f.node: f for f in self.fixtures.values() if self.on_mesh(f)}
 
     def _focus(self) -> list[Fixture]:
         """Lights someone is looking at right now."""
         ids = {c.selected or self.default_light_id() for c in self.clients if c.visible}
-        return [self.fixtures[i] for i in ids if i in self.fixtures and self.on_network(self.fixtures[i])]
+        return [self.fixtures[i] for i in ids if i in self.fixtures and self.on_mesh(self.fixtures[i])]
 
     # -- the link ----------------------------------------------------------------------
 
@@ -259,11 +300,11 @@ class Hub:
         return self._vaults[network]
 
     def _members(self) -> list[Member]:
-        return [Member(f.id, f.light.address, f.node) for f in self.fixtures.values() if self.on_network(f)]
+        return [Member(f.id, f.light.address, f.node) for f in self.fixtures.values() if self.on_mesh(f)]
 
     def _preferred_light(self) -> SavedLight | None:
         for light_id in (self.library.active.id if self.library.active else None, *self.fixtures):
-            if light_id in self.fixtures and self.on_network(self.fixtures[light_id]):
+            if light_id in self.fixtures and self.on_mesh(self.fixtures[light_id]):
                 return self.fixtures[light_id].light
         return None
 
@@ -284,7 +325,7 @@ class Hub:
             preferred=lambda: (light.address if (light := self._preferred_light()) else None),
             on_connected=self._on_connected,
             on_disconnected=self._on_disconnected,
-            serial=self.pump.submit_aux,
+            serial=self.godox.run_aux,
             on_access=self._on_access,
             on_advert=self._on_advert,
             listener=self._link_changed,
@@ -317,7 +358,7 @@ class Hub:
         try:
             await self._stop_link()
         finally:
-            self.pump.reset()
+            self.godox.reset()
             self.network = network
             for fixture in self.fixtures.values():
                 fixture.adopting = True  # read each light again before writing it
@@ -341,45 +382,70 @@ class Hub:
         for light_id, fixture in self.fixtures.items():
             self._engine_tasks[light_id] = asyncio.create_task(fixture.engine.run())
         scheduler = run_scheduler(lambda: self.store.items("schedules"), self.fire_schedule)
-        for coro in (self.pump.run(), self._broadcast_loop(), self._sync_loop(), self._battery_loop(), scheduler):
+        for driver in self.registry.drivers.values():
+            try:
+                await driver.start()
+            except Exception:  # one brand failing to start never stops the others
+                logger.exception("driver %s failed to start", driver.id)
+                self._log("error", f"the {driver.id} driver did not start")
+        for coro in (self._broadcast_loop(), self._sync_loop(), self._battery_loop(), scheduler):
             self._tasks.append(asyncio.create_task(coro))
         self._link_task = asyncio.create_task(self.link.run())
+        for fixture in self.fixtures.values():
+            if fixture.driver is not self.godox:
+                self._spawn(self._connect_other(fixture))
+
+    async def _connect_other(self, fixture: Fixture) -> None:
+        """Open a non-mesh light's own link through its driver, and say so if it cannot."""
+        try:
+            await fixture.driver.connect(fixture.light)
+        except Exception as err:  # noqa: BLE001 - reported, never fatal to the hub
+            logger.warning("could not connect %s: %s", fixture.light.name, err)
+            self._log("error", f"{fixture.light.name}: could not connect")
+        else:
+            fixture.driver.apply(fixture.light, fixture.state)
 
     async def stop(self) -> None:
+        self._started = False
         self._save_states(force=True)
         await self._stop_link()
         for task in [*self._tasks, *self._engine_tasks.values()]:
             task.cancel()
         await asyncio.gather(*self._tasks, *self._engine_tasks.values(), return_exceptions=True)
+        for driver in self.registry.drivers.values():
+            try:
+                # The hub's own stop budget (as for the link): a driver that never lets go cannot hold up the rest.
+                await asyncio.wait_for(driver.stop(), timeout=LINK_STOP_SECONDS)
+            except TimeoutError:
+                logger.error("driver %s did not stop within %s s", driver.id, LINK_STOP_SECONDS)
+            except Exception:  # noqa: BLE001
+                logger.exception("driver %s failed to stop", driver.id)
 
     # -- link callbacks -------------------------------------------------------------------
 
     def _on_connected(self, controller: Any) -> None:
-        self.controller = controller
         by_node = self._by_node()
 
-        async def send(frame: bytes, node: int | None) -> None:
-            await controller.send_payload(frame, dst=node)
+        def after_send(frame: bytes, node: int | None) -> None:
             fixture = by_node.get(node) if node is not None else None
             if fixture is not None:
                 fixture.sync.expect(expected_record(frame))
                 fixture.last_control_at = time.monotonic()
             self.link.note_activity()
 
-        self.pump.attach(send)
+        self.godox.attach_controller(controller, after_send)
         for fixture in by_node.values():
             fixture.sync.reset()
             if fixture.adopting:
                 asyncio.create_task(self._adopt(fixture))
             else:
                 # Reconnect: the light may have lost power; re-assert its look.
-                self.pump.submit(fixture.state, fixture.node, fixture.caps)
+                self.godox.apply(fixture.light, fixture.state)
         asyncio.create_task(self._read_firmware())
         self._log("link", "connected")
 
     def _on_disconnected(self) -> None:
-        self.controller = None
-        self.pump.attach(None)
+        self.godox.detach_controller()
         self._log("link", "disconnected")
 
     def _on_send_failure(self, err: Exception) -> None:
@@ -394,8 +460,8 @@ class Hub:
         if controller is None:
             return
         try:
-            mesh = await asyncio.wait_for(self.pump.submit_aux(controller.request_version), 4)
-            mcu = await asyncio.wait_for(self.pump.submit_aux(controller.request_mcu_version), 4)
+            mesh = await asyncio.wait_for(self.godox.run_aux(controller.request_version), 4)
+            mcu = await asyncio.wait_for(self.godox.run_aux(controller.request_mcu_version), 4)
         except Exception as err:  # noqa: BLE001 - informational only
             logger.info("firmware read failed: %s", err)
             return
@@ -420,7 +486,7 @@ class Hub:
         for record in records:
             await self._request(fixture, record)
         await asyncio.sleep(0.8)
-        if self.controller is not controller or not self.on_network(fixture) or fixture.id not in self.fixtures:
+        if self.controller is not controller or not self.on_mesh(fixture) or fixture.id not in self.fixtures:
             return  # the link moved on while we were reading; this answer belongs to no one now
         cct, hsi = fixture.readback["cct"], fixture.readback["hsi"]
         patch: dict[str, Any] | None = None
@@ -436,12 +502,13 @@ class Hub:
             try:
                 self.set_state(fixture, apply_patch(fixture.state, patch, fixture.caps), "light", send=False,
                                mirror=False)
-                self.pump.forget(fixture.node)
+                if self.on_mesh(fixture):
+                    self.godox.forget(fixture.node)
             except StateError as err:
                 logger.info("light state not adoptable: %s", err)
         if cct is None and hsi is None:
             # Nothing came back: assert our state so the light matches what we show.
-            self.pump.submit(fixture.state, fixture.node, fixture.caps)
+            self.godox.apply(fixture.light, fixture.state)
         fixture.adopting = False
         self._log("sync", f"{fixture.light.name}: " + ("adopted its current state" if patch else "kept the saved state"))
 
@@ -453,7 +520,7 @@ class Hub:
             self._log("rx", f"from unknown node 0x{src:04x}: {payload.hex()}")
             return
         now = time.monotonic()
-        fixture.heard()
+        self.godox.mark_heard(fixture.id)
         if parse_onoff(payload) is not None:
             # The heartbeat says "on" even when the light is off: liveness only.
             fixture.readback["heartbeat_at"] = time.time()
@@ -487,7 +554,7 @@ class Hub:
         except StateError as err:
             logger.info("ignoring out-of-range reading: %s", err)
             return
-        self.pump.forget(fixture.node)
+        self.godox.forget(fixture.node)
         self._log("sync", f"{fixture.light.name} changed on the light: {patch}")
         self._toast("sync", f"Picked up a change made on {fixture.light.name}")
 
@@ -498,7 +565,7 @@ class Hub:
         fixture.request_at[record] = time.monotonic()
         try:
             await asyncio.wait_for(
-                self.pump.submit_aux(lambda: controller.request_record(record, dst=fixture.node)), 3
+                self.godox.run_aux(lambda: controller.request_record(record, dst=fixture.node)), 3
             )
         except Exception as err:  # noqa: BLE001
             logger.debug("record request failed: %s", err)
@@ -526,13 +593,13 @@ class Hub:
             if controller is None:
                 continue
             for fixture in list(self.fixtures.values()):
-                if not (fixture.caps.battery and self.on_network(fixture)):
+                if not (fixture.caps.battery and self.on_mesh(fixture)):
                     continue
                 last = (fixture.device.get("battery") or {}).get("at", 0)
                 if time.time() - last < BATTERY_INTERVAL:
                     continue
                 try:
-                    reply = await asyncio.wait_for(self.pump.submit_aux(
+                    reply = await asyncio.wait_for(self.godox.run_aux(
                         lambda f=fixture, c=controller: c.request_battery(dst=f.node, timeout=3)), 5)
                 except Exception as err:  # noqa: BLE001 - a light on mains power may not answer
                     logger.debug("battery read failed for %s: %s", fixture.light.name, err)
@@ -590,7 +657,7 @@ class Hub:
         fixture.state_source = source
         fixture.dirty = True
         if send and self.on_network(fixture):
-            self.pump.submit(state, fixture.node, fixture.caps)
+            fixture.driver.apply(fixture.light, state)
         self._save_due = self._save_due or time.monotonic() + SAVE_AFTER_SECONDS
         if mirror:
             self._mirror_from(fixture)
@@ -759,7 +826,7 @@ class Hub:
                 num_elements=paired.num_elements, device_key=paired.device_key, name=name,
             )
             if light.id in self.fixtures:
-                self._drop_fixture(light.id)  # a saved light that was reset and paired again
+                await self._drop_fixture(light.id)  # a saved light that was reset and paired again
             fixture = self._add_fixture(light)
             client.selected = light.id
             await self._relink(network)
@@ -793,7 +860,7 @@ class Hub:
         except ValueError as err:
             raise HubError(str(err)) from err
         if light.id in self.fixtures:
-            self._drop_fixture(light.id)
+            await self._drop_fixture(light.id)
         self._add_fixture(light)
         client.selected = light.id
         async with self._switch_lock:
@@ -813,13 +880,33 @@ class Hub:
     def _set_model(self, light_id: str, radio_id: str, *, source: str) -> None:
         light = self.library.set_model(light_id, radio_id, source=source)
         fixture = self.fixture(light_id)
+        old_driver, was_on_mesh = fixture.driver, self.on_mesh(fixture)
         fixture.light = light
         fixture.engine.stop(restore=False)
         fixture.use_caps(model_caps(radio_id))
-        if self.on_network(fixture):
-            self.pump.forget(fixture.node)
-            self.pump.submit(fixture.state, fixture.node, fixture.caps)
+        if fixture.driver is not old_driver:
+            if was_on_mesh:
+                self.godox.drop(fixture.node)
+            if self._started:  # before start() nothing is connected, and start() connects every light itself
+                self._spawn(self._hand_over(fixture, old_driver))
+        elif self.on_network(fixture):
+            if self.on_mesh(fixture):
+                self.godox.forget(fixture.node)
+            fixture.driver.apply(fixture.light, fixture.state)
         self._broadcast_lights()
+
+    async def _hand_over(self, fixture: Fixture, old_driver: Driver) -> None:
+        """The model belongs to another brand. The old driver lets go first (its link closed), and only
+        then does the new one take the light, so two drivers never drive one."""
+        await self._release(old_driver, fixture.id)
+        if not self._started or self.fixtures.get(fixture.id) is not fixture or fixture.driver is old_driver:
+            return  # stopped, forgotten, or changed back, while the old driver was letting go
+        if fixture.driver is self.godox:
+            if self.on_mesh(fixture):
+                self.godox.forget(fixture.node)
+                self.godox.apply(fixture.light, fixture.state)
+        else:
+            await self._connect_other(fixture)  # connects, then applies: no write before the link exists
 
     def set_model(self, light_id: str, radio_id: str) -> None:
         if not radio_id or not model_caps(radio_id).known:
@@ -834,9 +921,15 @@ class Hub:
         self._broadcast({"type": "placed", "light": light_id, "x": moved.x, "y": moved.y})
 
     async def forget(self, light_id: str) -> None:
+        """Forget a light. The work runs in a task the hub owns and the request only waits on it, so a
+        cancelled request (a closed browser tab) cannot leave the forget half done."""
+        self.fixture(light_id)  # no such light: say so before anything starts
+        await asyncio.shield(self._spawn(self._forget(light_id)))
+
+    async def _forget(self, light_id: str) -> None:
         fixture = self.fixture(light_id)
         network = fixture.light.network
-        self._drop_fixture(light_id)
+        await self._drop_fixture(light_id)
         self.library.forget(light_id)
         groups = [{**g, "members": [m for m in g["members"] if m != light_id]} for g in self.groups]
         states = {k: v for k, v in (self.store.settings.get("light_states") or {}).items() if k != light_id}
@@ -888,7 +981,7 @@ class Hub:
             if key is not None and key not in tables:
                 tables[key] = list(fixture.caps.gel_table())
         return {
-            "lights": [{**f.view(), "online": self.on_network(f)} for f in self.fixtures.values()],
+            "lights": [{**f.view(), "online": self.on_mesh(f) if f.driver is self.godox else bool(f.reachable)} for f in self.fixtures.values()],
             "gel_tables": tables,
             "network": self.network,
         }
@@ -898,7 +991,7 @@ class Hub:
 
     def stats(self) -> dict[str, Any]:
         return {
-            "pump": self.pump.stats.to_dict(time.monotonic()),
+            "pump": self.godox.stats(),
             "link": self.link.snapshot(),
             "clients": len(self.clients),
         }

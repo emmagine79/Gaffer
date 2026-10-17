@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import time
 from collections.abc import Callable
 from typing import Any
 
 from .adapt import adapt_state
 from .catalog import ModelCaps, model_caps
+from .drivers.base import Driver
 from .engine import Engine
 from .lights import SavedLight
 from .state import LightState
@@ -15,10 +15,6 @@ from .sync import SyncTracker
 
 EngineApply = Callable[["Fixture", LightState], None]
 EngineChanged = Callable[["Fixture", dict[str, Any]], None]
-
-#: A light that has said nothing for this long is shown as unreachable. It
-#: publishes a heartbeat every 15 s on its own, so two missed beats is telling.
-SILENT_AFTER = 40.0
 
 
 class Fixture:
@@ -29,9 +25,11 @@ class Fixture:
         *,
         on_engine_state: EngineApply,
         on_engine_change: EngineChanged,
+        driver_for: Callable[[ModelCaps], Driver],
         fps: float = 60.0,
     ) -> None:
         self.light = light
+        self._driver_for = driver_for
         self.caps: ModelCaps = model_caps(light.radio_id)
         self.state = adapt_state(state, self.caps)
         self.state_source = "restored"
@@ -47,7 +45,6 @@ class Fixture:
         self.readback: dict[str, Any] = {"cct": None, "hsi": None, "heartbeat_at": None, "latency_ms": None}
         self.device: dict[str, Any] = {"fan": None, "battery": None, "smoothness": None, "control": None}
         self.last_control_at = 0.0
-        self.last_heard: float | None = None
         self.adopting = True  # first contact this run: read the light before writing it
         self.request_at: dict[int, float] = {}
         self.stream_source: str | None = None
@@ -60,15 +57,15 @@ class Fixture:
     def node(self) -> int:
         return self.light.node_address
 
-    def heard(self) -> None:
-        self.last_heard = time.monotonic()
+    @property
+    def driver(self) -> Driver:
+        """The driver that commands this light: whichever the light's model names."""
+        return self._driver_for(self.caps)
 
     @property
     def reachable(self) -> bool | None:
         """True when heard from lately, False when silent, None before the first word."""
-        if self.last_heard is None:
-            return None
-        return time.monotonic() - self.last_heard < SILENT_AFTER
+        return self.driver.status(self.light)["reachable"]
 
     def use_caps(self, caps: ModelCaps) -> None:
         """The model changed (recognised or picked): refit everything to it."""
