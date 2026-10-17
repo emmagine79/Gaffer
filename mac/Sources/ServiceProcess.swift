@@ -25,6 +25,12 @@ final class ServiceProcess {
     private var buffer = Data()
     private var announced = false
     private let onEvent: (Event) -> Void
+    /// Where the bundled Python lives (Gaffer.app/Contents/Resources). Tests point it at a copy.
+    private let resources: URL?
+    /// Extra service options. Only tests use them (for example --demo, which starts no Bluetooth scan).
+    private let extraArguments: [String]
+    /// Where service.log goes. nil means ~/Library/Logs/Gaffer.
+    private let logDirectory: URL?
     /// Random secret for this launch: 32 bytes from the system's secure generator, as hex.
     let secret: String = {
         var bytes = [UInt8](repeating: 0, count: 32)
@@ -34,24 +40,28 @@ final class ServiceProcess {
         return bytes.map { String(format: "%02x", $0) }.joined()
     }()
 
-    init(onEvent: @escaping (Event) -> Void) {
+    init(resources: URL? = nil, extraArguments: [String] = [], logDirectory: URL? = nil,
+         onEvent: @escaping (Event) -> Void) {
+        self.resources = resources
+        self.extraArguments = extraArguments
+        self.logDirectory = logDirectory
         self.onEvent = onEvent
     }
 
     func start() throws {
-        guard let resources = Bundle.main.resourceURL else {
+        guard let resources = resources ?? Bundle.main.resourceURL else {
             throw CocoaError(.fileNoSuchFile)
         }
         let python = resources.appendingPathComponent("python/bin/python3.14")
         process.executableURL = python
         // -I: ignore PYTHON* variables and the user's site-packages. -B: never write
         // .pyc files into the signed bundle.
-        process.arguments = ["-I", "-B", "-m", "gaffer", "--session-from-stdin"]
+        process.arguments = ["-I", "-B", "-m", "gaffer", "--session-from-stdin"] + extraArguments
         process.environment = Self.cleanEnvironment()
         process.currentDirectoryURL = resources
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
-        process.standardError = Self.logHandle() ?? FileHandle.nullDevice
+        process.standardError = ServiceLog.open(in: logDirectory ?? ServiceLog.defaultDirectory) ?? FileHandle.nullDevice
 
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
@@ -103,20 +113,5 @@ final class ServiceProcess {
             if let value = inherited[key] { env[key] = value }
         }
         return env
-    }
-
-    /// Service log at ~/Library/Logs/Gaffer/service.log, for debugging.
-    private static func logHandle() -> FileHandle? {
-        let fm = FileManager.default
-        guard let library = fm.urls(for: .libraryDirectory, in: .userDomainMask).first else { return nil }
-        let dir = library.appendingPathComponent("Logs/Gaffer", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("service.log")
-        if !fm.fileExists(atPath: file.path) {
-            fm.createFile(atPath: file.path, contents: nil)
-        }
-        guard let handle = try? FileHandle(forWritingTo: file) else { return nil }
-        handle.seekToEndOfFile()
-        return handle
     }
 }
