@@ -58,26 +58,26 @@ A model file is one row of lumen's `models.json` plus these keys:
 
 | Key | Type | Rule |
 | --- | --- | --- |
-| `id` | string | Required. 1 to 32 characters from `A-Z a-z 0-9 _ -`, starting with a letter or digit. Case-insensitive. Must equal the file name without `.json`. `constructor`, `prototype` and similar names are refused. |
+| `id` | string | Required. Characters from `A-Z a-z 0-9 _ -`, starting with a letter or digit (the id is also a file name, so no separators or dots). Case-insensitive. Must equal the file name without `.json`. `constructor`, `prototype` and similar names are refused. |
 | `driver` | string | Required. Must equal the folder name. It should name a folder under `service/gaffer/drivers/`; if it does not, the light is unreachable. |
-| `brand` | string | Required. 1 to 64 characters. Shown to people. |
-| `name` | string | Required. 1 to 120 characters. |
-| `min_kelvin`, `max_kelvin` | integer | Required. 0 to 100000, `min_kelvin` not above `max_kelvin`. |
+| `brand` | string | Required. Non-empty text. Shown to people. |
+| `name` | string | Required. Non-empty text. |
+| `min_kelvin`, `max_kelvin` | integer | Required. Whole numbers from 0 up, `min_kelvin` not above `max_kelvin`. |
 | `modes` | list of strings | `cct`, `hsi`, `rgb`, `color_chip`, `effects` and so on. Default empty. |
-| `match` | object | Optional. `name_prefix` (string up to 64 characters) and `service` (a Bluetooth UUID, 16, 32 or 128 bit). No other keys. |
+| `match` | object | Optional. `name_prefix` (non-empty text) and `service` (a Bluetooth UUID, 16, 32 or 128 bit). No other keys. |
 | `driver_data` | object | Optional. Whatever the driver needs for this model. Opaque to everything else. |
 
 Every other lumen row key (`effects`, `fan_modes`, `rgb_channels`, `battery`, `gm_min`, `gm_max` and so on) is optional and read as in `models.json`.
 
-A file that breaks a rule, cannot be read, is not a plain file, or is over 1 MiB is skipped with a reason. The rest still load. An unreadable file never replaces the row it was meant to override. These size limits are Gaffer's own; no platform sets them.
+A file that breaks a rule, cannot be read, or is not a plain file is skipped with a reason. The rest still load. An unreadable file never replaces the row it was meant to override. Gaffer sets no limit on file size, file count or text length. A file that cannot be read or parsed for any reason is skipped with a plain reason.
 
 ### Drivers
 
 A driver is a folder under `service/gaffer/drivers/<name>/` that defines a concrete subclass of `gaffer.drivers.base.Driver`. The registry (`gaffer.drivers.build_drivers`) imports every folder and registers its drivers. A folder that fails to import is skipped and reported in `drivers_skipped`.
 
-The contract is in `service/gaffer/drivers/base.py`: `id`, `match(advert)`, `start()`, `stop()`, `connect(light)`, `apply(light, LightState)`, `identify(light)`, `status(light)` returning `{reachable, held}`, and pure `encode_*` functions beside the driver. `apply` is synchronous, never blocks, and the latest state wins.
+The contract is in `service/gaffer/drivers/base.py`: `id`, `match(advert)`, `start()`, `stop()`, `connect(light)`, `apply(light, LightState)`, `identify(light)`, `status(light)` returning `{reachable, held}`, `forget_light(light_id)`, and pure `encode_*` functions beside the driver. `forget_light` is async and has a no-op default. When it returns, the driver holds no link to that light and writes nothing more to it. The hub awaits it, and logs and carries on if it raises, before a light's new driver connects, so two drivers never drive one light. `stop()` and `forget_light()` each get the hub's stop budget; a driver that does not return in time is logged and skipped. `apply` is synchronous, never blocks, and the latest state wins.
 
-A light uses the driver its model's `driver` key names. If that driver is not installed, the light shows as unreachable and takes no commands.
+A light uses the driver its model's `driver` key names. If that driver is not installed, the light shows as unreachable and takes no commands. The same holds for a light whose model is not known and whose id is not shaped like a Godox radio id (four hex digits): it is never commanded as a Godox light. A Godox-shaped unknown id is commanded generically, as lumen does.
 
 ### Light fields
 

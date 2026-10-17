@@ -15,10 +15,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaffer import demo, drivers
+from gaffer import hub as hub_module
 from gaffer.app import create_app
+from gaffer.catalog import configure_models
+from gaffer.drivers.base import Driver
 from gaffer.drivers.godox import GodoxDriver
+from gaffer.hub import Hub
 from gaffer.lights import LightLibrary, SavedLight
 from gaffer.state import Cct, LightState
+from gaffer.store import Store
 
 # Access payloads (vendor opcode F01102 + Godox frame) the vendor app was captured sending, as recorded in
 # godox-mesh-bt's tests (test_v2_commands.py, test_access_layer.py). Hardcoded: a changed byte must fail.
@@ -66,19 +71,23 @@ async def test_godox_apply_writes_the_recorded_payloads_for_power_brightness_and
     await driver.start()
     driver.attach_sender(sender)
 
-    async def settle():
-        for _ in range(60):
+    async def until(count):
+        for _ in range(1000):
+            if len(sent) >= count:
+                return
             await asyncio.sleep(0.005)
+        raise AssertionError(f"only {len(sent)} of {count} writes arrived")
 
     try:
-        for state in (
-            LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=5600)),
-            LightState(power=True, brightness=80, mode="cct", cct=Cct(kelvin=5600)),
-            LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=3200)),
-            LightState(power=False, brightness=50, mode="cct", cct=Cct(kelvin=3200)),
+        # Each state writes: power on + 50% at 5600 K, then one write per change, then power off.
+        for state, writes in (
+            (LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=5600)), 2),
+            (LightState(power=True, brightness=80, mode="cct", cct=Cct(kelvin=5600)), 3),
+            (LightState(power=True, brightness=50, mode="cct", cct=Cct(kelvin=3200)), 4),
+            (LightState(power=False, brightness=50, mode="cct", cct=Cct(kelvin=3200)), 5),
         ):
             driver.apply(light, state)
-            await settle()
+            await until(writes)
     finally:
         await driver.stop()
 
@@ -126,7 +135,6 @@ def test_a_bad_model_file_is_skipped_with_a_reason_and_changes_nothing(tmp_path,
     _write(tmp_path, "zhiyun", "PROTO.json", _model("__proto__"))
     _write(tmp_path, "zhiyun", "WRONGDRIVER.json", _model("WRONGDRIVER", "yongnuo"))
     _write(tmp_path, "zhiyun", "NEGATIVE.json", _model("NEGATIVE", min_kelvin=-5))
-    _write(tmp_path, "zhiyun", "HUGE.json", _model("HUGE", note="x" * (2 << 20)))
     blocked = _write(tmp_path, "godox", f"{BI_COLOUR}.json", _model(BI_COLOUR, "godox", brand="Godox", name="Should not apply"))
     blocked.chmod(0)
     try:
@@ -136,11 +144,11 @@ def test_a_bad_model_file_is_skipped_with_a_reason_and_changes_nothing(tmp_path,
         blocked.chmod(0o644)
     ids = {m["id"] for m in listing["models"]}
     assert "GOOD" in ids
-    assert not ids & {"BROKEN", "WRONGSTEM", "OTHER", "CONSTRUCTOR", "..", "__PROTO__", "WRONGDRIVER", "NEGATIVE", "HUGE"}
+    assert not ids & {"BROKEN", "WRONGSTEM", "OTHER", "CONSTRUCTOR", "..", "__PROTO__", "WRONGDRIVER", "NEGATIVE"}
     assert next(m for m in listing["models"] if m["id"] == BI_COLOUR)["name"] != "Should not apply"
     skipped = {s["file"]: s["reason"] for s in listing["skipped"]}
     assert set(skipped) == {f"zhiyun/{n}.json" for n in (
-        "BROKEN", "WRONGSTEM", "CONSTRUCTOR", "DOTS", "PROTO", "WRONGDRIVER", "NEGATIVE", "HUGE")} | {f"godox/{BI_COLOUR}.json"}
+        "BROKEN", "WRONGSTEM", "CONSTRUCTOR", "DOTS", "PROTO", "WRONGDRIVER", "NEGATIVE")} | {f"godox/{BI_COLOUR}.json"}
     text = json.dumps(listing)
     assert not any(bad in text for bad in ("/Users/", "/private/", "/var/", str(tmp_path)))
 
@@ -222,3 +230,250 @@ def test_a_lights_channel_survives_save_and_load(tmp_path):
 
     library.save_light(dataclasses.replace(light, channel=7))
     assert LightLibrary(tmp_path).get(light.id).channel == 7
+
+
+# -- the hub hands lights between drivers, and never to the wrong brand ------------------------------
+
+
+@pytest.fixture
+def demo_models():
+    configure_models([], demo.DEMO_MODELS)  # what create_app does in demo mode
+    yield
+    configure_models()
+
+
+async def _studio(tmp_path, *, orphan_model=None):
+    """A demo hub over a seeded library: four Godox lights (nodes 2, 4, 6, 8), a Zhiyun and a Yongnuo stand-in."""
+    library = LightLibrary(tmp_path)
+    demo.seed(library)
+    if orphan_model:
+        library.add_paired(network_id=library.lights[0].network, address="DE:MO:00:00:00:77", radio_id=orphan_model,
+                           node_address=40, num_elements=1, device_key="", name="Orphan")
+    hub = Hub(Store(tmp_path), library, demo=True, scanner=demo.DemoScanner())
+    await hub.start()
+    for _ in range(400):
+        if hub.controller is not None:
+            return hub
+        await asyncio.sleep(0.01)
+    raise AssertionError("never connected")
+
+
+def _light(hub, name):
+    return next(f for f in hub.fixtures.values() if f.light.name == name)
+
+
+class _Wire:
+    """Stands in for the mesh link: records the node of every frame the Godox pump writes."""
+
+    def __init__(self, hub):
+        self.nodes: list[int | None] = []
+        hub.godox.attach_sender(self.send)
+
+    async def send(self, frame, node):
+        self.nodes.append(node)
+
+    async def first_write_to(self, node):
+        for _ in range(1000):
+            if node in self.nodes:
+                return
+            await asyncio.sleep(0.005)
+        raise AssertionError(f"nothing was written to node {node}")
+
+
+async def test_a_light_whose_model_is_gone_is_never_sent_godox_bytes(tmp_path, demo_models):
+    """A Zhiyun model file that was deleted leaves an id like this behind (not a real model id, so no
+    Zhiyun driver in a later merge ever owns it). The light sits on the active mesh network, so under the
+    old fallback it was commanded through the Godox pump."""
+    hub = await _studio(tmp_path, orphan_model="GONE-MODEL")
+    try:
+        wire = _Wire(hub)
+        orphan, key = _light(hub, "Orphan"), _light(hub, "Key light")
+        hub.set_state(orphan, LightState(power=True, brightness=40), "test")
+        hub.set_state(key, LightState(power=True, brightness=40), "test")  # queued after it: when this is out, the orphan's would be too
+        await wire.first_write_to(key.node)
+        assert orphan.node not in wire.nodes
+        assert orphan.reachable is False
+    finally:
+        await hub.stop()
+
+
+async def test_a_light_given_another_brands_model_is_let_go_by_the_godox_pump(tmp_path, demo_models):
+    hub = await _studio(tmp_path)
+    try:
+        fill, key = _light(hub, "Fill"), _light(hub, "Key light")
+        hub.godox.attach_sender(None)  # the mesh link is down: writes queue up
+        hub.set_state(fill, LightState(power=True, brightness=40), "test")
+        hub.set_model(fill.id, "ZY-DEMO")
+        wire = _Wire(hub)  # the link comes back
+        hub.set_state(key, LightState(power=True, brightness=40), "test")
+        await wire.first_write_to(key.node)
+        assert fill.node not in wire.nodes
+        for _ in range(200):  # and the new driver opened its own link, as it does at start-up
+            if fill.reachable:
+                break
+            await asyncio.sleep(0.005)
+        assert fill.reachable is True
+    finally:
+        await hub.stop()
+
+
+async def test_forgetting_a_light_clears_what_its_own_driver_kept(tmp_path, demo_models):
+    hub = await _studio(tmp_path)
+    try:
+        key, zhiyun = _light(hub, "Key light"), _light(hub, "Zhiyun panel")
+        stand_in = hub.registry.get("demo")
+        hub.godox.mark_heard(key.id)
+        assert key.reachable is True and zhiyun.id in stand_in.applied
+        key_light = key.light
+        await hub.forget(key.id)
+        await hub.forget(zhiyun.id)
+        assert hub.godox.status(key_light)["reachable"] is None  # a light paired again under this id starts unheard
+        assert zhiyun.id not in stand_in.applied
+    finally:
+        await hub.stop()
+
+
+class _Recorder(Driver):
+    """A brand that writes what it is asked to into a shared log, so the order of calls can be read back."""
+
+    id = "rec"
+
+    def __init__(self, log, *, hang_on_stop=False):
+        super().__init__()
+        self.log, self.hang_on_stop = log, hang_on_stop
+
+    def match(self, advert):
+        return None
+
+    async def connect(self, light):
+        self.log.append("rec.connect-start")
+        await asyncio.sleep(0.05)
+        self.log.append("rec.connect-done")
+
+    def apply(self, light, state):
+        self.log.append("rec.apply")
+
+    async def identify(self, light):
+        return None
+
+    def status(self, light):
+        return {"reachable": True, "held": False}
+
+    async def stop(self):
+        if self.hang_on_stop:
+            await asyncio.Event().wait()  # never returns
+        self.log.append("rec.stopped")
+
+
+REC_MODEL = {"name": "Recorder", "min_kelvin": 2700, "max_kelvin": 6500, "modes": ["cct"], "driver": "rec",
+             "brand": "Rec", "match": {}, "driver_data": {}, "demo": True}
+
+
+async def test_a_driver_that_fails_to_let_go_does_not_stop_a_forget_or_a_model_change(tmp_path, demo_models, monkeypatch):
+    hub = await _studio(tmp_path)
+    try:
+        async def broken(light_id):
+            raise KeyError(light_id)
+
+        monkeypatch.setattr(hub.registry.get("demo"), "forget_light", broken)
+        wire = _Wire(hub)
+        zhiyun, yongnuo = _light(hub, "Zhiyun panel"), _light(hub, "Yongnuo wand")
+        hub.set_model(zhiyun.id, "008F")  # to a Godox model; the demo driver fails to let go
+        assert hub.library.get(zhiyun.id).radio_id == "008F"
+        await wire.first_write_to(zhiyun.node)  # and the Godox driver still took the light over
+        await hub.forget(yongnuo.id)  # the same failure must not leave the forget half done
+        assert yongnuo.id not in hub.fixtures
+        assert all(light.id != yongnuo.id for light in hub.library.lights)
+    finally:
+        await hub.stop()
+
+
+async def test_the_old_driver_lets_go_before_the_new_one_connects_and_the_light_is_written_once(tmp_path, demo_models):
+    configure_models([], {**demo.DEMO_MODELS, "REC-1": REC_MODEL})
+    hub = await _studio(tmp_path)
+    log: list[str] = []
+    try:
+        hub.registry.drivers["rec"] = _Recorder(log)
+
+        async def slow_release(light_id):
+            log.append("demo.release-start")
+            await asyncio.sleep(0.05)  # closing a link takes time
+            log.append("demo.release-done")
+
+        hub.registry.get("demo").forget_light = slow_release
+        zhiyun, tasks_before = _light(hub, "Zhiyun panel"), len(hub._tasks)
+        hub.set_model(zhiyun.id, "REC-1")
+        for _ in range(400):
+            if "rec.apply" in log:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)  # time for any second write to show itself
+        assert log == ["demo.release-start", "demo.release-done", "rec.connect-start", "rec.connect-done", "rec.apply"]
+        assert len(hub._tasks) == tasks_before  # the hand-over task is not kept after it ends
+    finally:
+        hub.registry.drivers.pop("rec", None)
+        await hub.stop()
+
+
+async def test_a_driver_whose_stop_never_returns_does_not_hold_up_the_hub(tmp_path, demo_models, monkeypatch):
+    monkeypatch.setattr(hub_module, "LINK_STOP_SECONDS", 0.2)
+    hub = await _studio(tmp_path)
+    log: list[str] = []
+    hub.registry.drivers = {"hang": _Recorder(log, hang_on_stop=True), "rec": _Recorder(log), **hub.registry.drivers}
+    await asyncio.wait_for(hub.stop(), 10)
+    assert log == ["rec.stopped"]  # the one after the hung driver was still stopped
+
+
+async def test_a_driver_that_never_lets_go_does_not_hang_a_forget(tmp_path, demo_models, monkeypatch):
+    monkeypatch.setattr(hub_module, "LINK_STOP_SECONDS", 0.2)
+    hub = await _studio(tmp_path)
+    try:
+        async def never(light_id):
+            await asyncio.Event().wait()
+
+        hub.registry.get("demo").forget_light = never
+        yongnuo = _light(hub, "Yongnuo wand")
+        await asyncio.wait_for(hub.forget(yongnuo.id), 5)
+        assert all(light.id != yongnuo.id for light in hub.library.lights)
+    finally:
+        await hub.stop()
+
+
+async def test_a_cancelled_forget_request_still_finishes_the_forget(tmp_path, demo_models):
+    hub = await _studio(tmp_path)
+    try:
+        async def slow(light_id):
+            await asyncio.sleep(0.2)
+
+        hub.registry.get("demo").forget_light = slow
+        yongnuo = _light(hub, "Yongnuo wand")
+        request = asyncio.create_task(hub.forget(yongnuo.id))
+        await asyncio.sleep(0.05)  # the driver is letting go
+        request.cancel()  # the browser went away
+        await asyncio.gather(request, return_exceptions=True)
+        for _ in range(300):
+            if all(light.id != yongnuo.id for light in hub.library.lights):
+                break
+            await asyncio.sleep(0.01)
+        assert all(light.id != yongnuo.id for light in hub.library.lights)
+    finally:
+        await hub.stop()
+
+
+async def test_a_model_change_connects_nothing_before_start_or_after_stop(tmp_path, demo_models):
+    configure_models([], {**demo.DEMO_MODELS, "REC-1": REC_MODEL})
+    library = LightLibrary(tmp_path)
+    demo.seed(library)
+    hub = Hub(Store(tmp_path), library, demo=True, scanner=demo.DemoScanner())
+    log: list[str] = []
+    hub.registry.drivers["rec"] = _Recorder(log)
+    zhiyun, yongnuo = _light(hub, "Zhiyun panel"), _light(hub, "Yongnuo wand")
+    hub.set_model(zhiyun.id, "REC-1")  # not started yet
+    await asyncio.sleep(0.2)
+    assert log == []
+    await hub.start()
+    await hub.stop()
+    log.clear()
+    hub.set_model(yongnuo.id, "REC-1")  # already stopped
+    await asyncio.sleep(0.2)
+    assert log == []

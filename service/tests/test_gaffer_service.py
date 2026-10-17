@@ -6,15 +6,23 @@ session guard. Demo mode, so no Bluetooth is touched.
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import signal
+import subprocess
+import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from websockets.sync.client import connect
 
 from gaffer import app as app_module
 from gaffer.app import create_app
-from gaffer.paths import APP_DIR_NAME, data_home
+from gaffer.hub import SAVE_AFTER_SECONDS
+from gaffer.paths import data_home
 from gaffer.session import COOKIE, protect
 
 SECRET = "test-secret-for-this-launch"
@@ -36,7 +44,6 @@ def sign_in(client: TestClient) -> None:
 
 def test_data_folder_is_gaffer_and_gaffer_home_moves_it(tmp_path):
     """Criterion 1: LUMEN_HOME became GAFFER_HOME and the app folder is Gaffer."""
-    assert APP_DIR_NAME == "Gaffer"
     assert data_home({"HOME": str(tmp_path)}, "darwin") == tmp_path / "Library" / "Application Support" / "Gaffer"
     assert data_home({"HOME": str(tmp_path), "GAFFER_HOME": str(tmp_path / "x")}, "darwin") == tmp_path / "x"
     assert data_home({"HOME": str(tmp_path), "LUMEN_HOME": str(tmp_path / "x")}, "darwin") != tmp_path / "x"
@@ -82,3 +89,42 @@ def test_a_failing_command_never_shows_a_path_on_this_mac(window, monkeypatch):
         ws.send_json({"type": "select", "light": "x"})
         reply = next(m for m in (ws.receive_json() for _ in range(50)) if m["type"] == "error")  # broadcasts come between
     assert reply["type"] == "error" and not re.search(r"/Users/|/private/|/var/", reply["text"])
+
+
+def test_quitting_gaffer_saves_the_last_light_state(tmp_path):
+    """Quit closes the service's stdin. The service must stop cleanly, so the last change is saved.
+
+    Runs the service the way Gaffer.app does (python -I -B -m gaffer --session-from-stdin), in --demo.
+    """
+    data = tmp_path / "data"
+    service = subprocess.Popen(
+        [sys.executable, "-I", "-B", "-m", "gaffer", "--demo", "--session-from-stdin", "--data", str(data)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}, start_new_session=True,
+    )
+    try:
+        service.stdin.write(SECRET + "\n")
+        service.stdin.flush()
+        line = ""
+        while "GAFFER_SERVICE_READY" not in line:
+            assert service.poll() is None, "the service did not start"
+            line = service.stdout.readline()
+        port = int(line.split("port=")[1])
+        with connect(f"ws://127.0.0.1:{port}/ws", additional_headers={"Cookie": f"gaffer_session={SECRET}"}) as ws:
+            light = json.loads(ws.recv())["selected"]
+            ws.send(json.dumps({"type": "set", "light": light, "patch": {"brightness": 17}}))
+            while not (
+                (m := json.loads(ws.recv(timeout=10))).get("type") == "state"
+                and m["light"] == light and m["state"]["brightness"] == 17
+            ):
+                pass
+            changed = time.monotonic()  # the hub's own save falls due SAVE_AFTER_SECONDS after the change
+            service.stdin.close()  # what Quit Gaffer does
+            assert service.wait(timeout=30) == 0
+            # Gone before that save was due, so the state on disk came from a clean Hub.stop.
+            assert time.monotonic() - changed < SAVE_AFTER_SECONDS
+        assert json.loads((data / "settings.json").read_text())["light_states"][light]["brightness"] == 17
+    finally:
+        if service.poll() is None:
+            os.killpg(service.pid, signal.SIGKILL)
+            service.wait()

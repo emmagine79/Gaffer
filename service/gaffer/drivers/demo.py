@@ -41,3 +41,7 @@ class DemoDriver(Driver):
 
     def status(self, light: SavedLight) -> LightStatus:
         return {"reachable": True if light.id in self._connected else None, "held": False}
+
+    async def forget_light(self, light_id: str) -> None:
+        self.applied.pop(light_id, None)
+        self._connected.pop(light_id, None)

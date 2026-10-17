@@ -56,7 +56,7 @@ def test_hello_carries_every_light_and_everything_the_ui_needs(client):
         assert len(hello["gel_tables"][names["Key light"]["gel_key"]]) == 318
         assert names["Backlight"]["gel_key"] is None
         assert len(hello["effects"]) >= 25 and "colour" in hello["effects"][0]
-        assert len(hello["models"]) == 186
+        assert sum(m["driver"] == "godox" for m in hello["models"]) == 186  # lumen's table; other brands' model files come on top
         assert hello["demo"] is True
 
 
