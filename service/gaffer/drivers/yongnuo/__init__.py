@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -20,7 +21,19 @@ from ..base import Advert, Driver, DriverContext, LightStatus
 from . import protocol
 from .protocol import encode_decimal, encode_plain, encode_power
 
+logger = logging.getLogger(__name__)
+
 MODELS_DIR = Path(__file__).resolve().parents[2] / "models" / "yongnuo"
+
+
+def retry_delay(failures: int) -> float:
+    """Seconds to wait before sending to a light again after ``failures`` failed tries in a row.
+
+    Source: the rule the Godox link supervisor already runs, gaffer/link.py ``Link.run``:
+    ``min(30.0, 1.0 * 2 ** min(failures, 5))``. Nothing in the Dart code gives a retry
+    schedule (its connect failure waits for a tap), so the project's own rule is the authority.
+    """
+    return min(30.0, 1.0 * 2 ** min(failures, 5))
 
 
 class Transport(Protocol):
@@ -87,9 +100,13 @@ class YongnuoDriver(Driver):
         self._held: dict[str, bool] = {}
         self._reachable: dict[str, bool] = {}
         self._pending: dict[str, tuple[Any, Any]] = {}
-        self._task: asyncio.Task | None = None
-        self._wake = asyncio.Event()
-        self._io = asyncio.Lock()
+        #: One sender task, one lock and one "nothing left to try" flag per light, so a light
+        #: that is off or held by a phone app never delays another light.
+        self._workers: dict[str, asyncio.Task] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._settled: dict[str, asyncio.Event] = {}
+        self._backing_off: set[str] = set()
+        self._failures: dict[str, int] = {}
 
     # -- matching -------------------------------------------------------------
 
@@ -114,7 +131,10 @@ class YongnuoDriver(Driver):
     # -- frames ---------------------------------------------------------------
 
     def _model(self, light: Any) -> dict[str, Any]:
-        return self.models[light.radio_id]
+        try:
+            return self.models[light.radio_id]
+        except KeyError:
+            raise ValueError(f"{light.radio_id} is not a Yongnuo model Gaffer knows.") from None
 
     def _channel(self, light: Any) -> int:
         channel = getattr(light, "channel", None)
@@ -148,101 +168,163 @@ class YongnuoDriver(Driver):
     # -- contract -------------------------------------------------------------
 
     async def start(self) -> None:
-        self._ensure_task()
+        """Nothing to start: a sender task begins with a light's first ``apply``."""
 
     async def stop(self) -> None:
-        task, self._task = self._task, None
-        if task is not None:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        workers = list(self._workers.values())
+        self._workers.clear()
+        for worker in workers:
+            worker.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
         self._pending.clear()
+        self._backing_off.clear()
+        for settled in self._settled.values():
+            settled.set()
         for address in list(self._transports):
-            await self._drop(address)
+            await self._drop(address)  # one light that will not let go never keeps the rest connected
 
     async def connect(self, light: Any) -> None:
         self._channel(light)
-        if self.context.demo:
-            self._reachable[light.address] = True
-            return
-        if light.address in self._transports and self._transports[light.address].connected:
-            return
-        transport = self._factory(light.address)
-        try:
-            await transport.connect()
-        except Exception:
-            self._held[light.address] = True  # most likely another app holds the link
-            self._reachable[light.address] = False
-            self._tell(light)
-            raise
-        self._held[light.address] = False
-        self._reachable[light.address] = True
-        self._transports[light.address] = transport
-        self._tell(light)
+        async with self._lock(light.address):
+            await self._open(light)
 
     def apply(self, light: Any, state: Any) -> None:
-        """Queue ``state``; a task sends it. Bad input raises here, before anything is queued."""
+        """Queue ``state``; the light's sender task sends it. Bad input raises here, before anything is queued."""
         self._frames(light, state)  # validates the channel and the model now, not in the task
-        self._pending[light.address] = (light, state)
-        self._ensure_task()
-        self._wake.set()
+        address = light.address
+        self._pending[address] = (light, state)
+        settled = self._settled.setdefault(address, asyncio.Event())
+        if address not in self._backing_off:
+            settled.clear()
+        worker = self._workers.get(address)
+        if worker is None or worker.done():
+            self._workers[address] = asyncio.get_running_loop().create_task(self._run(address))
 
     async def identify(self, light: Any) -> None:
-        """Pulse the brightness (full, low, full), then put the last state back."""
-        state = self._last.get(light.address)
-        kelvin = state.cct.kelvin if state else protocol.DEFAULT_MAX_KELVIN
-        for level in (100, 10, 100):
-            await self._send(light, [self.encode_level(light, kelvin, level)])
-            await self._sleep(0.3)
-        if state is not None:
-            await self._send(light, self._frames(light, state), state)
+        """Pulse the brightness (full, low, full), then put the light back as it was.
+
+        The light's lock is held throughout, so no other write interleaves with the pulse. If a
+        newer state was applied during the pulse, that state wins and nothing is restored over it.
+        A light that was never given a state has nothing to go back to and stays at full.
+        """
+        self._channel(light)
+        self._model(light)
+        address = light.address
+        async with self._lock(address):
+            state = self._last.get(address)
+            kelvin = state.cct.kelvin if state else protocol.DEFAULT_MAX_KELVIN
+            power_on = self.encode_power(light, True)
+            for step, level in enumerate((100, 10, 100)):
+                frames = [self.encode_level(light, kelvin, level)]
+                if step == 0 and power_on is not None and not self._on.get(address, False):
+                    frames.insert(0, power_on)  # a light that is off ignores levels until it is switched on
+                await self._transmit(light, frames)
+                if power_on is not None:
+                    self._on[address] = True
+                await self._sleep(0.3)
+            if state is None or address in self._pending:
+                return
+            await self._transmit(light, self._frames(light, state))
+            self._on[address] = bool(state.power)
 
     def status(self, light: Any) -> LightStatus:
-        transport = self._transports.get(light.address)
-        reachable = transport.connected if transport else self._reachable.get(light.address)
-        return {"reachable": reachable, "held": self._held.get(light.address, False)}
+        address = light.address
+        reachable = self._reachable.get(address)
+        transport = self._transports.get(address)
+        if transport is not None and not transport.connected:
+            reachable = False
+        return {"reachable": reachable, "held": self._held.get(address, False)}
 
     async def flush(self) -> None:
-        """Wait until everything queued has been sent (tests and shutdown)."""
-        while self._pending or self._io.locked():
-            await asyncio.sleep(0)
+        """Wait until every light's queued state has been tried (tests and shutdown).
+
+        A light that failed and is waiting to retry counts as tried; flush does not wait out its delay.
+        """
+        await asyncio.gather(*(settled.wait() for settled in list(self._settled.values())))
 
     # -- sending --------------------------------------------------------------
 
-    def _ensure_task(self) -> None:
-        if self._task is None or self._task.done():
-            self._task = asyncio.get_running_loop().create_task(self._pump())
+    def _lock(self, address: str) -> asyncio.Lock:
+        return self._locks.setdefault(address, asyncio.Lock())
 
-    async def _pump(self) -> None:
-        while True:
-            await self._wake.wait()
-            self._wake.clear()
-            while self._pending:
-                address = next(iter(self._pending))
-                light, state = self._pending.pop(address)
-                try:
-                    await self._send(light, self._frames(light, state), state)
-                except Exception:
-                    pass  # _send already recorded the failure; the next apply tries again
+    async def _run(self, address: str) -> None:
+        """Send this light's wanted state until none is left. Latest state wins."""
+        settled = self._settled[address]
+        try:
+            while address in self._pending:
+                failed = False
+                async with self._lock(address):
+                    # Taken only once the light's lock is ours, so a state applied while an
+                    # identify pulse holds the lock is still waiting here when the pulse ends.
+                    light, state = self._pending.pop(address)
+                    try:
+                        await self._transmit(light, self._frames(light, state))
+                        self._last[address] = state
+                        self._on[address] = bool(state.power)
+                    except ValueError:
+                        logger.warning("a Yongnuo light's state could not be encoded; dropped")  # retrying cannot help
+                    except Exception:  # noqa: BLE001 - _transmit recorded it; keep the state and try again later
+                        failed = True
+                        self._pending.setdefault(address, (light, state))  # a newer apply is already there and wins
+                    else:
+                        self._failures.pop(address, None)
+                if failed:
+                    self._failures[address] = self._failures.get(address, 0) + 1
+                    self._backing_off.add(address)
+                    settled.set()
+                    try:
+                        await self._sleep(retry_delay(self._failures[address]))
+                    finally:
+                        self._backing_off.discard(address)
+        finally:
+            settled.set()
 
-    async def _send(self, light: Any, frames: list[bytes], state: Any = None) -> None:
-        async with self._io:
-            try:
-                await self.connect(light)
-                if not self.context.demo:
-                    for frame in frames:
-                        await self._transports[light.address].write(frame)
-            except Exception:
-                self._reachable[light.address] = False
-                self._tell(light)
-                raise
-            if state is not None:
-                self._last[light.address] = state
-                self._on[light.address] = bool(state.power)
+    async def _open(self, light: Any) -> None:
+        """Make sure the light has a live link. The caller holds the light's lock."""
+        address = light.address
+        if self.context.demo:
+            self._reachable[address] = True
+            return
+        transport = self._transports.get(address)
+        if transport is not None:
+            if transport.connected:
+                return
+            await self._drop(address)  # release a dead link before making a new one
+        transport = self._factory(address)
+        try:
+            await transport.connect()
+        except Exception:
+            self._held[address] = True  # most likely another app holds the link
+            self._reachable[address] = False
+            self._tell(light)
+            raise
+        self._held[address] = False
+        self._reachable[address] = True
+        self._transports[address] = transport
+        self._tell(light)
+
+    async def _transmit(self, light: Any, frames: list[bytes]) -> None:
+        """Open the link if needed and write ``frames``. The caller holds the light's lock."""
+        address = light.address
+        await self._open(light)
+        if self.context.demo:
+            return
+        try:
+            for frame in frames:
+                await self._transports[address].write(frame)
+        except Exception:
+            self._reachable[address] = False
+            await self._drop(address)  # bleak may still say "connected"; the next send starts a fresh link
+            self._tell(light)
+            raise
 
     async def _drop(self, address: str) -> None:
         transport = self._transports.pop(address, None)
         if transport is not None:
-            await transport.disconnect()
+            try:
+                await transport.disconnect()
+            except Exception:  # noqa: BLE001 - the Dart _safeDisconnect does the same: already gone, or never fully up
+                logger.warning("a Yongnuo light did not disconnect cleanly")
 
     def _tell(self, light: Any) -> None:
         if self.context.notify:

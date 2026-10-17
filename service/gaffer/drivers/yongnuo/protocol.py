@@ -100,21 +100,3 @@ def encode_power(template: str, channel: int) -> bytes:
     """A power frame from a model-file template such as ``AE 01 06 {ch} 01 56``."""
     ch = check_channel(channel)
     return bytes.fromhex(template.replace("{ch}", f"{ch:02X}").replace(" ", ""))
-
-
-def decode_decimal(frame: bytes) -> tuple[int, int, float]:
-    """(channel, kelvin, percent) from a decimal frame; the inverse of encode_decimal."""
-    if len(frame) != DECIMAL_FRAME_LENGTH or frame[:3] != bytes([FRAME_HEADER, COLOUR_TEMP_FAMILY, DECIMAL_FRAME_LENGTH]) or frame[7] != DECIMAL_MARKER:
-        raise ValueError("Not a Yongnuo decimal frame.")
-    return frame[3], (frame[4] << 8) | frame[5], frame[6] + frame[8] / 10
-
-
-def decode_plain(frame: bytes) -> tuple[int, int, int]:
-    """(channel, kelvin, percent) from a plain frame; the inverse of encode_plain."""
-    if len(frame) != PLAIN_FRAME_LENGTH or frame[:3] != bytes([FRAME_HEADER, COLOUR_TEMP_FAMILY, PLAIN_FRAME_LENGTH]) or frame[7] != PLAIN_TRAILER:
-        raise ValueError("Not a Yongnuo plain frame.")
-    return frame[3], (frame[4] << 8) | frame[5], frame[6]
-
-
-def to_hex(frame: bytes) -> str:
-    return " ".join(f"{b:02X}" for b in frame)
