@@ -30,6 +30,8 @@ class DemoDriver(Driver):
         self._held: set[str] = set()
         #: Every light identify() ran on, oldest first: what a real driver would have pulsed.
         self.identified: list[str] = []
+        #: Lights with Max Mode on (the demo's Zhiyun stand-in). A light's power-off ends it, as on the real light.
+        self._max_mode: set[str] = set()
 
     def match(self, advert: Advert) -> str | None:
         return None
@@ -39,10 +41,18 @@ class DemoDriver(Driver):
 
     def apply(self, light: SavedLight, state: LightState) -> None:
         self.applied[light.id] = state
+        if not state.power or state.brightness <= 0:
+            self._max_mode.discard(light.id)
 
     async def identify(self, light: SavedLight) -> None:
         self.identified.append(light.id)
         await asyncio.sleep(0)
+
+    async def set_max_mode(self, light: SavedLight, on: bool) -> None:
+        (self._max_mode.add if on else self._max_mode.discard)(light.id)
+
+    def max_mode(self, light: SavedLight) -> bool:
+        return light.id in self._max_mode
 
     def status(self, light: SavedLight) -> LightStatus:
         return {"reachable": True if light.id in self._connected else None, "held": light.id in self._held}
@@ -65,3 +75,4 @@ class DemoDriver(Driver):
         self.applied.pop(light_id, None)
         self._connected.pop(light_id, None)
         self._held.discard(light_id)
+        self._max_mode.discard(light_id)

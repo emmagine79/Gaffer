@@ -13,7 +13,8 @@ interface ApiLight {
   id: string
   name: string
   state: { brightness: number; power: boolean; mode: string }
-  caps: { effects: { symbol: number; name: string }[] }
+  caps: { effects: { symbol: number; name: string }[]; max_mode: boolean }
+  max_mode: boolean | null
 }
 
 const base = () => process.env.GAFFER_URL!
@@ -233,3 +234,32 @@ test('a saved light can be renamed from its name in Glass', async ({ page }) => 
   await page.keyboard.press('Enter')
   await expect.poll(async () => (await lights(page)).map((l) => l.name)).toContain('Fill')
 })
+
+// Max Mode (turbo): only a model whose file has "max_mode": true shows the switch. The demo's Zhiyun
+// stand-in has it; the Godox lights do not. Flipping it changes what GET /api/lights holds.
+for (const [surface, width] of [['phone', 390], ['window', 1280]] as const) {
+  test(`Max Mode: the Max switch shows for the Zhiyun light only, and flipping it changes the light at ${width}px`, async ({ page }) => {
+    await open(page, surface, width)
+    const maxOf = async () => (await lights(page)).find((l) => l.name === 'Zhiyun panel')!.max_mode
+    const max = page.getByRole('switch', { name: 'Max' })
+
+    await selectLight(page, 'Key light')
+    await expect(max).toHaveCount(0)
+    expect((await lights(page)).find((l) => l.name === 'Key light')!.max_mode).toBeNull()
+
+    await selectLight(page, 'Zhiyun panel')
+    await expect(max).toBeVisible()
+    await expect(page.getByText('Up to 300 W. The fans get loud. Ends when the light is switched off.')).toBeVisible()
+    await expect(max).toHaveAttribute('aria-checked', 'false')
+    expect(await maxOf()).toBe(false)
+    await noSideScroll(page)
+
+    await max.click()
+    await expect.poll(maxOf).toBe(true)
+    await expect(max).toHaveAttribute('aria-checked', 'true')
+
+    await max.click()
+    await expect.poll(maxOf).toBe(false)
+    await expect(max).toHaveAttribute('aria-checked', 'false')
+  })
+}

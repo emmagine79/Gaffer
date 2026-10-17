@@ -946,6 +946,25 @@ class Hub:
             self._identifying.discard(light_id)
         return driver.id
 
+    async def set_max_mode(self, light_id: str, on: bool) -> None:
+        """Switch a light's Max Mode (turbo) on or off, and tell every client.
+
+        Refused, in plain words, for a model without the switch and for a light that is off: the light
+        ends Max Mode when it is switched off. The driver's own calls are bounded by its transport
+        (connect 20 s, write 10 s), so no timeout is added here.
+        """
+        fixture = self.fixture(light_id)
+        if not fixture.caps.max_mode:
+            raise HubError(f"{fixture.light.name} has no Max Mode.")
+        if not fixture.state.power or fixture.state.brightness <= 0:
+            raise HubError("Switch the light on first.")
+        try:
+            await fixture.driver.set_max_mode(fixture.light, on)
+        except Exception:  # noqa: BLE001 - the page gets plain words, the log gets the detail
+            logger.exception("could not set Max Mode on %s", fixture.light.name)
+            raise HubError(f"Could not change Max Mode on {fixture.light.name}. Check it is on and close by.") from None
+        self._broadcast_lights()
+
     def demo_hold(self, light_id: str, held: bool) -> None:
         """Demo only: pretend an official app takes a light's connection, or lets go of it."""
         if not self.demo:
@@ -1239,7 +1258,8 @@ class Hub:
                 last_stats = now
                 self._broadcast({"type": "stats", "stats": self.stats(),
                                  "reachable": {f.id: f.reachable for f in self.fixtures.values()},
-                                 "held": {f.id: f.held for f in self.fixtures.values()}})
+                                 "held": {f.id: f.held for f in self.fixtures.values()},
+                                 "max_mode": {f.id: f.max_mode for f in self.fixtures.values()}})
                 self._save_states()
                 for fixture in list(self.fixtures.values()):
                     if fixture.engine.expire_stream():

@@ -73,6 +73,11 @@ class Fixture:
         """True when another controller (a phone app) holds this light's one connection."""
         return bool(self.driver.status(self.light)["held"])
 
+    @property
+    def max_mode(self) -> bool | None:
+        """Max Mode (turbo) as the driver last set it. None for a model without the switch."""
+        return self.driver.max_mode(self.light) if self.caps.max_mode else None
+
     def use_caps(self, caps: ModelCaps) -> None:
         """The model changed (recognised or picked): refit everything to it."""
         self.caps = caps
@@ -93,6 +98,7 @@ class Fixture:
             "device": self.device,
             "reachable": self.reachable,
             "held": self.held,
+            "max_mode": self.max_mode,
         }
 
 

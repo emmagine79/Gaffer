@@ -56,6 +56,9 @@ class _Sent:
     on: bool | None = None
     kelvin: int | None = None
     brightness: float | None = None
+    #: Max Mode as last set. Off after a power-off or a new link: the light ends Max Mode when it is
+    #: switched off, and after a dropped link the driver can no longer vouch for it.
+    max_mode: bool = False
 
 
 class _Light:
@@ -223,6 +226,30 @@ class ZhiyunDriver(Driver):
                 else:
                     st.wanted = original  # the light is gone: the pulse level was never asked for
 
+    async def set_max_mode(self, light: Any, on: bool) -> None:
+        """Switch Max Mode (turbo) on or off, behind everything already applied to the light.
+
+        Takes the same lock and link as every other write. Refused for a model without the flag and for a
+        light that is not on: the light ends Max Mode when it is switched off.
+        """
+        st = self._state_for(light)
+        if st.model.get("max_mode") is not True:
+            raise ZhiyunError("no_max_mode", "This light has no Max Mode.")
+        await self.flush(light)  # what was applied first reaches the light first
+        async with st.lock:
+            await self._ensure_link(st)
+            want = st.wanted
+            if want is None or not want.power or want.brightness <= 0:
+                raise ZhiyunError("light_off", "Switch the light on first.")
+            await self._sync(st, want)  # a link that came back since the last send still needs power on
+            await self._write(st, p.Command.MAX_MODE, p.encode_max_mode(on, st.op))
+            st.sent.max_mode = on
+
+    def max_mode(self, light: Any) -> bool:
+        """Max Mode as last set by this driver; off for a light it has not set, or after a power-off."""
+        st = self._lights.get(light.id)
+        return st.sent.max_mode if st else False
+
     def status(self, light: Any) -> LightStatus:
         st = self._lights.get(light.id)
         # held stays False: bleak gives no reliable signal that a phone app holds the link.
@@ -342,7 +369,7 @@ class ZhiyunDriver(Driver):
             (p.Command.GET_DEVICE_NAME, b""),
             (p.Command.GET_FIRMWARE, b""),
             (p.Command.READ_DEVICE_STATE, p.encode_query()),
-            (p.Command.QUERY_BRIGHTNESS, p.encode_query()),
+            (p.Command.MAX_MODE, p.encode_query()),
         )
         for command, payload in steps:
             await self._write(st, command, payload)
@@ -356,25 +383,30 @@ class ZhiyunDriver(Driver):
     async def _send_state(self, st: _Light, want: LightState) -> None:
         async with st.lock:
             await self._ensure_link(st)
-            model, op = st.model, st.op
-            if not want.power or want.brightness <= 0:
-                await self._write(st, p.Command.POWER_STATE, p.encode_power(False, op))
-                st.sent.on = False
-                return
-            force_brightness = False
-            if st.sent.on is not True:
-                await self._write(st, p.Command.POWER_STATE, p.encode_power(True, op))
-                st.sent.on = True
-                force_brightness = True
-                await self._sleep(POWER_SETTLE_SECONDS)
-            lo, hi = model["min_kelvin"], model["max_kelvin"]
-            kelvin = max(lo, min(hi, int(want.cct.kelvin)))
-            if st.sent.kelvin != kelvin:
-                await self._write(st, p.Command.SET_COLOR_TEMP, p.encode_color_temp(kelvin, op, lo, hi))
-                st.sent.kelvin = kelvin
-            if force_brightness or st.sent.brightness != want.brightness:
-                await self._write(st, p.Command.SET_BRIGHTNESS, p.encode_brightness(want.brightness, op))
-                st.sent.brightness = want.brightness
+            await self._sync(st, want)
+
+    async def _sync(self, st: _Light, want: LightState) -> None:
+        """Send what differs from ``st.sent``. The caller holds ``st.lock`` and has a link."""
+        model, op = st.model, st.op
+        if not want.power or want.brightness <= 0:
+            await self._write(st, p.Command.POWER_STATE, p.encode_power(False, op))
+            st.sent.on = False
+            st.sent.max_mode = False  # switching the light off ends Max Mode
+            return
+        force_brightness = False
+        if st.sent.on is not True:
+            await self._write(st, p.Command.POWER_STATE, p.encode_power(True, op))
+            st.sent.on = True
+            force_brightness = True
+            await self._sleep(POWER_SETTLE_SECONDS)
+        lo, hi = model["min_kelvin"], model["max_kelvin"]
+        kelvin = max(lo, min(hi, int(want.cct.kelvin)))
+        if st.sent.kelvin != kelvin:
+            await self._write(st, p.Command.SET_COLOR_TEMP, p.encode_color_temp(kelvin, op, lo, hi))
+            st.sent.kelvin = kelvin
+        if force_brightness or st.sent.brightness != want.brightness:
+            await self._write(st, p.Command.SET_BRIGHTNESS, p.encode_brightness(want.brightness, op))
+            st.sent.brightness = want.brightness
 
     def _on_notify(self, st: _Light, data: bytes) -> None:
         try:

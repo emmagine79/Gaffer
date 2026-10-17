@@ -86,6 +86,8 @@ class ModelCaps:
     match: dict[str, Any] = field(default_factory=dict)
     #: Whatever the driver needs per model (opcodes, channel layout). Opaque to everything else.
     driver_data: dict[str, Any] = field(default_factory=dict)
+    #: The light has a Max Mode (turbo) switch the driver can set. Set by ``"max_mode": true`` in the model file.
+    max_mode: bool = False
 
     # -- what kind of light ---------------------------------------------------
 
@@ -279,6 +281,8 @@ def _check_row(raw: dict[str, Any], folder: str) -> tuple[str, dict[str, Any]]:
     data = raw.get("driver_data", {})
     if not isinstance(data, dict):
         raise ModelFileError("driver_data must be an object")
+    if not isinstance(raw.get("max_mode", False), bool):
+        raise ModelFileError("max_mode must be true or false")
     row = {k: v for k, v in raw.items() if k != "id"}
     row.update(driver=driver, brand=brand.strip(), match=match, driver_data=data)
     return model_id, row
@@ -427,6 +431,7 @@ def _caps_from_row(key: str, row: dict[str, Any]) -> ModelCaps:
         brand=str(row.get("brand") or "Godox"),
         match=dict(row.get("match") or {}),
         driver_data=dict(row.get("driver_data") or {}),
+        max_mode=row.get("max_mode") is True,
     )
 
 

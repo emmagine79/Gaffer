@@ -137,6 +137,8 @@ function LightPanel({ light }: { light: LightView }) {
         </Control>
       )}
 
+      {caps.max_mode && <MaxMode light={light} on={state.power} send={send} />}
+
       {showKelvin && (held ? (
         <Control label="Colour temperature" aside="Not in use">
           <button type="button" className="g-back" onClick={() => apply({ mode: 'cct' })}>Back to white</button>
@@ -179,6 +181,28 @@ function LightPanel({ light }: { light: LightView }) {
       )}
 
       <Effects light={light} />
+    </div>
+  )
+}
+
+/** Max Mode (turbo), for a model whose file says it has one. The light ends it when it is switched off. */
+function MaxMode({ light, on, send }: { light: LightView; on: boolean; send: (message: Record<string, unknown>) => void }) {
+  const maxOn = on && light.max_mode === true  // off at once when the light is switched off; the service resets it too
+  return (
+    <div className="g-ctl g-max" data-control="max-mode">
+      <div className="g-lab">
+        <span id={`max-${light.id}`}>Max</span>
+        <button
+          type="button"
+          role="switch"
+          className={`g-toggle ${maxOn ? 'on' : ''}`}
+          aria-checked={maxOn}
+          aria-labelledby={`max-${light.id}`}
+          disabled={!on}
+          onClick={() => send({ type: 'light.max_mode', light: light.id, on: !maxOn })}
+        />
+      </div>
+      <p className="g-dim">Up to 300 W. The fans get loud. Ends when the light is switched off.</p>
     </div>
   )
 }

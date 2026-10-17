@@ -664,3 +664,19 @@ async def test_forget_light_closes_the_link_and_writes_nothing_more():
     assert len(transport.writes) == written
     assert transport.opens == 1
     await driver.stop()
+
+
+# -- Max Mode (0x1009): frames written out by hand from the frame rules in protocol.py --------------------
+
+
+@pytest.mark.parametrize(
+    ("on", "op", "frame"),
+    [
+        # 24 3C | len 0A 00 | 00 01 | seq 00 00 | cid 09 10 | object 03 80 | op | value | CRC-16/XMODEM (crc_hqx)
+        (True, p.OP_LEGACY, "243c0a00000100000910038001010d24"),
+        (False, p.OP_LEGACY, "243c0a00000100000910038001002c34"),
+        (True, p.OP_DEFAULT, "243c0a0000010000091003803301fa47"),
+    ],
+)
+def test_max_mode_frame_is_the_control_object_op_and_one_value_byte(on, op, frame):
+    assert p.build_packet(p.Command.MAX_MODE, p.encode_max_mode(on, op), 0).hex() == frame
