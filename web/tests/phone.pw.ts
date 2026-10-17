@@ -4,7 +4,9 @@
  * The Mac window is a loopback browser with the launch secret. The phone is a second browser at
  * 375 px with no cookie that reaches the service by the Tailscale name from a fake `tailscale`
  * tool (Chromium maps that name to this machine). The service sees a connection that names a host
- * other than 127.0.0.1, so it treats it as a phone and asks for the PIN.
+ * other than 127.0.0.1, so it treats it as a phone and asks for the PIN. A connection from this machine
+ * is loopback, which the gate refuses for any such host (SPEC-024), so phone-service.ts starts the service
+ * through phone_service_main.py, which gives the phone's requests a non-loopback address.
  */
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { startPhoneService, TAILNET_NAME, type PhoneService } from './phone-service.ts'

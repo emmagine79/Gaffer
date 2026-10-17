@@ -11,8 +11,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import socket
 import stat
+import subprocess
+import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -24,8 +27,10 @@ from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import connect
 
 from gaffer.app import create_app
-from gaffer.phone import MAX_WRONG_GUESSES, PHONE_COOKIE, PIN_DIGITS, PhoneAccess
+from gaffer.listener import guarded_config
+from gaffer.phone import MAX_WRONG_GUESSES, PHONE_COOKIE, PIN_DIGITS, PhoneAccess, PhoneListener
 from gaffer.session import COOKIE, protect
+from phone_peer import as_if_from_phone
 
 SECRET = "test-secret-for-this-launch"
 LAN = "192.168.1.20"  # the Mac's Wi-Fi address
@@ -262,6 +267,23 @@ def test_the_mac_shows_a_wifi_code_and_a_tailscale_code_from_the_tailscale_tool(
             assert s.phone.get("/api/session", headers={"host": TAILNET_NAME}).status_code == 400
 
 
+async def test_the_phone_listener_never_takes_the_peer_address_from_a_header():
+    """SPEC-024: the second listener, as started, must not let X-Forwarded-For replace the peer address."""
+
+    async def app(scope, receive, send):
+        pass
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    listener = PhoneListener(app, port, 1.0)
+    await listener.start()
+    try:
+        assert listener.server.config.proxy_headers is False
+    finally:
+        await listener.stop()
+
+
 async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
     """The real second listener: closed at launch, open on a real socket while on, closed again after."""
     with socket.socket() as probe:
@@ -270,7 +292,7 @@ async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
     access = PhoneAccess(port=port, lan_ip=lambda: LAN, tailscale_cli=lambda: fake_tailscale(tmp_path, RUNNING))
     app = create_app(demo=True, data_dir=tmp_path / "data", phone=access)
     guarded = protect(app, SECRET, access)
-    access.bind_listener(guarded, 1.0)
+    access.bind_listener(as_if_from_phone(guarded, PHONE), 1.0)
     name = {"host": TAILNET_NAME}  # a phone names the Tailscale name; here it reaches this machine over loopback
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as web:
@@ -308,9 +330,9 @@ def test_only_connections_from_a_private_network_or_tailscale_get_as_far_as_the_
     """A public address is refused even with the right PIN and a Host the Mac listed: the Host header is
     whatever the sender writes, and the Mac's IPv6 address can be reachable from the internet."""
     pin = studio.switch_on()
-    refused = ("8.8.8.8", "2001:4860::1", "::ffff:8.8.8.8", "100.128.0.1", "172.32.0.1", "192.169.0.1", "fec0::1")
+    refused = ("8.8.8.8", "2001:4860::1", "::ffff:8.8.8.8", "100.128.0.1", "172.32.0.1", "192.169.0.1", "fec0::1")  # and loopback: see the SPEC-024 tests
     allowed = ("10.1.2.3", "172.16.0.9", "192.168.1.77", "169.254.3.4", "100.100.1.1", "::ffff:192.168.1.77",
-               "fe80::1", "fd00::1", "fd7a:115c:a1e0::9", "::1")
+               "fe80::1", "fd00::1", "fd7a:115c:a1e0::9")
     for address in refused:
         far = studio.client_at(address)
         reply = far.post("/api/session", json={"pin": pin})
@@ -326,6 +348,109 @@ def test_only_connections_from_a_private_network_or_tailscale_get_as_far_as_the_
     far.cookies.set(PHONE_COOKIE, token)
     assert far.get("/api/lights").status_code == 403
     assert studio.phone.get("/api/lights").status_code == 200
+
+
+LOOPBACK_PEERS = ("127.0.0.1", "::1", "127.0.0.2", "::ffff:127.0.0.1")  # plain, IPv6, anywhere in 127/8, IPv4-mapped
+FORWARDING_HEADERS = ({"x-forwarded-for": "192.168.1.50"}, {"x-forwarded-host": TAILNET_NAME}, {"forwarded": "for=192.168.1.50"},
+                      {"tailscale-user-login": "phone@example.com"}, {"tailscale-user-name": "Phone"})
+
+
+def test_a_loopback_peer_that_names_the_tailnet_or_the_lan_is_refused_with_or_without_a_cookie(studio):
+    """SPEC-024: `tailscale serve`, `ssh -L` and dev proxies forward from 127.0.0.1 and keep the visitor's Host.
+    Loopback means the Mac window, and only when the Host is 127.0.0.1 or localhost."""
+    pin = studio.switch_on()
+    token = studio.sign_in(pin).cookies[PHONE_COOKIE]
+    for peer in LOOPBACK_PEERS:
+        proxy = TestClient(studio.guarded, base_url=f"http://{LAN}:{PORT}", client=(peer, 50000))
+        proxy.portal = studio.phone.portal
+        for host in (f"{TAILNET_NAME}:{PORT}", TAILNET_NAME, f"{LAN}:{PORT}", f"{TAILNET_IP}:{PORT}", f"[fd7a:115c:a1e0::9]:{PORT}"):
+            where = (peer, host)
+            reply = proxy.get("/api/session", headers={"host": host})  # no cookie
+            assert reply.status_code == 403 and reply.json()["error"] == "network_not_allowed", where
+            assert proxy.post("/api/session", json={"pin": pin}, headers={"host": host, "origin": f"http://{host}"}).status_code == 403, where
+            assert refused_socket(proxy, f"ws://{host}/ws", headers={"host": host}) == 4403, where
+            proxy.cookies.set(PHONE_COOKIE, token)  # a phone's cookie is no use through a proxy either
+            reply = proxy.get("/api/lights", headers={"host": host})
+            assert reply.status_code == 403 and reply.json()["error"] == "network_not_allowed", where
+            proxy.cookies.set(COOKIE, SECRET)  # and neither is the Mac window's
+            assert proxy.get("/api/lights", headers={"host": host}).status_code == 403, where
+            proxy.cookies.clear()
+    # The Mac window is untouched: loopback naming 127.0.0.1 or localhost.
+    for host in (f"127.0.0.1:{PORT}", f"localhost:{PORT}"):
+        assert studio.mac.get("/api/lights", headers={"host": host}).status_code == 200, host
+
+
+def test_a_loopback_request_with_forwarding_headers_is_refused(studio):
+    """SPEC-024: a proxy on this Mac says who it forwards for. A loopback connection that carries X-Forwarded-*,
+    Forwarded or Tailscale-* headers is not the Mac window, whatever Host it names and whatever cookie it holds."""
+    pin = studio.switch_on()
+    token = studio.sign_in(pin).cookies[PHONE_COOKIE]
+    for headers in FORWARDING_HEADERS:
+        for host in (f"{TAILNET_NAME}:{PORT}", f"{LAN}:{PORT}", f"127.0.0.1:{PORT}"):
+            where = (headers, host)
+            for cookies in ({}, {PHONE_COOKIE: token}, {COOKIE: SECRET}):
+                proxy = TestClient(studio.guarded, base_url=f"http://{host}", client=("127.0.0.1", 50000), cookies=cookies)
+                proxy.portal = studio.phone.portal
+                reply = proxy.get("/api/lights", headers=headers)
+                assert reply.status_code == 403 and reply.json()["error"] == "network_not_allowed", (where, cookies)
+                assert refused_socket(proxy, f"ws://{host}/ws", headers=headers) == 4403, (where, cookies)
+    # The same request from a phone's own address is not a loopback request: the PIN decides.
+    phone = studio.client_at(PHONE)
+    assert phone.get("/api/session", headers={"x-forwarded-for": "192.168.1.50"}).json()["error"] == "pin_required"
+
+
+def test_a_proxy_that_sends_no_header_the_gate_knows_still_needs_the_launch_secret(studio):
+    """SPEC-024, the limit of the header check: a proxy on this Mac that sends no forwarding header we list
+    (here X-Real-IP) and rewrites Host to 127.0.0.1 looks like the Mac window. The launch secret cookie is what
+    stops its visitor, and the contract says so."""
+    studio.switch_on()
+    proxy = TestClient(studio.guarded, base_url=f"http://127.0.0.1:{PORT}", client=("127.0.0.1", 50000))
+    proxy.portal = studio.phone.portal
+    headers = {"x-real-ip": "203.0.113.9"}
+    reply = proxy.get("/api/lights", headers=headers)
+    assert reply.status_code == 401 and reply.json()["error"] == "not_signed_in"
+    assert refused_socket(proxy, f"ws://127.0.0.1:{PORT}/ws", headers=headers) == 4401
+
+
+def test_a_listener_for_the_guarded_app_never_takes_the_peer_address_from_a_header():
+    """SPEC-024: uvicorn's default would let X-Forwarded-For replace the 127.0.0.1 peer. Every listener is built by
+    guarded_config, which cannot be asked to turn that back on."""
+    assert guarded_config(object(), log_level="warning", proxy_headers=True).proxy_headers is False
+
+
+def test_the_running_service_does_not_take_a_forwarded_for_header_as_the_peer_address(tmp_path):
+    """SPEC-024, on the real service: uvicorn rewrites the peer address from X-Forwarded-For when the connection is
+    from 127.0.0.1. A proxy on this Mac that sets no such header (`ssh -L`) would let a visitor pick the address the
+    gate sees. The gate must see the real peer, loopback, and refuse."""
+    folder = tmp_path / "bin"
+    folder.mkdir()
+    fake_tailscale(folder, RUNNING)
+    service = subprocess.Popen(
+        [sys.executable, "-I", "-B", "-m", "gaffer", "--demo", "--port", "0", "--session-from-stdin", "--data", str(tmp_path / "data")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        env={"HOME": str(tmp_path), "PATH": f"{folder}:/usr/bin:/bin"}, start_new_session=True,
+    )
+    try:
+        service.stdin.write(SECRET + "\n")
+        service.stdin.flush()
+        line = ""
+        while "GAFFER_SERVICE_READY" not in line:
+            assert service.poll() is None, "the service did not start"
+            line = service.stdout.readline()
+        base = f"http://127.0.0.1:{int(line.split('port=')[1])}"
+        host = {"host": TAILNET_NAME}
+        with httpx.Client(base_url=base, timeout=20) as web:
+            web.cookies.set(COOKIE, SECRET)
+            assert web.post("/api/phone", json={"enabled": True}).status_code == 200
+            assert web.get("/api/phone?wait=1").json()["checking"] is False  # the Tailscale name is in
+            web.cookies.clear()
+            for forged in ({}, {"x-forwarded-for": TAILNET_IP}, {"x-forwarded-for": "fd7a:115c:a1e0::9"}):
+                reply = web.get("/api/session", headers={**host, **forged})
+                assert reply.status_code == 403 and reply.json()["error"] == "network_not_allowed", forged
+    finally:
+        if service.poll() is None:
+            os.killpg(service.pid, signal.SIGKILL)
+            service.wait()
 
 
 def test_a_phone_with_the_pin_cannot_read_the_export_or_the_data_folder(studio):

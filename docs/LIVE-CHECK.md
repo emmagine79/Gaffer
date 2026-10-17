@@ -75,6 +75,8 @@ Open the Mac window and use Add a light. Pick the light by its model name, tap i
 
 Phone set-up: in the Mac window, open Phone access and switch it on. Scan the Same Wi-Fi code with the phone and enter the PIN. For Tailscale, scan the Tailscale code.
 
+If the Tailscale phone gets network_not_allowed, check whether Tailscale runs in userspace mode (SPEC-024).
+
 Actions: **On** is turn the light on. **Dim** is move brightness down and see the light get dimmer. **CCT** is change colour temperature and see the colour change.
 
 Surfaces: **Menu bar** is the bulb icon. **Mac window** is the main window. **Phone, Wi-Fi** is the phone on the same Wi-Fi with the PIN. **Phone, Tailscale** is the phone away from the Wi-Fi.
