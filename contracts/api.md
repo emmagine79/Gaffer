@@ -1,4 +1,4 @@
-# Service API for the Mac shell
+# Mac shell
 
 The Swift shell (`mac/`) and the Python service (`service/`) follow this file.
 Change it first, then change both sides. SPEC-016 wrote it; SPEC-010 (looks) and
@@ -9,15 +9,14 @@ to the card that adds them.
 
 ## Who may call
 
-Same rules as `service/src/gaffer_service/session.py` (SPEC-001):
+Same rules as `service/gaffer/session.py` (SPEC-001):
 
 - The service listens on `127.0.0.1` only.
 - `Host` must be `127.0.0.1` or `localhost`, any port. Anything else gets `400`.
 - Every route needs the cookie `gaffer_session=<secret>`. Without it: `401`
   `{"error":"not_signed_in"}`.
-- This includes the WebSocket upgrade. The cookie and Host checks run before the
-  upgrade is accepted. (`SessionGate` in SPEC-001 lets non-HTTP requests through;
-  the service must close that gap.)
+- This includes the WebSocket upgrade: the cookie and Host checks run before the
+  upgrade is accepted (SPEC-002 added this).
 - The shell made the secret, so it sends the cookie itself. It does not need the
   one-time `/session` link for its own calls. Its web views use that link once.
 

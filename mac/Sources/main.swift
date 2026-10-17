@@ -5,11 +5,6 @@ import WebKit
 /// it, a main window, and global shortcuts. All light work happens in the Python
 /// service; the shell links no Bluetooth framework (contracts/api.md).
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
-    /// Longest look name shown in the menu bar, in characters; longer names end in "…"
-    /// and show in full in the tooltip and the menu. A design choice (the menu bar is
-    /// shared with other apps), open for Captain to change.
-    static let menuBarNameLimit = 24
-
     private var statusItem: NSStatusItem?
     private var popover = NSPopover()
     private var window: NSWindow?
@@ -151,8 +146,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         guard let button = statusItem?.button else { return }
         let name = lookName
         if let name {
-            let shown = name.count > Self.menuBarNameLimit ? String(name.prefix(Self.menuBarNameLimit)) + "…" : name
-            button.title = shown
+            // The full name: macOS clips or hides a status item that doesn't fit the menu bar.
+            button.title = name
             button.imagePosition = .imageLeading
             button.toolTip = "Gaffer: \(name)"
         } else {
