@@ -433,6 +433,7 @@ class ZhiyunDriver(Driver):
             await self._write(st, p.Command.POWER_STATE, p.encode_power(False, op))
             st.sent.on = False
             st.sent.max_mode = False  # switching the light off ends Max Mode
+            st.max_writes += 1  # and a Max Mode read already in flight no longer counts
             return
         force_brightness = False
         if st.sent.on is not True:

@@ -643,7 +643,9 @@ class Hub:
                 if after is None or after == before:
                     continue
                 if after and fixture.state.brightness != 100:
-                    self.set_state(fixture, fixture.state.model_copy(update={"brightness": 100.0}), "light", send=False)
+                    # Sent, so the driver wants 100 too and a reconnect does not dim the light back; the driver
+                    # already counts 100 as sent, so no frame goes out.
+                    self.set_state(fixture, fixture.state.model_copy(update={"brightness": 100.0}), "light")
                 self._log("sync", f"{fixture.light.name} changed on the light: Max Mode {'on' if after else 'off'}")
                 self._toast("sync", f"Picked up a change made on {fixture.light.name}")
                 self._broadcast_lights()

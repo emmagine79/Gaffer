@@ -99,7 +99,12 @@ def _molus(client, ws, wire):
 
 
 def _max_mode_frames(wire):
-    return [w.hex() for w in wire.writes[HANDSHAKE_FRAMES:] if zy.parse_frame(w).command == zy.Command.MAX_MODE]
+    """The Max Mode writes, leaving out the reads the hub sends to notice a press on the light."""
+    return [
+        w.hex()
+        for w in wire.writes[HANDSHAKE_FRAMES:]
+        if zy.parse_frame(w).command == zy.Command.MAX_MODE and zy.parse_frame(w).payload != zy.encode_query()
+    ]
 
 
 def test_light_max_mode_sends_the_1009_frame_for_on_and_for_off(studio):
@@ -205,6 +210,7 @@ def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tm
 
         async def open(self, address, on_notify, on_lost):
             writes = self.writes
+            self.on_lost = on_lost
 
             class AnsweringLink(Link):
                 async def write(self, data):
@@ -213,12 +219,15 @@ def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tm
                     if frame.command == zy.Command.MAX_MODE and frame.payload == bytes.fromhex("03800000"):
                         on_notify(_answer(zy.Command.MAX_MODE, bytes.fromhex("038000") + bytes([unit["max"]]), frame.sequence))
 
-            return AnsweringLink(writes)
+            self.link = AnsweringLink(writes)
+            return self.link
 
     wire = G200()
     app = create_app(demo=True, data_dir=tmp_path)
     app.state.hub.store.update_settings({"sync_interval": 0.05})
-    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(
+        DriverContext(), transport=wire, sleep=_nosleep, backoff_sleep=_nosleep
+    )
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         _until(ws, lambda m: m["type"] == "hello")
         light = _molus(client, ws, wire)
@@ -228,6 +237,15 @@ def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tm
         unit["max"] = True  # Captain holds MODE and CCT on the light
         _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
         assert _light(client, "Zhiyun panel")["state"]["brightness"] == 100
+
+        # The link drops and comes back: Gaffer re-sends what it wants, which must be 100, not the old 26.
+        before = len(wire.writes)
+        wire.link.connected = False
+        client.portal.call(wire.on_lost)  # on the service's own event loop, as bleak calls it
+        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS for w in wire.writes[before:]),
+              "the state to be sent again after the link came back")
+        resent = [zy.parse_frame(w) for w in wire.writes[before:] if zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS]
+        assert zy.decode_brightness_response(resent[-1].payload) == 100.0
 
         unit["max"] = False  # and switches it off again on the light
         _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is False, "Max Mode to show as off")
