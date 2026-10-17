@@ -87,24 +87,24 @@ def test_a_godox_light_db_gives_the_same_lights(client, tmp_path):
 
 
 def _do_in_gaffer(client, key, fill):
-    """Rename one light, pick its model, dim it and start an effect on the other. Every command must be acked."""
-    commands = [
-        {"type": "lights.rename", "light": key, "name": "Key"},
-        {"type": "lights.model", "light": key, "radio_id": "008F"},
-        {"type": "engine.start", "light": fill, "effect": "rainbow", "params": {"period": 60}},
-        {"type": "set.many", "anchor": key, "lights": [key], "brightness": 33},
-    ]
+    """Rename one light, pick its model, dim it and start an effect on the other.
+
+    Only set.many answers with an ack; the others stay silent unless refused. Commands are handled in order,
+    so a refusal of an earlier one arrives before set.many's ack, and fails the test here.
+    """
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()
-        for rid, command in enumerate(commands, start=100):
-            ws.send_json({**command, "rid": rid})
-            for _ in range(400):
-                reply = ws.receive_json()
-                if reply.get("rid") == rid:
-                    assert reply["type"] == "ack", f"{command['type']} was refused: {reply}"
-                    break
-            else:
-                raise AssertionError(f"no reply to {command['type']}")
+        ws.send_json({"type": "lights.rename", "light": key, "name": "Key"})
+        ws.send_json({"type": "lights.model", "light": key, "radio_id": "008F"})
+        ws.send_json({"type": "engine.start", "light": fill, "effect": "rainbow", "params": {"period": 60}})
+        ws.send_json({"type": "set.many", "rid": 9, "anchor": key, "lights": [key], "brightness": 33})
+        for _ in range(400):
+            message = ws.receive_json()
+            assert message.get("type") != "error", f"a command was refused: {message}"
+            if message.get("rid") == 9:
+                assert message["type"] == "ack"
+                return
+    raise AssertionError("no reply")
 
 
 def test_importing_the_same_export_again_keeps_a_lights_name_model_and_live_state(client):
