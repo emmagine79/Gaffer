@@ -6,6 +6,7 @@ the wall clock. The app runs in demo mode (no Bluetooth) and is reached as the M
 
 from __future__ import annotations
 
+import dataclasses
 import threading
 import time
 from datetime import datetime
@@ -82,15 +83,15 @@ def _delete_look(client, look_id):
             pass
 
 
-def _error_toast_when_the_clock_reaches(client, when):
-    """Move the clock with a window connected, and return the error toast that window is shown (fails after 5 s)."""
+def _toast_when_the_clock_reaches(client, when, kind="error"):
+    """Move the clock with a window connected, and return the toast of that kind it is shown (fails after 5 s)."""
     toasts: list[str] = []
 
     def read(ws):
         try:
             while True:
                 message = ws.receive_json()
-                if message.get("type") == "toast" and message.get("kind") == "error":
+                if message.get("type") == "toast" and message.get("kind") == kind:
                     toasts.append(message["text"])
                     return
         except Exception:  # noqa: BLE001 - the socket closing at the end of the test ends the reader
@@ -150,7 +151,8 @@ def test_a_schedule_that_is_not_valid_is_refused_and_stores_nothing(studio):
     for bad in ({**good, "name": " "}, {**good, "at": "25:00"}, {**good, "at": "9:5"}, {**good, "days": []},
                 {**good, "days": [7]}, {**good, "days": [0, 0]}, {**good, "action": "sunrise"},
                 {**good, "action": "look", "target": "no-such-look"}, {**good, "action": "look"},
-                {**good, "id": "constructor"}, {**good, "name": "x" * 81}, {**good, "at": "09:3０"}):
+                {**good, "id": "constructor"}, {**good, "name": "x" * 81}, {**good, "at": "09:3０"},
+                {**good, "action": "look", "target": "not a look id!", "enabled": False}):
         reply = _save_schedule(studio, bad)
         assert reply["type"] == "error", bad
         assert not any(p in reply["text"] for p in ("/Users/", "/private/", "/var/")), reply
@@ -177,7 +179,7 @@ def test_a_schedule_whose_look_was_deleted_says_it_did_not_run(studio):
     _save_schedule(studio, {"name": "Moody at night", "at": "22:00", "days": [0], "action": "look", "target": moody})
     _delete_look(studio, moody)
 
-    assert "Moody at night" in _error_toast_when_the_clock_reaches(studio, MONDAY_2200)
+    assert "Moody at night" in _toast_when_the_clock_reaches(studio, MONDAY_2200)
     assert "Moody at night" in _failed(studio.hub)[0]["text"]
     assert _ran(studio.hub) == []
 
@@ -189,6 +191,55 @@ def test_an_all_off_schedule_that_fails_says_so_and_does_not_claim_it_ran(studio
     studio.hub.power_all = broken  # the lights cannot be reached
     _save_schedule(studio, {"name": "Lights out", "at": "22:00", "days": [0], "action": "off"})
 
-    assert "Lights out" in _error_toast_when_the_clock_reaches(studio, MONDAY_2200)
+    assert "Lights out" in _toast_when_the_clock_reaches(studio, MONDAY_2200)
     assert "Lights out" in _failed(studio.hub)[0]["text"]
     assert _ran(studio.hub) == []
+
+
+def _out_of_reach(studio, name):
+    """Put one demo light on another mesh, as if it were switched off at the wall."""
+    away = studio.hub.fixtures[_lights(studio)[name]["id"]]
+    away.light = dataclasses.replace(away.light, network="0000ffff")
+    return away
+
+
+def test_a_look_schedule_that_misses_a_light_names_it_and_is_not_a_clean_run(studio):
+    lights = _lights(studio)
+    moody = studio.post("/api/looks", json={"name": "Moody", "fade_seconds": 0, "lights": {
+        lights["Key light"]["id"]: {"power": True, "brightness": 17.0},
+        lights["Backlight"]["id"]: {"power": True, "brightness": 17.0}}}).json()["look"]["id"]
+    _save_schedule(studio, {"name": "Moody at night", "at": "22:00", "days": [0], "action": "look", "target": moody})
+    _out_of_reach(studio, "Backlight")
+
+    text = _toast_when_the_clock_reaches(studio, MONDAY_2200, kind="warn")
+    assert text == "Moody at night ran, but Backlight could not be reached and was not changed"
+    assert _lights(studio)["Key light"]["state"]["brightness"] == 17.0
+    assert [e["text"] for e in _ran(studio.hub)] == ["ran Moody at night, but Backlight could not be reached and was not changed"]
+    assert _failed(studio.hub) == []
+
+
+def test_an_all_off_schedule_that_misses_a_lit_light_names_it_and_is_not_a_clean_run(studio):
+    assert _lights(studio)["Backlight"]["state"]["power"]
+    _out_of_reach(studio, "Backlight")
+    _save_schedule(studio, {"name": "Lights out", "at": "22:00", "days": [0], "action": "off"})
+
+    text = _toast_when_the_clock_reaches(studio, MONDAY_2200, kind="warn")
+    assert text == "Lights out ran, but Backlight could not be reached and is still on"
+    assert [e["text"] for e in _ran(studio.hub)] == ["ran Lights out, but Backlight could not be reached and is still on"]
+
+
+def test_a_fault_while_a_look_runs_is_not_called_a_bad_schedule(studio, monkeypatch):
+    from gaffer import looks
+
+    def fault(hub, look_id):
+        raise RuntimeError("driver fell over at /Users/someone/secret")
+
+    key = _lights(studio)["Key light"]
+    moody = studio.post("/api/looks", json={"name": "Moody", "fade_seconds": 0, "lights": {key["id"]: {"power": True}}}).json()["look"]["id"]
+    _save_schedule(studio, {"name": "Moody at night", "at": "22:00", "days": [0], "action": "look", "target": moody})
+    monkeypatch.setattr(looks, "apply", fault)
+
+    text = _toast_when_the_clock_reaches(studio, MONDAY_2200)
+    assert "could not finish" in text and "not a schedule" not in text and "/Users/" not in text
+    entry = _failed(studio.hub)[0]["text"]
+    assert "RuntimeError" in entry and "/Users/" not in entry

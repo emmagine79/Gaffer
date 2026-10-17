@@ -71,6 +71,8 @@ def checked(hub: Hub, raw: Any) -> dict[str, Any]:
         target = raw.get("target")
         if not isinstance(target, str) or not target:
             raise CommandError("Choose the look to apply.")
+        if len(target) > MAX_NAME or not _ID.fullmatch(target) or target in _RESERVED_IDS:
+            raise CommandError("A look id uses letters, numbers, - and _ only.")
         if enabled:  # a paused schedule can be saved after its look is deleted; turning it on again needs the look
             find_look(hub, target)  # raises "There is no look with that id."
         item["target"] = target

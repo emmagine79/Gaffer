@@ -55,6 +55,11 @@ from .transport import DemoLink
 
 logger = logging.getLogger(__name__)
 
+
+def _joined(names: list[str]) -> str:
+    """'A', 'A and B', 'A, B and C'."""
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
 RESPONSE_PREFIX = bytes([0xF1, 0x11, 0x02])
 #: After the app sends a command the light's records lag it briefly; readings
 #: inside this window are treated as echoes, never as outside changes.
@@ -623,7 +628,7 @@ class Hub:
 
     def fire_schedule(self, schedule: dict[str, Any]) -> None:
         """Run one due schedule: apply its look, or turn every light off (schedules.py checks them on save).
-        A schedule that cannot run is logged and toasted as an error, never dropped quietly."""
+        A schedule that cannot run, or reaches only some of its lights, says so in the log and a toast."""
         from . import looks
         from .commands import CommandError
 
@@ -632,38 +637,54 @@ class Hub:
         if action == "off":
             self._spawn(self._run_all_off(name))
             return
+        if action != "look":
+            self._schedule_failed(name, "its action is not one Gaffer knows")
+            return
         try:
-            if action != "look":
-                raise ValueError(f"unknown action {action!r}")
-            looks.apply(self, str(schedule.get("target") or ""))
+            applied = looks.apply(self, str(schedule.get("target") or ""))
         except CommandError as err:
             self._schedule_failed(name, str(err))
             return
-        except Exception:  # noqa: BLE001 - a bad stored entry must be reported, and the others must still run
-            logger.exception("schedule %s failed", name)
-            self._schedule_failed(name, "it is not a schedule Gaffer can run")
+        except Exception as err:  # noqa: BLE001 - a runtime fault is reported, and the other schedules still run
+            logger.exception("schedule %s could not finish", name)
+            self._schedule_stopped(name, err)
             return
-        self._schedule_ran(name)
+        missed = self._names_of(applied.get("skipped", []))
+        self._schedule_ran(name, f"{_joined(missed)} could not be reached and {'was' if len(missed) == 1 else 'were'} not changed" if missed else None)
 
     async def _run_all_off(self, name: str) -> None:
-        """The all-off schedule: the success log and toast come only after every light has been told."""
+        """The all-off schedule: the log and toast come only after every light has been told."""
         from . import looks
 
         try:
-            await looks.all_off(self)
-        except Exception:  # noqa: BLE001 - reported to the user below; the hub keeps running
-            logger.exception("schedule %s failed", name)
-            self._schedule_failed(name, "the lights did not all turn off")
+            unreached = await looks.all_off(self)
+        except Exception as err:  # noqa: BLE001 - reported to the user below; the hub keeps running
+            logger.exception("schedule %s could not finish", name)
+            self._schedule_stopped(name, err)
             return
-        self._schedule_ran(name)
+        still_on = self._names_of([i for i in unreached if i in self.fixtures and self.fixtures[i].state.power])
+        self._schedule_ran(name, f"{_joined(still_on)} could not be reached and {'is' if len(still_on) == 1 else 'are'} still on" if still_on else None)
 
-    def _schedule_ran(self, name: str) -> None:
+    def _names_of(self, light_ids: list[str]) -> list[str]:
+        return [self.fixtures[i].light.name if i in self.fixtures else "a light that is no longer saved" for i in light_ids]
+
+    def _schedule_ran(self, name: str, problem: str | None = None) -> None:
+        """A clean run is an info toast; a run that missed lights is a warning that names them."""
+        if problem:
+            self._log("schedule", f"ran {name}, but {problem}")
+            self._toast("warn", f"{name} ran, but {problem}")
+            return
         self._log("schedule", f"ran {name}")
         self._toast("info", f"Schedule: {name}")
 
     def _schedule_failed(self, name: str, why: str) -> None:
         self._log("error", f"schedule {name} did not run: {why}")
         self._toast("error", f"Schedule {name} did not run: {why}")
+
+    def _schedule_stopped(self, name: str, err: Exception) -> None:
+        """A fault while running: some lights may have moved. The reason is the error's type, never its text (paths)."""
+        self._log("error", f"schedule {name} could not finish ({type(err).__name__}); some lights may have changed")
+        self._toast("error", f"Schedule {name} could not finish. Some lights may have changed.")
 
     # -- state --------------------------------------------------------------------------------
 
