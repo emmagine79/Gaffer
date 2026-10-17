@@ -35,7 +35,7 @@ from .drivers.demo import DemoDriver
 from .drivers.godox import GodoxDriver
 from .effects import REGISTRY
 from .effects.profile import effect_profile
-from .fixture import Fixture, gel_key
+from .fixture import BeforeMax, Fixture, gel_key
 from .godox_import import ImportProblem, light_plans, mesh_import_from_message
 from .lights import LightLibrary, SavedLight
 from .link import LinkManager, Member, SequenceVault
@@ -642,7 +642,10 @@ class Hub:
                     continue
                 if after is None or after == before:
                     continue
-                if after and fixture.state is asked:  # never over a newer setting
+                if after and fixture.state is not asked:
+                    continue  # a newer setting wins; the light is asked again next time
+                fixture.driver.note_max_mode(fixture.light, after)  # the reading is taken: the driver counts it
+                if after:
                     self._max_mode_came_on(fixture, "light")
                 self._log("sync", f"{fixture.light.name} changed on the light: Max Mode {'on' if after else 'off'}")
                 self._toast("sync", f"Picked up a change made on {fixture.light.name}")
@@ -739,11 +742,17 @@ class Hub:
 
     def set_state(self, fixture: Fixture, state: LightState, source: str, *, send: bool = True,
                   mirror: bool = True) -> None:
+        if fixture.before_max is not None and state.cct.kelvin != fixture.state.cct.kelvin and fixture.max_mode:
+            fixture.before_max = fixture.before_max._replace(kelvin_changed=True)  # set while Max Mode is on
         fixture.state = state
         fixture.state_source = source
         fixture.dirty = True
         if send and self.on_network(fixture):
             fixture.driver.apply(fixture.light, state)
+            if fixture.driver is not self.godox and source != "light":
+                # A Godox light notes this when the frame goes out (after_send). Any other brand's does here,
+                # so the reads wait SETTLE_SECONDS after a control for these lights too.
+                fixture.last_control_at = time.monotonic()
         self._save_due = self._save_due or time.monotonic() + SAVE_AFTER_SECONDS
         if mirror:
             self._mirror_from(fixture)
@@ -998,12 +1007,11 @@ class Hub:
             if fixture.state is asked:  # never over a level set while the write was on its way
                 self._max_mode_came_on(fixture, "app", keep_kelvin=True)
             else:
-                kelvin = fixture.state.cct.kelvin
-                fixture.before_max = (fixture.state.brightness, kelvin, kelvin)  # the newest level
+                fixture.before_max = BeforeMax(fixture.state.brightness, fixture.state.cct.kelvin)  # the newest level
         elif not on and was_on and fixture.before_max is not None:
-            (brightness, kelvin, shown), fixture.before_max = fixture.before_max, None
+            (brightness, kelvin, kelvin_changed), fixture.before_max = fixture.before_max, None
             state = fixture.state
-            if state.cct.kelvin != shown:
+            if kelvin_changed:
                 kelvin = state.cct.kelvin  # a colour temperature set while Max Mode was on stays
             self.set_state(fixture, state.model_copy(
                 update={"brightness": brightness, "cct": state.cct.model_copy(update={"kelvin": kelvin})}), "app")
@@ -1020,12 +1028,10 @@ class Hub:
         """
         state = fixture.state
         update: dict[str, Any] = {"brightness": 100.0}
-        shown = state.cct.kelvin
         if fixture.caps.max_mode_kelvin is not None and not keep_kelvin:
-            shown = fixture.caps.max_mode_kelvin
-            update["cct"] = state.cct.model_copy(update={"kelvin": shown})
-        fixture.before_max = (state.brightness, state.cct.kelvin, shown)
+            update["cct"] = state.cct.model_copy(update={"kelvin": fixture.caps.max_mode_kelvin})
         self.set_state(fixture, state.model_copy(update=update), source)
+        fixture.before_max = BeforeMax(state.brightness, state.cct.kelvin)  # after: the lift is not a change
 
     def demo_hold(self, light_id: str, held: bool) -> None:
         """Demo only: pretend an official app takes a light's connection, or lets go of it."""

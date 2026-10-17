@@ -266,8 +266,9 @@ class ZhiyunDriver(Driver):
     async def read_max_mode(self, light: Any) -> bool | None:
         """Ask a linked light whether Max Mode is on. None when it is not linked or did not answer.
 
-        The G200 never reports a press of its own buttons, so the hub asks (capture, 18 Oct 2026). Max
-        Mode switched on at the light lifts it to full brightness, so that counts as sent too.
+        The G200 never reports a press of its own buttons, so the hub asks (capture, 18 Oct 2026). The answer
+        changes nothing here: the hub may leave it (a newer setting), so it calls ``note_max_mode`` when it
+        takes it.
         """
         st = self._lights.get(light.id)
         if st is None or st.model.get("max_mode") is not True:
@@ -292,10 +293,17 @@ class ZhiyunDriver(Driver):
                 st.max_reply = None
         if writes != st.max_writes:
             return None  # Gaffer switched it meanwhile; this answer may predate that
+        return on  # nothing is recorded until the hub takes it: note_max_mode
+
+    def note_max_mode(self, light: Any, on: bool) -> None:
+        """The hub took a ``read_max_mode`` answer. Max Mode switched on at the light lifts it to full
+        brightness and its Max Mode kelvin, so that counts as sent too."""
+        st = self._lights.get(light.id)
+        if st is None:
+            return
         if on and not st.sent.max_mode:
             self._max_mode_came_on(st)
         st.sent.max_mode = on
-        return on
 
     @staticmethod
     def _max_mode_came_on(st: _Light) -> None:

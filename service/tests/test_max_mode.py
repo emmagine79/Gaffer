@@ -253,45 +253,6 @@ def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tm
         _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is False, "Max Mode to show as off")
 
 
-def test_a_slider_move_while_the_light_answers_is_not_overwritten_by_max_mode(tmp_path, monkeypatch):
-    """Review round 2: the light's 'Max on' answer must not put 100% over a level set while it was asked."""
-    from gaffer import hub as hub_module
-
-    monkeypatch.setattr(demo, "PACE", 0.05)
-    monkeypatch.setattr(hub_module, "SETTLE_SECONDS", 0.0)
-    held: list = []
-
-    class SlowG200(Wire):
-        """Says Max Mode is on, but only when the test lets the answer through."""
-
-        async def open(self, address, on_notify, on_lost):
-            writes = self.writes
-
-            class HoldingLink(Link):
-                async def write(self, data):
-                    writes.append(bytes(data))
-                    frame = zy.parse_frame(bytes(data))
-                    if frame.command == zy.Command.MAX_MODE and frame.payload == bytes.fromhex("03800000"):
-                        held.append(lambda s=frame.sequence: on_notify(_answer(zy.Command.MAX_MODE, bytes.fromhex("03800001"), s)))
-
-            return HoldingLink(writes)
-
-    wire = SlowG200()
-    app = create_app(demo=True, data_dir=tmp_path)
-    app.state.hub.store.update_settings({"sync_interval": 0.05})
-    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
-    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
-        _until(ws, lambda m: m["type"] == "hello")
-        light = _molus(client, ws, wire)
-        held.clear()  # the handshake's own Max Mode query; nobody waits for its answer
-        _wait(lambda: held, "Gaffer to ask the light about Max Mode")
-        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 40}})
-        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 40, "the slider at 40%")
-        client.portal.call(lambda: [answer() for answer in list(held)])  # the light answers late: Max on
-        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
-        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 40
-
-
 def test_max_on_in_gaffer_shows_full_power_and_max_off_goes_back_to_the_earlier_level(studio):
     """Captain, 18 Oct: at 33% he switched Max on in Gaffer. The G200 went to 100% by itself and stayed
     there after Max off, while Gaffer showed 33% throughout. He chose: Max off goes back to 33%."""
@@ -492,3 +453,133 @@ def test_a_fast_mix_of_controls_sends_the_g200_one_command_at_a_time(tmp_path, m
                           and int.from_bytes(zy.parse_frame(w).payload[3:5], "little") == 3300 for w in wire.writes),
               "the last colour temperature to reach the light", seconds=15)
         assert in_flight["most"] == 1, f"{in_flight['most']} commands were sent before the light answered"
+
+
+# -- SPEC-026: the races review round 3 left open --------------------------------------------------
+
+
+def _g200(unit, held=None):
+    """A G200 fake that answers Max Mode reads from ``unit["max"]``, and takes a Max Mode write from Gaffer
+    into it. With ``held`` (a list) the answers wait there, as callables, for the test to let them through."""
+
+    class G200(Wire):
+        async def open(self, address, on_notify, on_lost):
+            writes = self.writes
+
+            class AnsweringLink(Link):
+                async def write(self, data):
+                    writes.append(bytes(data))
+                    frame = zy.parse_frame(bytes(data))
+                    if frame.command == zy.Command.MAX_MODE and frame.payload == zy.encode_query():
+                        def answer(s=frame.sequence):
+                            on_notify(_answer(zy.Command.MAX_MODE, bytes.fromhex("038000") + bytes([unit["max"]]), s))
+
+                        answer() if held is None else held.append(answer)
+                    elif frame.command == zy.Command.MAX_MODE:
+                        unit["max"] = frame.payload[-1] == 1  # a Max Mode write from Gaffer
+
+            return AnsweringLink(writes)
+
+    return G200()
+
+
+def _g200_studio(tmp_path, monkeypatch, wire, *, settle=0.0):
+    from gaffer import hub as hub_module
+
+    monkeypatch.setattr(demo, "PACE", 0.05)
+    monkeypatch.setattr(hub_module, "SETTLE_SECONDS", settle)
+    app = create_app(demo=True, data_dir=tmp_path)
+    app.state.hub.store.update_settings({"sync_interval": 0.05})
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
+    return app
+
+
+def _ask_seen(ws, message, rid, seen):
+    ws.send_json({**message, "rid": rid})
+    return _until(ws, lambda m: seen.append(m) or m.get("rid") == rid)
+
+
+def test_a_kelvin_set_during_max_that_equals_the_shown_one_still_survives_max_off(tmp_path, monkeypatch):
+    """Review round 3: Max pressed on the light shows 4300 K. Gaffer set 3200 K and then 4300 K again. That is
+    a colour temperature set during Max, so Max off keeps 4300 K and does not put the earlier 5700 K back."""
+    unit = {"max": False}
+    wire = _g200(unit)
+    app = _g200_studio(tmp_path, monkeypatch, wire)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 51, "cct": {"kelvin": 5700}}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 5700, "Gaffer at 5700 K")
+        unit["max"] = True  # Max pressed on the light
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 4300, "the light's 4300 K")
+        for kelvin in (3200, 4300):
+            ws.send_json({"type": "set", "light": light, "patch": {"cct": {"kelvin": kelvin}}})
+            _wait(lambda k=kelvin: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == k, f"Gaffer at {kelvin} K")
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 1)["type"] == "ack"
+        state = _light(client, "Zhiyun panel")["state"]
+        assert (state["brightness"], state["cct"]["kelvin"]) == (51, 4300)
+
+
+def test_a_pickup_the_hub_skipped_is_not_announced_and_is_tried_again(tmp_path, monkeypatch):
+    """Review rounds 2 and 3: the light says Max is on while a slider move is on its way, so the hub leaves
+    the 40% alone (it is never overwritten by Max Mode). It must not say 'Picked up a change' or count Max
+    as on; the next read picks it up properly."""
+    unit, held, seen = {"max": False}, [], []
+    wire = _g200(unit, held)
+    app = _g200_studio(tmp_path, monkeypatch, wire)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        held.clear()  # the handshake's own query; nobody waits for its answer
+        _wait(lambda: held, "Gaffer to ask the light about Max Mode")
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 40}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 40, "the slider at 40%")
+        unit["max"] = True
+        asked = len(held)
+        client.portal.call(lambda: [answer() for answer in list(held)])  # the late answer: Max on
+        _wait(lambda: len(held) > asked, "the hub to ask again after skipping the pickup")
+        _ask_seen(ws, {"type": "round.trip"}, 1, seen)  # an answered command: everything sent before it has been read
+        assert not [m for m in seen if m["type"] == "toast"], "the hub announced a pickup it skipped"
+        assert _light(client, "Zhiyun panel")["max_mode"] is False
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 40
+
+        client.portal.call(lambda: [answer() for answer in list(held)])  # asked again, nothing moved: accepted
+        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 100
+        _until(ws, lambda m: m["type"] == "toast" and "Picked up" in m["text"])
+
+
+def test_a_zhiyun_light_is_not_read_while_the_settle_time_after_a_control_has_not_passed(tmp_path, monkeypatch):
+    """Review round 3: Godox lights are not read for SETTLE_SECONDS after Gaffer commands them. A G200 was
+    asked about Max Mode straight after a slider move. The clock is a fake one, so no real wait decides it."""
+    from gaffer import hub as hub_module
+
+    class Clock:
+        now = 1000.0
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        def monotonic(self):
+            return Clock.now
+
+    wire = _g200({"max": False})
+    app = _g200_studio(tmp_path, monkeypatch, wire, settle=hub_module.SETTLE_SECONDS)
+    monkeypatch.setattr(hub_module, "time", Clock())
+
+    def reads():
+        return sum(1 for w in wire.writes if zy.parse_frame(w).command == zy.Command.MAX_MODE
+                   and zy.parse_frame(w).payload == zy.encode_query())
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        _wait(lambda: reads() >= 2, "the hub to be reading the light")
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 60}})
+        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS for w in wire.writes[-3:]), "60% sent")
+        time.sleep(0.3)  # several read intervals (0.05 s) to let any read already on its way finish
+        settled = reads()
+        time.sleep(0.3)
+        assert reads() == settled, "the light was read inside the settle time after a control"
+        Clock.now += 10  # the settle time passes
+        _wait(lambda: reads() > settled, "reads to start again once the settle time has passed")
