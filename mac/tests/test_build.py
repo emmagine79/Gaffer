@@ -33,6 +33,8 @@ def sh(*cmd, cwd=None, env=None, check=True):
 
 
 def clone_head(base: Path, name: str) -> Path:
+    # Known limit: `git diff HEAD` does not carry untracked files, so a brand-new file that has not
+    # been `git add`ed is missing from the clone. A normal run on a clean checkout has none.
     dest = base / name / "gaffer checkout"
     dest.parent.mkdir(parents=True)
     sha = sh("git", "rev-parse", "HEAD", cwd=ROOT).stdout.strip()
@@ -211,8 +213,41 @@ def test_a_signing_identity_that_is_half_made_is_never_trashed_or_replaced(tmp_p
     assert keychain.read_bytes() == keychain_bytes
 
 
+def test_an_existing_keychain_without_the_identity_is_never_trashed_or_replaced(tmp_path):
+    """A keychain that can't give up the identity (for instance it came back locked, or lost the key) must
+    stop the build, not be replaced: a new certificate brings the Bluetooth prompt back."""
+    assert sign_app(tmp_path, "--ensure-identity").returncode == 0
+    build_home = tmp_path / "build home"
+    keychain, passfile = build_home / "signing.keychain-db", build_home / "signing.keychain.pass"
+    parked = tmp_path / "parked"
+    parked.mkdir()
+    keychain.rename(parked / "real.keychain-db")
+    sh("security", "create-keychain", "-p", passfile.read_text(), keychain)  # unlocks with the password, holds no identity
+    empty_bytes = keychain.read_bytes()
+
+    done = sign_app(tmp_path, "--ensure-identity")
+    assert done.returncode != 0 and "Nothing was changed" in done.stderr
+    assert keychain.read_bytes() == empty_bytes
+    assert passfile.exists()
+    assert not (tmp_path / "home" / ".Trash").exists()
+
+
+def test_a_build_that_fails_after_claiming_the_password_file_gives_it_back(tmp_path):
+    """The password file is written before the keychain is put in place. If the keychain can't be put in
+    place (here something that is not a file is in the way), the claim is undone, so the next build is not stuck."""
+    build_home = tmp_path / "build home"
+    build_home.mkdir()
+    os.mkfifo(build_home / "signing.keychain-db")  # exists, but is not a keychain file, and mv -n will not replace it
+    done = sign_app(tmp_path, "--ensure-identity")
+    assert done.returncode != 0
+    assert not (build_home / "signing.keychain.pass").exists()
+
+    (build_home / "signing.keychain-db").rename(tmp_path / "removed")
+    assert sign_app(tmp_path, "--ensure-identity").returncode == 0  # nothing was left in the way
+
+
 def test_a_file_that_will_not_sign_is_named_in_the_error(tmp_path):
-    """A Mach-O file whose load commands are broken makes codesign fail; the build says which file and why."""
+    """A Mach-O file whose load commands are broken makes codesign fail; the build stops and names the file."""
     app = tmp_path / "Gaffer.app"
     resources = app / "Contents" / "Resources"
     resources.mkdir(parents=True)
@@ -221,7 +256,7 @@ def test_a_file_that_will_not_sign_is_named_in_the_error(tmp_path):
     (resources / "broken.dylib").write_bytes(header + struct.pack("<II", 0x19, 0) + b"\0" * 64)
     done = sign_app(tmp_path, app, GAFFER_SIGN="adhoc")
     assert done.returncode != 0
-    assert "broken.dylib" in done.stderr and "unrecognized, invalid, or unsuitable" in done.stderr
+    assert "broken.dylib" in done.stderr  # codesign's own wording is not checked: it changes with macOS
 
 
 def licences_run(tmp_path: Path, package_files: dict[str, str], metadata_extra: str = ""):

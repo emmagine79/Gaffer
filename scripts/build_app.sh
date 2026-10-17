@@ -67,9 +67,15 @@ to_trash() {  # move a path to the Trash with a unique name
     mv "$path" "$HOME/.Trash/$(basename "$path")-$(date +%Y%m%d-%H%M%S)-$$"
 }
 
-# The work folder holds a full copy of Python. Whatever stops the build, move it to the Trash.
-# On success the app and zip have already left it.
-trap 'to_trash "$WORK" || true' EXIT
+# The work folder holds a full copy of Python. If the build stops, move it to the Trash (the
+# exit status is kept). A good build has already moved the app and zip out; the few small
+# leftovers stay in TMPDIR, which macOS clears.
+cleanup_after_failure() {
+    local status=$?
+    [[ "$status" == 0 ]] || to_trash "$WORK" || true
+    return "$status"
+}
+trap cleanup_after_failure EXIT
 
 command -v uv >/dev/null || { echo "uv is needed: https://docs.astral.sh/uv/" >&2; exit 1; }
 command -v npm >/dev/null || { echo "node and npm are needed to build web/: https://nodejs.org/" >&2; exit 1; }

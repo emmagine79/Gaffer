@@ -50,6 +50,15 @@ to_trash() {  # move a path to the Trash with a unique name; nothing is deleted
     mv "$1" "$HOME/.Trash/$(basename "$1")-$(date +%Y%m%d-%H%M%S)-$$"
 }
 
+CLAIMED=0
+abandon_claim() {  # move the password file this run wrote to the Trash, if no keychain went with it
+    if [[ "$CLAIMED" == 1 ]]; then
+        CLAIMED=0
+        to_trash "$PASSFILE"
+        to_trash "$NEW_KEYCHAIN"
+    fi
+}
+
 password_file_in_the_way() {
     echo "sign_app: $PASSFILE exists but $KEYCHAIN does not. Another build may be making the signing identity right now: run the build again in a moment. If this message stays, an earlier build stopped half-way: move $PASSFILE to the Trash and run the build again. Nothing was trashed or replaced." >&2
 }
@@ -79,33 +88,49 @@ make_identity() {
     security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$tmp" >/dev/null || return 1
     # set -C makes the write fail if the file exists, so only one build can claim the password file.
     if ! (set -C; umask 077; printf '%s' "$pass" > "$PASSFILE") 2>/dev/null; then
+        if [[ -f "$KEYCHAIN" ]]; then   # another build published its identity while this one was working: use that
+            to_trash "$tmp"
+            return 0
+        fi
         password_file_in_the_way
         return 1
     fi
+    # The password file is ours until the keychain is published. If anything stops this build
+    # before then (a failure, Ctrl-C), give the claim back so the next build is not stuck.
+    CLAIMED=1
+    trap abandon_claim EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     if ! mv -n "$tmp" "$KEYCHAIN" || [[ -e "$tmp" ]]; then
         echo "sign_app: could not put the new keychain at $KEYCHAIN" >&2
+        abandon_claim
         return 1
     fi
+    CLAIMED=0
+    trap - EXIT INT TERM
 }
 
 use_identity() {  # sets SIGN_ARGS and MODE; returns 1 when there is no usable identity
+    # An existing keychain is never trashed or replaced: a new certificate changes the requirement
+    # and macOS asks for Bluetooth again. If it can't be used, say why and stop.
     if [[ -f "$KEYCHAIN" && ! -f "$PASSFILE" ]]; then
         # A keychain is only ever published after its password file, so the file is missing
-        # because someone removed it. Do not trash the identity: that changes the certificate
-        # and macOS asks for Bluetooth again. Stop and let a person decide.
+        # because someone removed it.
         echo "sign_app: $KEYCHAIN has no password file ($PASSFILE), so Gaffer's signing identity can't be unlocked. Nothing was changed. Put the password file back. If it is lost for good, move the keychain to the Trash by hand and run the build again: that makes a NEW identity, and macOS will ask for Bluetooth again." >&2
         return 1
     fi
-    if [[ -f "$KEYCHAIN" && -z "$(identity_hash)" ]]; then
-        # The identity is not in it: it can't be used, so make a new one.
-        to_trash "$KEYCHAIN"
-        to_trash "$PASSFILE"
-    fi
     [[ -f "$KEYCHAIN" ]] || make_identity || { to_trash "$NEW_KEYCHAIN"; return 1; }
+    [[ -f "$PASSFILE" ]] || return 1
+    security unlock-keychain -p "$(cat "$PASSFILE")" "$KEYCHAIN" || {
+        echo "sign_app: could not unlock $KEYCHAIN with $PASSFILE. Nothing was changed. If the password file is the wrong one, put the right one back; if the keychain is lost for good, move both to the Trash by hand and run the build again (a NEW identity: macOS will ask for Bluetooth again)." >&2
+        return 1
+    }
     local hash
     hash="$(identity_hash)"
-    [[ -n "$hash" && -f "$PASSFILE" ]] || return 1
-    security unlock-keychain -p "$(cat "$PASSFILE")" "$KEYCHAIN" || return 1
+    if [[ -z "$hash" ]]; then
+        echo "sign_app: $KEYCHAIN unlocked, but it holds no \"$IDENTITY_NAME\" identity. Nothing was changed. If it is lost for good, move the keychain and its password file to the Trash by hand and run the build again (a NEW identity: macOS will ask for Bluetooth again)." >&2
+        return 1
+    fi
     SIGN_ARGS=(--sign "$hash" --keychain "$KEYCHAIN" --timestamp=none)
     MODE="identity $hash"
 }
