@@ -1,9 +1,11 @@
 import { Link2, Plus, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Key, Panel, Toggle } from '../../components/Controls'
-import type { Group, SyncProp } from '../../lib/types'
+import { emission } from '../../lib/color'
+import type { Group, LightView, SyncProp } from '../../lib/types'
 import { useStudio } from '../../state/store'
-import { LightBadge } from '../../app/LightSwitcher'
+import { LightGlyph, formOf } from '../../visuals/LightGlyph'
+import './mesh.css'
 
 const PROPS: { id: SyncProp; name: string; hint: string }[] = [
   { id: 'power', name: 'On / off', hint: 'Switch together' },
@@ -99,4 +101,10 @@ export function Groups() {
       )}
     </Panel>
   )
+}
+
+/** A light's glyph lit in its current colour (moved from lumen's light switcher, which Glass replaces). */
+function LightBadge({ light, size = 34 }: { light: LightView; size?: number }) {
+  const { rgb, level } = emission(light.state)
+  return <LightGlyph form={formOf(light.model)} rgb={rgb} level={level} off={!light.state.power} size={size} />
 }

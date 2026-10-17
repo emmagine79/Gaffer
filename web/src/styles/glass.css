@@ -1,0 +1,219 @@
+/*
+  Glass, from design/round4/glass.css and design/round4/d-switch.html.
+  Dark is the mockup; light follows the Mac's setting through prefers-color-scheme.
+  --beam is the selected light's real colour, set on .glass by app/Shell.tsx.
+*/
+
+:root {
+  color-scheme: light dark;
+  --ink: #F3EEE6;
+  --dim: rgb(243 238 230 / 0.58);
+  --faint: rgb(243 238 230 / 0.12);
+  --sel-bg: rgb(243 238 230 / 0.9);
+  --sel-ink: #1d1d20;
+  --ok: #7BD88F;
+  --busy: #FFB547;
+  --knob: #fff;
+  --page:
+    radial-gradient(900px 640px at 22% 38%, #41536b 0%, transparent 62%),
+    radial-gradient(800px 600px at 82% 78%, #6a4a33 0%, transparent 60%),
+    #1b1f26;
+  --panel-bg: rgb(30 30 33 / 0.74);
+  --panel-solid: #232327;
+  --panel-edge: 0 0 0 0.5px rgb(255 255 255 / 0.16) inset, 0 24px 60px rgb(0 0 0 / 0.45);
+  --phone-bg: #17181b;
+  --tint: 10%;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --ink: #1d1d20;
+    --dim: rgb(29 29 32 / 0.6);
+    --faint: rgb(29 29 32 / 0.07);
+    --sel-bg: rgb(29 29 32 / 0.88);
+    --sel-ink: #F7F4EF;
+    --ok: #2fb457;
+    --busy: #d98a12;
+    --page:
+      radial-gradient(900px 640px at 22% 38%, #cfdae8 0%, transparent 62%),
+      radial-gradient(800px 600px at 82% 78%, #f0dcc6 0%, transparent 60%),
+      #ecebe8;
+    --panel-bg: rgb(252 250 247 / 0.82);
+    --panel-solid: #f6f4f0;
+    --panel-edge: 0 0 0 0.5px rgb(0 0 0 / 0.12) inset, 0 24px 60px rgb(40 30 20 / 0.18);
+    --phone-bg: #f4f2ee;
+    --tint: 22%;
+  }
+}
+
+/* ---------- surfaces ---------- */
+body { color: var(--ink); background: var(--page); min-height: 100vh; }
+html[data-surface='menubar'] body { background: var(--panel-solid); }
+html[data-surface='phone'] body {
+  background: radial-gradient(420px 300px at 50% 0%, color-mix(in srgb, var(--beam-page, #FFEFE1) 16%, transparent), transparent 70%), var(--phone-bg);
+}
+
+.glass {
+  --pad: 16px;
+  /* The beam as drawn: the light itself on dark glass, deepened on light glass so it shows. */
+  --beam-draw: var(--beam);
+  position: relative;
+  min-width: 0;
+  padding: var(--pad);
+  color: var(--ink);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--beam) var(--tint), transparent), transparent 46%),
+    var(--panel-bg);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  backdrop-filter: blur(40px) saturate(1.4);
+  box-shadow: var(--panel-edge);
+}
+@media (prefers-color-scheme: light) {
+  .glass { --beam-draw: color-mix(in oklab, var(--beam) 62%, #9a6a3c); }
+}
+
+html[data-surface='menubar'] .glass {
+  border-radius: 0;
+  box-shadow: none;
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--beam) var(--tint), transparent), transparent 46%),
+    var(--panel-solid);
+}
+html[data-surface='window'] .glass { width: min(400px, calc(100% - 32px)); margin: 40px auto; }
+html[data-surface='phone'] .glass {
+  --pad: 20px;
+  max-width: 480px;
+  margin: 0 auto;
+  padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* ---------- the top switch ---------- */
+.g-switch { display: flex; gap: 0; padding: 3px; margin-bottom: 14px; border-radius: 10px; background: var(--faint); }
+.g-switch button {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 0; border: 0; border-radius: 8px;
+  font-size: 12.5px; color: var(--dim); background: none;
+}
+.g-switch button.sel { background: var(--sel-bg); color: var(--sel-ink); font-weight: 600; }
+.g-switch svg { width: 14px; height: 14px; flex: none; }
+
+/* ---------- light tabs ---------- */
+.g-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; min-width: 0; }
+.g-tab {
+  flex: none; max-width: 10em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 5px 11px; border: 0; border-radius: 999px;
+  font-size: 12.5px; color: var(--dim); background: var(--faint);
+}
+.g-tab.sel { background: var(--sel-bg); color: var(--sel-ink); font-weight: 600; }
+
+/* ---------- name, power, hero ---------- */
+.g-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.g-who { min-width: 0; }
+.g-name { font-size: 15px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; }
+.g-model { font-size: 12px; color: var(--dim); margin-top: 2px; overflow-wrap: anywhere; }
+.g-dim { font-size: 13px; color: var(--dim); margin-top: 6px; }
+.g-toggle {
+  flex: none; position: relative;
+  width: 40px; height: 24px; padding: 0; border: 0; border-radius: 12px;
+  background: var(--faint); transition: background 160ms;
+}
+.g-toggle::after {
+  content: ''; position: absolute; left: 2px; top: 2px;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / 0.3);
+  transition: transform 160ms;
+}
+.g-toggle.on { background: var(--ok); }
+.g-toggle.on::after { transform: translateX(16px); }
+
+.g-hero { display: flex; align-items: flex-end; gap: 10px; margin: 12px 0 4px; }
+.g-big { font-size: 68px; font-weight: 200; letter-spacing: -2px; line-height: 0.9; }
+.g-unit { font-size: 22px; font-weight: 300; color: var(--dim); padding-bottom: 6px; }
+.g-sub { font-size: 13px; color: var(--dim); }
+.g-art { display: block; margin: 8px calc(-1 * var(--pad)) 4px; width: calc(100% + 2 * var(--pad)); height: 100px; }
+
+/* ---------- controls: lumen's Slider, drawn as the mockup's track ---------- */
+.g-ctl { margin-top: 12px; }
+.g-lab { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--dim); margin-bottom: 8px; }
+.g-slider { display: flex; align-items: center; gap: 10px; }
+.g-slider .slider { flex: 1; gap: 0; }
+.g-slider .slider-body { height: 28px; border-radius: 14px; }
+.g-slider .slider-track {
+  top: 0; height: 28px; transform: none;
+  border-radius: 14px; background: var(--faint); box-shadow: none;
+}
+.g-slider .slider-fill { background: color-mix(in srgb, var(--beam-draw) 85%, transparent); border-radius: 14px; }
+.g-slider .slider-thumb {
+  width: 22px; height: 22px;
+  background: var(--knob); box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
+}
+.g-slider .slider-body:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.g-slider .slider-body:focus-visible .slider-thumb { box-shadow: 0 1px 4px rgb(0 0 0 / 0.4); }
+/* Brightness is a fill with no knob, as in the mockup; the others keep a knob inside the track. */
+.g-bright .slider-thumb { opacity: 0; }
+.g-knob .slider-track { overflow: visible; }
+.g-pm {
+  flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; font-size: 17px; line-height: 1;
+  color: var(--ink); background: var(--faint);
+}
+
+/* ---------- look cards ---------- */
+.g-cards { display: grid; gap: 8px; margin-top: 16px; }
+.g-card {
+  min-width: 0; padding: 10px 2px; border: 0; border-radius: 12px;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--dim); background: var(--faint);
+}
+.g-card span {
+  max-width: 100%; overflow: hidden; overflow-wrap: anywhere; line-height: 1.25;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
+.g-card.sel { background: var(--sel-bg); color: var(--sel-ink); font-weight: 600; }
+
+/* ---------- footer ---------- */
+.g-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; font-size: 12px; color: var(--dim); }
+.g-status { min-width: 0; overflow-wrap: anywhere; }
+.g-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.g-dot--ok { background: var(--ok); }
+.g-dot--busy { background: var(--busy); }
+.g-dot--off { background: var(--dim); }
+.g-open { flex: none; padding: 5px 10px; border: 0; border-radius: 8px; font-size: 12px; color: var(--ink); background: var(--faint); }
+
+/* ---------- phone: the other lights under the panel ---------- */
+.g-others { list-style: none; margin: 22px 0 0; padding: 0; }
+.g-others li { border-top: 1px solid var(--faint); }
+.g-others button {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 4px; border: 0; background: none; text-align: left; font-size: 14px;
+}
+.g-other-text { min-width: 0; }
+.g-other-name { display: block; overflow-wrap: anywhere; }
+.g-others small { display: block; font-size: 12px; color: var(--dim); margin-top: 2px; overflow-wrap: anywhere; }
+.g-swatch { flex: none; width: 28px; height: 28px; border-radius: 50%; }
+
+/* ---------- empty states, desk slot, toasts ---------- */
+.g-empty { margin: 18px 0; font-size: 13px; color: var(--dim); }
+.desk-slot { padding: 28px 4px; text-align: center; }
+.g-toasts { position: fixed; left: 16px; right: 16px; bottom: 16px; display: grid; justify-items: center; gap: 6px; pointer-events: none; z-index: 60; }
+.g-toast {
+  pointer-events: auto; max-width: min(360px, 100%); overflow-wrap: anywhere;
+  padding: 8px 12px; border: 0; border-radius: 10px; font-size: 12.5px;
+  color: var(--sel-ink); background: var(--sel-bg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.3);
+}
+.g-toast--error { background: #d9473b; color: #fff; }
+
+button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .g-toggle, .g-toggle::after { transition: none; }
+}

@@ -1,0 +1,167 @@
+/**
+ * SPEC-006 acceptance tests: the Glass panel, rendered, against the real service in --demo.
+ *
+ * The demo seeds four Godox lights from lumen's model rows: Key light (ML100R, colour),
+ * Fill (SL60IIBi, bi-colour: no colour), Backlight (SL100D, fixed daylight), Hair light (MS60R, colour).
+ */
+import { expect, test, type Page } from '@playwright/test'
+import { mkdirSync } from 'node:fs'
+import { join } from 'node:path'
+
+type Surface = 'menubar' | 'window' | 'phone'
+interface ApiLight { id: string; name: string; state: { brightness: number; power: boolean } }
+
+const base = () => process.env.GAFFER_URL!
+const SHOTS = process.env.GLASS_SHOTS ?? join(process.cwd(), 'test-results', 'shots')
+
+async function open(page: Page, surface: Surface, width: number, colorScheme: 'light' | 'dark' = 'dark') {
+  await page.setViewportSize({ width, height: 900 })
+  await page.emulateMedia({ colorScheme })
+  await page.goto(surface === 'phone' ? `${base()}/` : `${base()}/?surface=${surface}`)
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+}
+
+async function lights(page: Page): Promise<ApiLight[]> {
+  const res = await page.request.get(`${base()}/api/lights`)
+  expect(res.ok()).toBe(true)
+  return (await res.json()).lights
+}
+
+/**
+ * Send one command over the service's own socket. With `answer`, wait for its reply;
+ * commands such as `set` send none, so the caller checks GET /api/lights instead.
+ */
+async function command(page: Page, message: Record<string, unknown>, answer = true) {
+  return page.evaluate(([m, wait]) => new Promise((done, fail) => {
+    const ws = new WebSocket(`ws://${location.host}/ws`)
+    const timer = setTimeout(() => { ws.close(); fail(new Error('no answer')) }, 5000)
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data as string)
+      if (data.type === 'hello') {
+        ws.send(JSON.stringify({ ...m, rid: 1 }))
+        if (!wait) { clearTimeout(timer); ws.close(); done(null) }
+      } else if (data.rid === 1) {
+        clearTimeout(timer)
+        ws.close()
+        if (data.type === 'error') fail(new Error(data.text))
+        else done(data)
+      }
+    }
+  }), [message, answer] as const)
+}
+
+async function selectLight(page: Page, name: string) {
+  const tab = page.getByRole('navigation', { name: 'Lights' }).getByRole('button', { name, exact: true })
+  await tab.click()
+  await expect(tab).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
+}
+
+async function noSideScroll(page: Page) {
+  const [scroll, inner] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth])
+  expect(scroll).toBe(inner)
+}
+
+// AC1 (SPEC AC1). TODO(SPEC-003): drop a temp CCT-only and an HSI model file into
+// service/gaffer/models/<driver>/ once the loader lands, instead of lumen's rows.
+for (const [surface, width] of [['phone', 390], ['window', 1280]] as const) {
+  test(`AC1: controls follow the model file at ${width}px`, async ({ page }) => {
+    await open(page, surface, width)
+    await selectLight(page, 'Fill')
+    await expect(page.getByRole('slider', { name: 'Brightness' })).toBeVisible()
+    await expect(page.getByRole('slider', { name: 'Colour temperature' })).toBeVisible()
+    await expect(page.locator('[data-control="colour"]')).toHaveCount(0)
+    await expect(page.getByRole('slider', { name: 'Hue' })).toHaveCount(0)
+
+    await selectLight(page, 'Key light')
+    await expect(page.getByRole('slider', { name: 'Hue' })).toBeVisible()
+  })
+}
+
+test('AC2: dragging brightness changes GET /api/lights for that light', async ({ page }) => {
+  await open(page, 'menubar', 360)
+  await selectLight(page, 'Hair light')
+  const id = (await lights(page)).find((l) => l.name === 'Hair light')!.id
+  const before = (await lights(page)).find((l) => l.id === id)!.state.brightness
+
+  const slider = page.getByRole('slider', { name: 'Brightness' })
+  const box = (await slider.boundingBox())!
+  const y = box.y + box.height / 2
+  await page.mouse.move(box.x + box.width * 0.2, y)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.9, y, { steps: 12 })
+  await page.mouse.up()
+
+  const shown = Number(await slider.getAttribute('aria-valuenow'))
+  expect(shown).not.toBe(before)
+  await expect.poll(async () => (await lights(page)).find((l) => l.id === id)!.state.brightness).toBe(shown)
+})
+
+test('AC3: the panel renders light and dark at 360, 390 and window width', async ({ page }) => {
+  // Make the demo look like the mockups: three saved looks, and the lights at their levels.
+  await page.goto(`${base()}/?surface=window`)
+  const ids = Object.fromEntries((await lights(page)).map((l) => [l.name, l.id]))
+  for (const name of ['Talking head', 'Product', 'Moody']) {
+    await command(page, { type: 'store.upsert', collection: 'scenes', item: { name }, light: ids['Key light'] })
+  }
+  const levels: [string, number, number][] = [['Key light', 40, 5600], ['Fill', 25, 4300], ['Hair light', 60, 3200]]
+  for (const [name, brightness, kelvin] of levels) {
+    await command(page, { type: 'set', light: ids[name], patch: { brightness, mode: 'cct', cct: { kelvin } }, fade: 0 }, false)
+    await expect.poll(async () => (await lights(page)).find((l) => l.id === ids[name])!.state.brightness).toBe(brightness)
+  }
+
+  mkdirSync(SHOTS, { recursive: true })
+  for (const scheme of ['light', 'dark'] as const) {
+    for (const [surface, width] of [['menubar', 360], ['phone', 390], ['window', 1280]] as const) {
+      const errors: string[] = []
+      page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()) })
+      page.on('pageerror', (e) => errors.push(e.message))
+      await open(page, surface, width, scheme)
+      await selectLight(page, 'Key light')
+      await expect(page.getByRole('status').first()).toHaveText(/lights connected/)
+      await expect(page.getByRole('button', { name: 'Talking head' })).toBeVisible()
+      await noSideScroll(page)
+      await page.screenshot({ path: join(SHOTS, `glass-${width}-${scheme}.png`), fullPage: true })
+      expect(errors).toEqual([])
+      page.removeAllListeners('console')
+      page.removeAllListeners('pageerror')
+    }
+  }
+})
+
+test('AC4: Open Gaffer posts to the Swift shell in the menu bar and is hidden on phones', async ({ page }) => {
+  await page.addInitScript(() => {
+    const posted: unknown[] = []
+    Object.assign(window, { posted, webkit: { messageHandlers: { gaffer: { postMessage: (m: unknown) => posted.push(m) } } } })
+  })
+  await open(page, 'menubar', 360)
+  await page.getByRole('button', { name: 'Open Gaffer' }).click()
+  expect(await page.evaluate(() => (window as unknown as { posted: unknown[] }).posted)).toEqual([{ type: 'open-window' }])
+
+  await open(page, 'phone', 390)
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Open Gaffer' })).toHaveCount(0)
+})
+
+// Builder checklist 14 and 16: a light's name comes from a Bluetooth advert. The service
+// caps a rename at 60 characters, so the socket's answers are rewritten to carry 245.
+test('checklist 14, 16: a 245-character name with markup stays text and never widens the page', async ({ page }) => {
+  const name = `<img src=x onerror="window.pwned=1">${'W'.repeat(120)} https://example.com/${'a'.repeat(60)}`.padEnd(245, 'z')
+  expect(name).toHaveLength(245)
+  await page.routeWebSocket(/\/ws/, (ws) => {
+    const server = ws.connectToServer()
+    server.onMessage((message) => {
+      const data = JSON.parse(String(message))
+      for (const light of data.lights ?? []) if (light.name === 'Backlight') light.name = name
+      ws.send(JSON.stringify(data))
+    })
+  })
+  for (const [surface, width] of [['menubar', 360], ['phone', 390], ['window', 1280]] as const) {
+    await open(page, surface, width)
+    await page.getByRole('navigation', { name: 'Lights' }).getByRole('button', { name }).click()
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
+    await noSideScroll(page)
+    expect(await page.evaluate(() => 'pwned' in window)).toBe(false)
+    await expect(page.locator('img')).toHaveCount(0)
+  }
+})
