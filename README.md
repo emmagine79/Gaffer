@@ -53,7 +53,7 @@ The app carries its own Python 3.14 ([python-build-standalone](https://github.co
 
 **Signing.** The first build makes the "Gaffer Local Signing" certificate in its own keychain file, `~/Library/Application Support/Gaffer-build/signing.keychain-db` (change the folder with `GAFFER_BUILD_HOME`). It is not added to your login or system keychain, and no trust setting changes. Later builds on this Mac reuse it, so the app's code requirement is the same every time and macOS keeps the Bluetooth permission across rebuilds. A build on another Mac makes its own certificate, so that Mac's builds are separate. Keep the keychain folder private. If the certificate can't be made or used, the build stops; it never falls back to ad-hoc signing by itself.
 
-`GAFFER_SIGN=adhoc scripts/build_app.sh --no-install` is a developer flag for a quick local build. It signs ad hoc, which gives a new signature on every build, so macOS asks for Bluetooth again each time. It never makes a release zip.
+`GAFFER_SIGN=adhoc scripts/build_app.sh --no-install` is a developer flag for a quick local build. It signs ad hoc, which gives a new signature on every build, so macOS asks for Bluetooth again each time. It never makes a release zip, and it is never installed to `~/Applications` (the flag is implied).
 
 **Reproducible.** Two builds of the same commit give the same files: the manifest matches, and so does the code requirement. Only each signature's signing time differs, so the zip's bytes are not identical. Every file is dated with the commit's date. `mac/tests/test_build.py` builds twice from two clean clones and compares.
 

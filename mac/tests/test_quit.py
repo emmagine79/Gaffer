@@ -74,9 +74,10 @@ class Run:
         self.logs = logs or rig["base"] / f"logs-{name}"
         home = rig["base"] / f"home-{name}"  # the service's run file goes under HOME, not Captain's real one
         home.mkdir()
+        self.stderr = rig["base"] / f"driver-stderr-{name}.txt"  # what the app itself reports (NSLog)
         self.driver = subprocess.Popen(
             [str(rig["driver"]), str(rig["resources"]), str(self.data), str(self.logs), mode],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr.open("w"), text=True,
             env={"HOME": str(home), "PATH": "/usr/bin:/bin"}, start_new_session=True)
         deadline = time.monotonic() + START_WITHIN_SECONDS
         line = ""
@@ -150,3 +151,16 @@ def test_service_log_keeps_only_this_run_and_the_one_before(rig):
             assert f"[{seen[n - 1]}]" in (logs / "service.previous.log").read_text()
         if n > 1:
             assert f"[{seen[n - 2]}]" not in (logs / "service.previous.log").read_text()
+
+
+def test_a_log_that_cannot_be_opened_is_reported_not_silent(rig):
+    """If service.log can't be made the service still runs, and the app says why in its own log."""
+    blocker = rig["base"] / "a file, not a folder"
+    blocker.write_text("")
+    run = Run(rig, "nolog", "quit", logs=blocker / "Logs")  # a folder can't be made inside a file
+    try:
+        run.quit()
+        wait_gone(run.child)
+    finally:
+        run.cleanup()
+    assert "could not open service.log" in run.stderr.read_text()

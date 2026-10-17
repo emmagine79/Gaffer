@@ -50,12 +50,20 @@ to_trash() {  # move a path to the Trash with a unique name; nothing is deleted
     mv "$1" "$HOME/.Trash/$(basename "$1")-$(date +%Y%m%d-%H%M%S)-$$"
 }
 
+password_file_in_the_way() {
+    echo "sign_app: $PASSFILE exists but $KEYCHAIN does not. Another build may be making the signing identity right now: run the build again in a moment. If this message stays, an earlier build stopped half-way: move $PASSFILE to the Trash and run the build again. Nothing was trashed or replaced." >&2
+}
+
 make_identity() {
-    # Built under a temporary name and moved into place whole, so a crash half-way (or a
-    # second build starting at the same moment) never leaves a half-made keychain behind.
-    # The private key is held in memory and never written to a file outside the keychain.
+    # The keychain is built under a temporary name. It is published last, and only after its
+    # password file exists, so a keychain in its place always has its password file: a build that
+    # starts at the same moment, or a crash half-way, can never see a keychain it can't unlock
+    # and take it for lost. The private key is held in memory and never written to a file
+    # outside the keychain.
     local tmp="$NEW_KEYCHAIN" pass
     mkdir -p "$BUILD_HOME" && chmod 700 "$BUILD_HOME" || return 1
+    # A password file with no keychain: another build is part-way through, or one stopped half-way.
+    if [[ -e "$PASSFILE" ]]; then password_file_in_the_way; return 1; fi
     pass="$(/usr/bin/openssl rand -hex 24)"
     security create-keychain -p "$pass" "$tmp" || return 1
     security set-keychain-settings "$tmp" || return 1   # no automatic lock
@@ -69,16 +77,27 @@ make_identity() {
     # A here-string is the key's only copy outside the keychain, held in memory and never named.
     security import /dev/stdin -k "$tmp" -f pemseq -T /usr/bin/codesign >/dev/null <<< "$pem" || return 1
     security set-key-partition-list -S apple-tool:,apple: -s -k "$pass" "$tmp" >/dev/null || return 1
-    if mv -n "$tmp" "$KEYCHAIN" && [[ ! -e "$tmp" ]]; then
-        (umask 077; printf '%s' "$pass" > "$PASSFILE")
-    else   # another build won the race: use its identity
-        to_trash "$tmp"
+    # set -C makes the write fail if the file exists, so only one build can claim the password file.
+    if ! (set -C; umask 077; printf '%s' "$pass" > "$PASSFILE") 2>/dev/null; then
+        password_file_in_the_way
+        return 1
+    fi
+    if ! mv -n "$tmp" "$KEYCHAIN" || [[ -e "$tmp" ]]; then
+        echo "sign_app: could not put the new keychain at $KEYCHAIN" >&2
+        return 1
     fi
 }
 
 use_identity() {  # sets SIGN_ARGS and MODE; returns 1 when there is no usable identity
-    if [[ -f "$KEYCHAIN" && ( ! -f "$PASSFILE" || -z "$(identity_hash)" ) ]]; then
-        # Its password is lost, or the identity is not in it: it can't be used, so make a new one.
+    if [[ -f "$KEYCHAIN" && ! -f "$PASSFILE" ]]; then
+        # A keychain is only ever published after its password file, so the file is missing
+        # because someone removed it. Do not trash the identity: that changes the certificate
+        # and macOS asks for Bluetooth again. Stop and let a person decide.
+        echo "sign_app: $KEYCHAIN has no password file ($PASSFILE), so Gaffer's signing identity can't be unlocked. Nothing was changed. Put the password file back. If it is lost for good, move the keychain to the Trash by hand and run the build again: that makes a NEW identity, and macOS will ask for Bluetooth again." >&2
+        return 1
+    fi
+    if [[ -f "$KEYCHAIN" && -z "$(identity_hash)" ]]; then
+        # The identity is not in it: it can't be used, so make a new one.
         to_trash "$KEYCHAIN"
         to_trash "$PASSFILE"
     fi
@@ -116,7 +135,10 @@ say "Signing inside out: $MODE"
 # Every Mach-O file is signed first, then the app, whose seal covers them.
 while IFS= read -r -d '' f; do
     if file -b "$f" | grep -q 'Mach-O'; then
-        codesign --force "${SIGN_ARGS[@]}" "$f" 2>/dev/null
+        if ! err="$(codesign --force "${SIGN_ARGS[@]}" "$f" 2>&1)"; then
+            echo "sign_app: could not sign $f: $err" >&2
+            exit 1
+        fi
     fi
 done < <(find "$APP/Contents/Resources" -type f \( -name '*.so' -o -name '*.dylib' -o -perm -u+x \) -print0)
 codesign --force "${SIGN_ARGS[@]}" --identifier "$BUNDLE_ID" "$APP"

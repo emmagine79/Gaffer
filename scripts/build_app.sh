@@ -23,7 +23,7 @@
 #
 # The app is signed with the fixed identity (sign_app.sh). If that is missing or broken the
 # build fails at the start. GAFFER_SIGN=adhoc is a developer flag for a quick local build; it
-# makes no release zip.
+# makes no release zip and is never installed.
 #
 # Old builds are moved to the Trash, never deleted.
 set -euo pipefail
@@ -41,6 +41,12 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
+# An ad-hoc app has the same bundle id as the real one but a different requirement, so installing
+# it over ~/Applications/Gaffer.app would lose the Bluetooth permission. It is never installed.
+if [[ "${GAFFER_SIGN:-}" == "adhoc" && "$INSTALL" == 1 ]]; then
+    echo "build_app: GAFFER_SIGN=adhoc never installs, so --no-install is implied" >&2
+    INSTALL=0
+fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 DIST="${DIST:-$ROOT/dist}"
@@ -60,6 +66,10 @@ to_trash() {  # move a path to the Trash with a unique name
     mkdir -p "$HOME/.Trash"
     mv "$path" "$HOME/.Trash/$(basename "$path")-$(date +%Y%m%d-%H%M%S)-$$"
 }
+
+# The work folder holds a full copy of Python. Whatever stops the build, move it to the Trash.
+# On success the app and zip have already left it.
+trap 'to_trash "$WORK" || true' EXIT
 
 command -v uv >/dev/null || { echo "uv is needed: https://docs.astral.sh/uv/" >&2; exit 1; }
 command -v npm >/dev/null || { echo "node and npm are needed to build web/: https://nodejs.org/" >&2; exit 1; }

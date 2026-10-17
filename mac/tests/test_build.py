@@ -3,26 +3,29 @@
 Run: uv run --project service --frozen pytest mac/tests/test_build.py
 
 Needs the network (npm ci), Xcode command line tools, uv and node. It does not open Gaffer.app.
-Each build is made from a fresh clone of the last COMMIT (not the working tree), in a folder with a
-space in its path, so the test shows the build works from a clean checkout and does not depend on
+Every script here runs with a throwaway HOME, so nothing lands in the real ~/Applications, Trash or
+signing identity.
+Each build is made from a fresh clone of the last COMMIT (plus any uncommitted changes to tracked files),
+in a folder with a space in its path, so the test shows the build works from a clean checkout and does not depend on
 where it ran. Both builds share one signing identity, kept in a throwaway build home.
 """
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import os
 import plistlib
 import re
+import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from signing_check import BUNDLE_ID, assert_pinned_to_the_gaffer_certificate, requirement
 
 ROOT = Path(__file__).resolve().parents[2]
-BUNDLE_ID = "work.awelahlayray.gaffer"
-LEAF_REQUIREMENT = re.compile(
-    rf'designated => identifier "{re.escape(BUNDLE_ID)}" and certificate leaf = H"([0-9a-f]{{40}})"')
 
 
 def sh(*cmd, cwd=None, env=None, check=True):
@@ -35,19 +38,35 @@ def clone_head(base: Path, name: str) -> Path:
     sha = sh("git", "rev-parse", "HEAD", cwd=ROOT).stdout.strip()
     sh("git", "clone", "--quiet", str(ROOT), str(dest))
     sh("git", "checkout", "--quiet", "--detach", sha, cwd=dest)
-    assert sh("git", "status", "--porcelain", cwd=dest).stdout == ""
+    # A committed tree builds exactly as committed. Uncommitted changes to tracked files (a fix being
+    # tried, or the revert check putting the old scripts back) are carried over so the build sees them.
+    pending = sh("git", "diff", "HEAD", "--binary", cwd=ROOT).stdout
+    if pending:
+        subprocess.run(["git", "apply", "--whitespace=nowarn"], input=pending, text=True, cwd=dest, check=True)
+    else:
+        assert sh("git", "status", "--porcelain", cwd=dest).stdout == ""
     return dest
 
 
-def build(checkout: Path, dist: Path, tmp: Path, home: Path, **extra_env):
-    env = {**os.environ, "TMPDIR": str(tmp), "GAFFER_BUILD_HOME": str(home), **extra_env}
+@functools.cache
+def real_tool_dirs() -> dict[str, str]:
+    """Where uv and npm keep their downloads, so a build under a throwaway HOME does not fetch them again."""
+    return {
+        "UV_CACHE_DIR": sh("uv", "cache", "dir").stdout.strip(),
+        "UV_PYTHON_INSTALL_DIR": sh("uv", "python", "dir").stdout.strip(),
+        "npm_config_cache": sh("npm", "config", "get", "cache").stdout.strip(),
+    }
+
+
+def build(checkout: Path, dist: Path, tmp: Path, build_home: Path, home: Path | None = None,
+          args: tuple[str, ...] = ("--no-install",), **extra_env):
+    """Run scripts/build_app.sh with a throwaway HOME (a sibling of `tmp`) unless `home` is given."""
+    home = home or tmp.parent / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ, **real_tool_dirs(), "HOME": str(home), "TMPDIR": str(tmp),
+           "GAFFER_BUILD_HOME": str(build_home), **extra_env}
     tmp.mkdir(exist_ok=True)
-    return sh(checkout / "scripts" / "build_app.sh", "--no-install", "--dist", dist, cwd=checkout, env=env, check=False)
-
-
-def requirement(app: Path) -> str:
-    out = sh("codesign", "-d", "-r-", app).stdout  # the requirement; the app's path goes to stderr
-    return next(line for line in out.splitlines() if line.startswith("designated =>"))
+    return sh(checkout / "scripts" / "build_app.sh", *args, "--dist", dist, cwd=checkout, env=env, check=False)
 
 
 def python_cdhash(app: Path) -> str:
@@ -83,13 +102,10 @@ def test_two_builds_of_one_commit_have_the_same_contents_and_the_same_pinned_req
     # because it seals the signatures of everything inside it, so it is not compared.)
     assert python_cdhash(one / "Gaffer.app") == python_cdhash(two / "Gaffer.app")
     # The requirement pins the certificate, and is the same on both builds.
-    req = requirement(one / "Gaffer.app")
-    assert req == requirement(two / "Gaffer.app")
-    leaf = LEAF_REQUIREMENT.fullmatch(req)
-    assert leaf, f"requirement does not pin the certificate: {req}"
+    assert requirement(one / "Gaffer.app") == requirement(two / "Gaffer.app")
+    leaf = assert_pinned_to_the_gaffer_certificate(one / "Gaffer.app")
     identities = sh("security", "find-identity", "-p", "codesigning", builds["home"] / "signing.keychain-db").stdout
-    assert leaf.group(1).upper() in identities
-    assert "Authority=Gaffer Local Signing" in sh("codesign", "-dvvv", one / "Gaffer.app").stderr
+    assert leaf.upper() in identities
 
 
 def test_release_zip_unpacks_to_a_valid_app_that_runs_and_ships_its_licences(builds, tmp_path):
@@ -135,13 +151,111 @@ def test_the_release_build_will_not_sign_ad_hoc(tmp_path):
     assert done.returncode != 0
     assert "signing identity is not available" in done.stderr
     assert list(dist.iterdir()) == []  # no app, no zip
+    assert list((tmp_path / "tmp").iterdir()) == []  # the work folder was cleared away, not left in TMPDIR
 
 
-def test_ad_hoc_is_a_developer_flag_that_never_makes_a_release_zip(tmp_path):
+def test_ad_hoc_is_a_developer_flag_that_never_makes_a_release_zip_and_never_installs(tmp_path):
     checkout = clone_head(tmp_path, "adhoc")
     dist = tmp_path / "adhoc" / "out"
-    done = build(checkout, dist, tmp_path / "adhoc" / "tmp", tmp_path / "unused home", GAFFER_SIGN="adhoc")
+    home = tmp_path / "adhoc" / "home"
+    # No --no-install: the flag alone must keep the ad-hoc app out of ~/Applications, where it would
+    # replace the properly signed Gaffer and lose its Bluetooth permission.
+    done = build(checkout, dist, tmp_path / "adhoc" / "tmp", tmp_path / "unused home", home=home,
+                 args=(), GAFFER_SIGN="adhoc")
     assert done.returncode == 0, done.stderr[-2000:]
+    assert not (home / "Applications" / "Gaffer.app").exists()
     assert sorted(p.name for p in dist.iterdir()) == ["Gaffer-0.1.0.manifest.txt", "Gaffer.app"]  # no zip
     assert "Signature=adhoc" in sh("codesign", "-dvvv", dist / "Gaffer.app").stderr
     assert not (tmp_path / "unused home").exists()  # no identity was made either
+
+
+# --- scripts/sign_app.sh and scripts/bundle_tool.py on their own: quick, no full build ---
+
+def sign_app(tmp_path: Path, *args, **extra_env):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {**os.environ, "HOME": str(home), "GAFFER_BUILD_HOME": str(tmp_path / "build home"), **extra_env}
+    return sh(ROOT / "scripts" / "sign_app.sh", *args, env=env, check=False)
+
+
+def test_a_signing_identity_that_is_half_made_is_never_trashed_or_replaced(tmp_path):
+    """A keychain with no password file, or a password file with no keychain, is another build's work in
+    progress (or a crash): the build stops and says so. It must not trash the keychain and make a new
+    identity, which would change the certificate and bring the Bluetooth prompt back."""
+    first = sign_app(tmp_path, "--ensure-identity")
+    assert first.returncode == 0, first.stderr
+    build_home = tmp_path / "build home"
+    keychain, passfile = build_home / "signing.keychain-db", build_home / "signing.keychain.pass"
+    keychain_bytes, password = keychain.read_bytes(), passfile.read_text()
+
+    # Another build is part-way through: the password file is there, the keychain is not yet.
+    parked = tmp_path / "parked"
+    parked.mkdir()
+    keychain.rename(parked / keychain.name)
+    mid_setup = sign_app(tmp_path, "--ensure-identity")
+    assert mid_setup.returncode != 0 and "Nothing was trashed" in mid_setup.stderr
+    assert not keychain.exists() and passfile.read_text() == password
+    (parked / keychain.name).rename(keychain)
+
+    # The password file has gone: the identity is kept as it is.
+    passfile.rename(parked / passfile.name)
+    lost = sign_app(tmp_path, "--ensure-identity")
+    assert lost.returncode != 0 and "Nothing was changed" in lost.stderr
+    assert keychain.read_bytes() == keychain_bytes
+    assert not (tmp_path / "home" / ".Trash").exists()  # nothing was moved to the Trash
+
+    # Put the password file back and the same identity signs again.
+    (parked / passfile.name).rename(passfile)
+    again = sign_app(tmp_path, "--ensure-identity")
+    assert again.returncode == 0, again.stderr
+    assert keychain.read_bytes() == keychain_bytes
+
+
+def test_a_file_that_will_not_sign_is_named_in_the_error(tmp_path):
+    """A Mach-O file whose load commands are broken makes codesign fail; the build says which file and why."""
+    app = tmp_path / "Gaffer.app"
+    resources = app / "Contents" / "Resources"
+    resources.mkdir(parents=True)
+    # mach_header_64 for an arm64 dylib with one load command whose size is 0.
+    header = struct.pack("<IiiIIIII", 0xFEEDFACF, 0x0100000C, 0, 6, 1, 8, 0, 0)
+    (resources / "broken.dylib").write_bytes(header + struct.pack("<II", 0x19, 0) + b"\0" * 64)
+    done = sign_app(tmp_path, app, GAFFER_SIGN="adhoc")
+    assert done.returncode != 0
+    assert "broken.dylib" in done.stderr and "unrecognized, invalid, or unsuitable" in done.stderr
+
+
+def licences_run(tmp_path: Path, package_files: dict[str, str], metadata_extra: str = ""):
+    """Run `bundle_tool.py licences` on a fake Python tree holding one package, with the given files in its dist-info."""
+    python_dir = tmp_path / "python"
+    lib = python_dir / "lib" / "python3.14"
+    (lib / "site-packages" / "toy-1.0.dist-info").mkdir(parents=True)
+    (lib / "LICENSE.txt").write_text("Python licence text\n")
+    info = lib / "site-packages" / "toy-1.0.dist-info"
+    (info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: toy\nVersion: 1.0\n{metadata_extra}")
+    for name, text in package_files.items():
+        (info / name).write_text(text)
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "NOTICE").write_text("Gaffer notice\n")
+    done = sh(sys.executable, "-I", ROOT / "scripts" / "bundle_tool.py", "licences", resources, python_dir, tmp_path / "repo",
+              check=False)
+    return done, resources
+
+
+def test_an_authors_or_notice_file_is_not_a_licence(tmp_path):
+    done, resources = licences_run(tmp_path, {"AUTHORS.md": "Somebody\n", "NOTICE": "Credits\n"})
+    assert done.returncode != 0 and "toy 1.0 has no licence file" in done.stderr
+
+
+def test_a_licence_text_ships_with_its_notice_and_authors_files(tmp_path):
+    done, resources = licences_run(tmp_path, {"LICENSE": "MIT text\n", "AUTHORS.md": "Somebody\n"})
+    assert done.returncode == 0, done.stderr
+    shipped = sorted(p.name for p in (resources / "LICENSES" / "toy-1.0").iterdir())
+    assert shipped == ["AUTHORS.md", "LICENSE"]
+    assert "* toy 1.0:" in (resources / "NOTICE").read_text()
+
+
+def test_a_licence_file_named_in_the_metadata_counts(tmp_path):
+    done, resources = licences_run(tmp_path, {"COPYRIGHT.txt": "Terms\n"}, metadata_extra="License-File: COPYRIGHT.txt\n")
+    assert done.returncode == 0, done.stderr
+    assert (resources / "LICENSES" / "toy-1.0" / "COPYRIGHT.txt").is_file()

@@ -22,7 +22,11 @@ from pathlib import Path
 #: the install time. They differ on every build and nothing reads them.
 BUILD_ONLY_FILES = ("direct_url.json", "uv_cache.json", "uv_build.json")
 
-LICENCE_NAMES = ("licen", "copying", "notice", "authors")
+#: A file with one of these name starts is a licence text.
+LICENCE_TEXT_NAMES = ("licen", "copying")
+#: These travel with the licence text when a package has one, but are never a licence on their
+#: own: an AUTHORS file says who wrote the code, not what you may do with it.
+LICENCE_EXTRA_NAMES = ("notice", "authors")
 
 #: Packages whose wheels carry no licence file, and where the licence text is instead.
 #: pyobjc-core and pyobjc-framework-libdispatch are built from the same project (pyobjc) as
@@ -81,8 +85,25 @@ def prune(python_dir: Path, discard: Path) -> None:
             move_away(cache, discard)
 
 
-def licence_files(folder: Path) -> list[Path]:
-    return sorted(p for p in folder.rglob("*") if p.is_file() and p.name.lower().startswith(LICENCE_NAMES))
+def declared_licence_files(info: Path) -> set[str]:
+    """File names the package's METADATA lists as its licence texts (License-File fields)."""
+    meta = Parser().parsestr((info / "METADATA").read_text(errors="replace"))
+    return {Path(value.strip()).name for value in meta.get_all("License-File") or []}
+
+
+def licence_files(folder: Path, declared: set[str] = frozenset(), skip: str = "") -> list[Path]:
+    """The files to ship for a package or for Python: its licence texts and their NOTICE or AUTHORS.
+
+    Returns nothing unless at least one file is a licence text (named LICENSE, LICENCE or COPYING,
+    or listed in the package's License-File metadata). NOTICE and AUTHORS files alone don't count.
+    A path part named `skip` leaves the file out.
+    """
+    everything = sorted(p for p in folder.rglob("*") if p.is_file() and skip not in p.parts)
+    texts = [p for p in everything if p.name.lower().startswith(LICENCE_TEXT_NAMES) or p.name in declared]
+    if not texts:
+        return []
+    extras = [p for p in everything if p.name.lower().startswith(LICENCE_EXTRA_NAMES)]
+    return sorted(set(texts) | set(extras))
 
 
 def declared_licence(info: Path) -> str:
@@ -111,7 +132,7 @@ def licences(resources: Path, python_dir: Path, repo: Path) -> None:
         "",
     ]
     version = platform.python_version()  # this script runs under the bundled interpreter
-    py_files = [p for p in licence_files(python_dir / "lib") if "site-packages" not in p.parts]
+    py_files = licence_files(python_dir / "lib", skip="site-packages")
     if not py_files:
         sys.exit("bundle_tool: Python's licence file is missing")
     for f in py_files:
@@ -132,11 +153,11 @@ def licences(resources: Path, python_dir: Path, repo: Path) -> None:
         meta = Parser().parsestr((info / "METADATA").read_text(errors="replace"))
         name, ver = meta["Name"], meta["Version"]
         key = name.lower().replace("-", "_").replace(".", "_")
-        files = licence_files(info)
+        files = licence_files(info, declared_licence_files(info))
         source = f"{info.name}"
         if not files and key in BORROWED:
             donor = next(site.glob(f"{BORROWED[key]}-*.dist-info"))
-            files, source = licence_files(donor), f"{donor.name} (same project)"
+            files, source = licence_files(donor, declared_licence_files(donor)), f"{donor.name} (same project)"
         if not files and key in IN_REPO:
             files, source = [repo / IN_REPO[key]], "this repository"
         if not files:

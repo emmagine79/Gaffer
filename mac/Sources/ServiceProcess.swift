@@ -61,7 +61,13 @@ final class ServiceProcess {
         process.currentDirectoryURL = resources
         process.standardInput = stdinPipe
         process.standardOutput = stdoutPipe
-        process.standardError = ServiceLog.open(in: logDirectory ?? ServiceLog.defaultDirectory) ?? FileHandle.nullDevice
+        let logFolder = logDirectory ?? ServiceLog.defaultDirectory
+        let log = ServiceLog.open(in: logFolder)
+        if log == nil {
+            // NSLog writes to the unified log (and to stderr), so there is a trace of why the service has no log file.
+            NSLog("Gaffer: could not open service.log in %@, so the light service will log nowhere", logFolder.path)
+        }
+        process.standardError = log ?? FileHandle.nullDevice
 
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let chunk = handle.availableData
