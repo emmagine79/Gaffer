@@ -3,6 +3,8 @@ import { beamOf } from '../glass/describe'
 import { Footer } from '../glass/Footer'
 import { Glass } from '../glass/Glass'
 import { OtherLights } from '../glass/OtherLights'
+import { LookEditor } from '../looks/LookEditor'
+import { useLookKeys } from '../looks/looks'
 import { useTabKey } from '../desk/useTabKey'
 import { useStudio } from '../state/store'
 import { AddLight, DeskSlot, Groups } from './slots'
@@ -21,6 +23,7 @@ export function Shell() {
   const [view, setView] = useState<View>(() => rememberedView(SURFACE))
   const state = useStudio((s) => s.state)
   const beam = state ? beamOf(state).css : NO_LIGHT
+  useLookKeys()
   const choose = (next: View) => {
     setView(next)
     rememberView(SURFACE, next)
@@ -35,6 +38,7 @@ export function Shell() {
         <Footer surface={SURFACE} />
         {SURFACE === 'phone' && view === 'glass' && <OtherLights />}
       </main>
+      {SURFACE === 'window' && <LookEditor />}
       <AddLight />
       <Toasts />
     </div>

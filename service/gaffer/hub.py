@@ -201,6 +201,7 @@ class Hub:
         self._switch_lock = asyncio.Lock()
         #: Lights being flashed right now: a second request for one of them waits for the first to end.
         self._identifying: set[str] = set()
+        self.look: dict[str, str] | None = None  # the look on now ({id, name}); see looks.py
 
         self.registry = build_drivers(DriverContext(demo=demo, data_dir=getattr(store, "root", None)), demo=demo)
         godox = self.registry.get("godox")
@@ -673,9 +674,11 @@ class Hub:
             self._mirror_from(fixture)
 
     def _apply_engine(self, fixture: Fixture, state: LightState) -> None:
-        self.set_state(fixture, state, "engine")
+        self.set_state(fixture, state, "engine", mirror=not fixture.own_values)
 
     def _engine_changed(self, fixture: Fixture, status: dict[str, Any]) -> None:
+        if status["kind"] != "transition":
+            fixture.own_values = False  # a look's fade is over (or something else took the light)
         self._broadcast({"type": "engine", "light": fixture.id, "engine": status})
 
     def _save_states(self, *, force: bool = False) -> None:
@@ -1188,6 +1191,8 @@ class Hub:
             "link": self.link.snapshot(),
             "store": self.store.snapshot(),
             "log": list(self.log)[-80:],
+            "look": self.look["name"] if self.look else None,
+            "look_id": self.look["id"] if self.look else None,
             "demo": self.demo,
             "nearby": list(self.nearby.values()),
             "scanning": self.scanning,
