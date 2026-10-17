@@ -93,6 +93,8 @@ class DemoScanner:
     def __init__(self) -> None:
         self.devices: dict[str, Any] = {}
         self.busy = False
+        #: Addresses of lights the demo user has "reset" (``demo.reset``): they advertise as ready to pair.
+        self.reset: set[str] = set()
 
     async def scan(self, seconds: float, on_found: Callable[[Nearby], None] | None = None,
                    on_other: Callable[[Any, Any], None] | None = None) -> list[Nearby]:
@@ -101,7 +103,8 @@ class DemoScanner:
             found = []
             for nearby in DEMO_NEARBY:
                 await asyncio.sleep(min(0.8, seconds / 4) * PACE)
-                seen = Nearby(nearby.address, nearby.name, nearby.rssi, nearby.state, nearby.radio_id,
+                state = "unpaired" if nearby.address in self.reset else nearby.state
+                seen = Nearby(nearby.address, nearby.name, nearby.rssi, state, nearby.radio_id,
                               nearby.network_id, time.time())
                 found.append(seen)
                 if on_found is not None:

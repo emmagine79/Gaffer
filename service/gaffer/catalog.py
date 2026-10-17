@@ -178,6 +178,7 @@ class ModelCaps:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
+        data.pop("reset_source")  # provenance only: not for clients
         data.update(
             has_tint=self.has_tint,
             kind=self.kind,

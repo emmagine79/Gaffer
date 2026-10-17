@@ -47,7 +47,7 @@ type ModelWithReset = ModelRow & { reset_steps?: string[] }
 
 type Flash = 'idle' | 'flashing' | 'done' | 'failed'
 /** `added` is true for a light saved with `lights.add` (Zhiyun, Yongnuo): only that can be undone with "Not this one". */
-type Stage = { at: 'list' } | { at: 'godox' } | { at: 'reset'; n: Nearby } | { at: 'pick'; n: Nearby } | { at: 'pair'; n: Nearby } | { at: 'made'; id: string; added: boolean }
+type Stage = { at: 'list' } | { at: 'godox' } | { at: 'reset'; n: Nearby; check: 'idle' | 'checking' | 'still' } | { at: 'pick'; n: Nearby } | { at: 'pair'; n: Nearby } | { at: 'made'; id: string; added: boolean }
 
 function Key({ children, onClick, disabled, kind = 'plain' }: {
   children: ReactNode; onClick?: () => void; disabled?: boolean; kind?: 'plain' | 'primary' | 'ghost'
@@ -149,7 +149,28 @@ export function AddLight() {
       const reply = await request({ type: 'lights.pair', address: n.address, name: '' }, 90000)
       if (mine === attempt.current) arrived((reply as { light?: string }).light ?? null, mine, false)
     } catch (err) {
-      if (mine === attempt.current) toast((err as Error).message, 'error')
+      if (mine !== attempt.current) return
+      toast((err as Error).message, 'error')
+      // A refusal before pairing starts sends no `pairing` message, so this stage would wait for ever.
+      const now = useStudio.getState().pairing
+      if (!now || now.address !== n.address || now.step !== 'failed') setStage({ at: 'list' })
+    }
+  }
+
+  /** Reset view: listen again first. The scan from before the reset still says "paired with something else". */
+  const resetThenPair = async (n: Nearby) => {
+    const mine = ++attempt.current
+    setStage({ at: 'reset', n, check: 'checking' })
+    try {
+      const reply = (await request({ type: 'lights.scan', seconds: 8 }, 20000)) as { nearby?: Nearby[] }
+      if (mine !== attempt.current) return
+      const fresh = reply.nearby?.find((x) => x.address === n.address)
+      if (fresh?.relation === 'unpaired') void pair(fresh)
+      else setStage({ at: 'reset', n, check: 'still' })
+    } catch (err) {
+      if (mine !== attempt.current) return
+      toast((err as Error).message, 'error')
+      setStage({ at: 'reset', n, check: 'idle' })
     }
   }
 
@@ -233,7 +254,7 @@ export function AddLight() {
                               {n.relation === 'new' || n.relation === 'unpaired' || n.relation === 'elsewhere' ? (
                                 <button type="button" className="ad-pick" disabled={Boolean(pairing && !['done', 'failed'].includes(pairing.step))}
                                   onClick={() => (n.relation === 'new' ? (setChannel(''), setStage({ at: 'pick', n }))
-                                    : n.relation === 'elsewhere' ? setStage({ at: 'reset', n }) : pair(n))}>
+                                    : n.relation === 'elsewhere' ? setStage({ at: 'reset', n, check: 'idle' }) : pair(n))}>
                                   <RowBody n={n} />
                                   <span className="ad-act">
                                     {n.relation === 'new' ? <Plus size={14} /> : n.relation === 'elsewhere' ? <RotateCcw size={14} /> : <Link2 size={14} />}
@@ -285,10 +306,18 @@ export function AddLight() {
                 <h2>Reset and pair the {stage.n.model ?? 'light'}</h2>
                 <p className="ad-sub">It is paired with something else. Reset its Bluetooth, then pair it here.</p>
                 <ol className="ad-reset-steps" aria-label="Reset steps">
-                  {resetSteps(stage.n).map((text) => <li key={text}>{text}</li>)}
+                  {resetSteps(stage.n).map((text, i) => <li key={i}>{text}</li>)}
                 </ol>
+                {stage.check !== 'idle' && (
+                  <p className="ad-sub" role="status">
+                    {stage.check === 'checking' ? 'Listening for the light...'
+                      : 'The light still says it is paired with something else, so the reset did not take. Check you followed the steps above, then try again.'}
+                  </p>
+                )}
                 <div className="ad-actions">
-                  <Key kind="primary" onClick={() => pair(stage.n)}><Link2 size={15} /> Pair</Key>
+                  <Key kind="primary" disabled={stage.check === 'checking'} onClick={() => void resetThenPair(stage.n)}>
+                    <Link2 size={15} /> {stage.check === 'still' ? 'Try again' : 'Pair'}
+                  </Key>
                   <Key onClick={() => { setImportFor(stage.n.address); fileRef.current?.click() }}><FileKey2 size={14} /> Import keys</Key>
                   <Key kind="ghost" onClick={() => setStage({ at: 'list' })}>Back to the list</Key>
                 </div>
