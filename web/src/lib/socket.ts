@@ -1,5 +1,12 @@
 import type { ServerMessage } from './types'
 
+/**
+ * Fired on `window` each time the light socket closes. A phone that was signed out (New PIN, or
+ * phone access switched off) cannot tell from the close alone: a refused reconnect looks like any
+ * dropped connection to a browser. The PIN gate listens and asks the service.
+ */
+export const SOCKET_CLOSED = 'gaffer:socket-closed'
+
 type Listener = (m: ServerMessage) => void
 type StatusListener = (open: boolean) => void
 
@@ -57,6 +64,7 @@ export class Socket {
     }
     ws.onclose = () => {
       this.statusListeners.forEach((l) => l(false))
+      window.dispatchEvent(new Event(SOCKET_CLOSED))
       const delay = Math.min(8000, 400 * 2 ** this.retry++)
       window.setTimeout(() => this.connect(), delay)
     }

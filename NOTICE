@@ -6,7 +6,7 @@ Licensed under the MIT Licence; see LICENSE.
 WHERE THIS COMES FROM
 ---------------------
 
-Gaffer is built on the work of other open-source projects, all MIT licensed.
+Gaffer is built on the work of other open-source projects, all MIT licensed except segno, which is BSD-3-Clause.
 Each one's licence is kept in THIRD-PARTY/, and travels inside Gaffer.app.
 
 * lumen-studio, by Ritik (Rkcr7). Gaffer's light service and web interface
@@ -48,6 +48,11 @@ Each one's licence is kept in THIRD-PARTY/, and travels inside Gaffer.app.
   and the decimal colour-temperature frame encoder (ble_protocol.dart,
   yn_protocol.h), ported to Python in service/gaffer/drivers/yongnuo/protocol.py.
   https://github.com/asidjwiaijd/yongnuo-light-control
+
+* segno, by Lars Heuer. Draws the QR code that phones scan to open Gaffer
+  (SPEC-015). Used as a library, not copied. BSD-3-Clause; its licence is in
+  THIRD-PARTY/segno/.
+  https://github.com/heuer/segno
 
 TRADEMARKS
 ----------

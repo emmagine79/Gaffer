@@ -3,6 +3,7 @@ import { beamOf } from '../glass/describe'
 import { Footer } from '../glass/Footer'
 import { Glass } from '../glass/Glass'
 import { OtherLights } from '../glass/OtherLights'
+import { PhonePanel } from '../phone/PhonePanel'
 import { LookEditor } from '../looks/LookEditor'
 import { useLookKeys } from '../looks/looks'
 import { ScheduleEditor } from '../schedules/ScheduleEditor'
@@ -43,6 +44,7 @@ export function Shell() {
       {SURFACE === 'window' && <ScheduleEditor />}
       <AddLight />
       <Toasts />
+      {SURFACE === 'window' && <PhonePanel />}
     </div>
   )
 }
