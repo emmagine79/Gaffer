@@ -92,11 +92,12 @@ def test_a_light_held_by_an_official_app_is_reported_and_clears(client):
         panel = next(l["id"] for l in _lights(client) if l["name"] == "Zhiyun panel")
         assert {l["held"] for l in _lights(client)} == {False}
         ws.send_json({"type": "demo.held", "light": panel, "held": True})
-        _until(ws, lambda m: m["type"] == "lights" and any(l["held"] for l in m["lights"]))
+        pushed = _until(ws, lambda m: m["type"] == "lights")["lights"]  # the page is told at once, not a second later
+        assert [l["id"] for l in pushed if l["held"]] == [panel]
         held = [l for l in _lights(client) if l["held"]]
         assert [(l["id"], l["caps"]["brand"]) for l in held] == [(panel, "Zhiyun")]
         ws.send_json({"type": "demo.held", "light": panel, "held": False})
-        _until(ws, lambda m: m["type"] == "lights" and not any(l["held"] for l in m["lights"]))
+        assert not any(l["held"] for l in _until(ws, lambda m: m["type"] == "lights")["lights"])
     assert {l["held"] for l in _lights(client)} == {False}
 
 
