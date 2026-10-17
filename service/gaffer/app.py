@@ -110,11 +110,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
         await hub.start()
+        if phone is not None:
+            await phone.restore()  # on again, same PIN, if it was on when Gaffer last stopped
         try:
             yield
         finally:
             if phone is not None:
-                await phone.disable()  # close the network listener and sign every phone out
+                # Close the network listener and sign every phone out; the saved setting stays for the next start.
+                await phone.disable(save=False)
             await hub.stop()
             if on_shutdown is not None:
                 on_shutdown()

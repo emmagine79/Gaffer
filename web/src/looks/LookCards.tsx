@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useStudio } from '../state/store'
-import { allOff, applyLook, useLooks } from './looks'
+import { allOff, allOn, applyLook, useLooks } from './looks'
 import './looks.css'
 
 /** Room for three looks and All off, as in the mockup's four cards. The rest sit under "More looks". */
@@ -49,9 +49,9 @@ export function LookCards() {
             <span>{look.name}</span>
           </button>
         ))}
-        <button type="button" className={`g-card ${allOffNow ? 'sel' : ''}`} onClick={allOff}>
+        <button type="button" className="g-card" onClick={allOffNow ? allOn : () => void allOff()}>
           <Icon>{POWER}</Icon>
-          <span>All off</span>
+          <span>{allOffNow ? 'All on' : 'All off'}</span>
         </button>
       </div>
       {looks.length === 0 && <p className="g-dim g-nolooks">No looks yet. Save one in the Gaffer window.</p>}

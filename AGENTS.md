@@ -39,4 +39,4 @@ Run test and build commands through `~/.claude/skills/fleet-conductor/scripts/me
 
 - Every `FileHandle` `readabilityHandler` sets itself to nil when it reads empty data (EOF). Otherwise it fires again at once, forever, and keeps several cores busy (SPEC-001 retro).
 - Only Python opens Bluetooth. The Swift shell never links CoreBluetooth.
-- The service listens on `127.0.0.1` only, until the Mac window switches phone access on (`service/gaffer/phone.py`). Every route and the `/ws` socket need a cookie: the Mac window's session cookie, or a phone's PIN cookie (`service/gaffer/session.py`).
+- The service listens on `127.0.0.1` only, until the Mac window switches phone access on (`service/gaffer/phone.py`). Once on, phone access stays on across restarts, with the same PIN and port, until it is switched off (Captain, 18 Oct 2026). Every route and the `/ws` socket need a cookie: the Mac window's session cookie, or a phone's PIN cookie (`service/gaffer/session.py`).
