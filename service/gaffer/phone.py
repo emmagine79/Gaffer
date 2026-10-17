@@ -453,11 +453,11 @@ class PhoneAccess:
             logger.warning("phone access settings could not be withdrawn", exc_info=True)
             return False
 
-    def _persist(self, *, restoring: bool = False) -> None:
-        """Save the setting. When that fails, fail closed: the file must not keep an older setting
-        (an old PIN, or "on" after switching off), so it is removed or overwritten instead. Either way
-        the change will not last through a restart, so the Mac window is told. A restore is the one
-        exception: the file already holds that PIN, so a failed save there loses nothing and is left alone."""
+    def _persist(self, change: str, *, restoring: bool = False) -> None:
+        """Save the setting. ``change`` is "on", "off" or "pin". When the save fails, fail closed: the
+        file must not keep an older setting (an old PIN, or "on" after switching off), so it is removed
+        or overwritten instead. Either way the Mac window is told what a restart will do. A restore is the
+        one exception: the file already holds that PIN, so a failed save there loses nothing and is left alone."""
         if self._saved is None:
             return
         try:
@@ -467,12 +467,14 @@ class PhoneAccess:
             logger.warning("phone access settings could not be saved", exc_info=True)
         if restoring:
             return
-        self._withdraw_saved()
-        self.notice = {
-            "code": "not_saved",
-            "message": "Gaffer could not save this change, so it will not last through a restart. "
-                       "Check that Gaffer's data folder can be written.",
-        }
+        if not self._withdraw_saved():
+            message = ("Gaffer could not save this change, or clear the older saved setting. After Gaffer restarts, "
+                       "phone access and the old PIN may come back.")
+        elif change == "on":
+            message = "Gaffer could not save this change, so phone access will not last through a restart."
+        else:
+            message = "Gaffer could not save this change. Phone access will be off after Gaffer restarts."
+        self.notice = {"code": "not_saved", "message": f"{message} Check that Gaffer's data folder can be written."}
 
     async def restore(self) -> None:
         """Switch access back on with its old PIN if it was on when Gaffer last stopped."""
@@ -513,7 +515,7 @@ class PhoneAccess:
                 self.pin, self.wrong = pin, 0
             self.enabled = True
             self.notice = None
-            self._persist(restoring=restoring)
+            self._persist("on", restoring=restoring)
             self.refresh()  # the Tailscale names join the allowed set when the tool answers
 
     async def disable(self, *, save: bool = True) -> None:
@@ -525,7 +527,7 @@ class PhoneAccess:
                 await self._close()
             finally:
                 if save:
-                    self._persist()  # never left saying "on" once switched off
+                    self._persist("off")  # never left saying "on" once switched off
 
     async def _close(self) -> None:
         """Turn access off now: forget the PIN, sign every phone out, close the listener."""
@@ -546,7 +548,7 @@ class PhoneAccess:
             if self.enabled:
                 self.notice = None
                 self._new_pin()
-                self._persist()
+                self._persist("pin")
 
     def status(self) -> dict[str, Any]:
         """What the Mac window shows. Only ever sent to the Mac itself: it holds the PIN."""

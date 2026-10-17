@@ -715,6 +715,7 @@ def test_the_mac_is_told_when_a_change_cannot_be_saved_at_all_and_no_copy_of_the
         saved.mkdir()  # nothing can replace it, remove it or write into it
         status = studio.mac.post("/api/phone/pin", json={}).json()
         assert status["enabled"] is True and status["notice"]["code"] == "not_saved"
+        assert "old PIN may come back" in status["notice"]["message"]  # the old file could not be cleared: say so
         assert str(tmp_path) not in status["notice"]["message"]
         assert not (saved.parent / "phone.json.tmp").exists()  # the failed save left no copy holding the PIN
 
