@@ -65,6 +65,34 @@ def _lights(client):
     return {light["name"]: light for light in client.get("/api/lights").json()["lights"]}
 
 
+def _ran(hub):
+    return [e for e in hub.log if e["kind"] == "schedule"]
+
+
+def _failed(hub):
+    return [e for e in hub.log if e["kind"] == "error"]
+
+
+def _delete_look(client, look_id):
+    with client.websocket_connect(WS) as ws:
+        ws.receive_json()  # hello
+        ws.send_json({"type": "looks.delete", "id": look_id})
+        while (m := ws.receive_json()).get("type") != "store" or m.get("collection") != "looks":
+            pass
+
+
+def _error_toast_when_the_clock_reaches(client, when):
+    """Move the clock with a window connected, and return the error toast that window is shown."""
+    with client.websocket_connect(WS) as ws:
+        ws.receive_json()  # hello
+        client.clock.set(when)
+        for _ in range(500):
+            message = ws.receive_json()
+            if message.get("type") == "toast" and message.get("kind") == "error":
+                return message["text"]
+    raise AssertionError("no error toast reached the window")
+
+
 def _save_schedule(client, schedule):
     """schedules.save over the socket, as the window's editor sends it. Returns the reply."""
     with client.websocket_connect(WS) as ws:
@@ -96,7 +124,9 @@ def test_ac5_moody_at_22_00_mon_to_fri_fires_the_look_and_not_saturday_or_one_mi
     _wait(lambda: _lights(studio)["Key light"]["state"]["brightness"] == 17.0, "the light showing Moody's values")
     assert studio.hub.look == {"id": moody, "name": "Moody"}
 
-    # The same minute does not fire twice; "off" turns every light off at its own time.
+    # The same minute does not fire twice: the clock has been read many times at 22:00 and the look ran once.
+    assert len(_ran(studio.hub)) == 1
+    # "off" turns every light off at its own time.
     _save_schedule(studio, {"name": "Lights out", "at": "02:00", "days": [1], "action": "off"})
     assert any(light["state"]["power"] for light in _lights(studio).values())
     studio.clock.set(TUESDAY_0200)
@@ -109,9 +139,45 @@ def test_a_schedule_that_is_not_valid_is_refused_and_stores_nothing(studio):
     for bad in ({**good, "name": " "}, {**good, "at": "25:00"}, {**good, "at": "9:5"}, {**good, "days": []},
                 {**good, "days": [7]}, {**good, "days": [0, 0]}, {**good, "action": "sunrise"},
                 {**good, "action": "look", "target": "no-such-look"}, {**good, "action": "look"},
-                {**good, "id": "constructor"}, {**good, "name": "x" * 81}):
+                {**good, "id": "constructor"}, {**good, "name": "x" * 81}, {**good, "at": "２２:００"}):
         reply = _save_schedule(studio, bad)
         assert reply["type"] == "error", bad
         assert not any(p in reply["text"] for p in ("/Users/", "/private/", "/var/")), reply
     assert studio.hub.store.items("schedules") == []
     assert _save_schedule(studio, good)["type"] == "ack"
+
+
+def test_a_schedule_whose_look_was_deleted_can_still_be_paused_and_keeps_its_creation_time(studio):
+    key = _lights(studio)["Key light"]
+    moody = studio.post("/api/looks", json={"name": "Moody", "fade_seconds": 0, "lights": {key["id"]: {"power": True}}}).json()["look"]["id"]
+    saved = _save_schedule(studio, {"name": "Moody at night", "at": "22:00", "days": [0], "action": "look", "target": moody})["schedule"]
+    _delete_look(studio, moody)
+
+    paused = _save_schedule(studio, {**saved, "enabled": False})
+    assert paused["type"] == "ack", paused
+    assert paused["schedule"]["enabled"] is False
+    assert paused["schedule"]["created"] == saved["created"]
+    assert _save_schedule(studio, {**saved, "enabled": True})["type"] == "error"  # turning it on needs the look
+
+
+def test_a_schedule_whose_look_was_deleted_says_it_did_not_run(studio):
+    key = _lights(studio)["Key light"]
+    moody = studio.post("/api/looks", json={"name": "Moody", "fade_seconds": 0, "lights": {key["id"]: {"power": True}}}).json()["look"]["id"]
+    _save_schedule(studio, {"name": "Moody at night", "at": "22:00", "days": [0], "action": "look", "target": moody})
+    _delete_look(studio, moody)
+
+    assert "Moody at night" in _error_toast_when_the_clock_reaches(studio, MONDAY_2200)
+    assert "Moody at night" in _failed(studio.hub)[0]["text"]
+    assert _ran(studio.hub) == []
+
+
+def test_an_all_off_schedule_that_fails_says_so_and_does_not_claim_it_ran(studio):
+    async def broken(on):
+        raise RuntimeError("the driver fell over")
+
+    studio.hub.power_all = broken  # the lights cannot be reached
+    _save_schedule(studio, {"name": "Lights out", "at": "22:00", "days": [0], "action": "off"})
+
+    assert "Lights out" in _error_toast_when_the_clock_reaches(studio, MONDAY_2200)
+    assert "Lights out" in _failed(studio.hub)[0]["text"]
+    assert _ran(studio.hub) == []

@@ -24,7 +24,7 @@ from .looks import MAX_NAME, _ID, _RESERVED_IDS, find as find_look
 COLLECTION = "schedules"
 ACTIONS = ("look", "off")
 
-_TIME = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
+_TIME = re.compile(r"([01][0-9]|2[0-3]):([0-5][0-9])")  # ASCII digits only: \d would take full-width ones
 
 
 def checked(hub: Hub, raw: Any) -> dict[str, Any]:
@@ -71,13 +71,18 @@ def checked(hub: Hub, raw: Any) -> dict[str, Any]:
         target = raw.get("target")
         if not isinstance(target, str) or not target:
             raise CommandError("Choose the look to apply.")
-        find_look(hub, target)  # raises "There is no look with that id."
+        if enabled:  # a paused schedule can be saved after its look is deleted; turning it on again needs the look
+            find_look(hub, target)  # raises "There is no look with that id."
         item["target"] = target
     return item
 
 
 def save(hub: Hub, raw: Any) -> dict[str, Any]:
-    stored = hub.store.upsert(COLLECTION, checked(hub, raw))
+    item = checked(hub, raw)
+    before = next((x for x in hub.store.items(COLLECTION) if isinstance(x, dict) and x.get("id") == item.get("id")), None)
+    if before is not None and "created" in before:
+        item["created"] = before["created"]  # saving over a schedule keeps when it was made
+    stored = hub.store.upsert(COLLECTION, item)
     _broadcast_store(hub)
     return stored
 

@@ -38,8 +38,8 @@ export function ScheduleEditor() {
       return false
     }
   }
-  const chosenLook = target || looks[0]?.id || ''
-  const canAdd = name.trim() !== '' && days.length > 0 && (action === 'off' || chosenLook !== '')
+  const chosenLook = looks.some((l) => l.id === target) ? target : looks[0]?.id || '' // the picked look may have been deleted
+  const canAdd = name.trim() !== '' && at !== '' && days.length > 0 && (action === 'off' || chosenLook !== '')
   const add = async () => {
     const ok = await save({ name, at, days, action, ...(action === 'look' ? { target: chosenLook } : {}) })
     if (ok) setName('')

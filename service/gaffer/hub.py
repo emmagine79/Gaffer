@@ -622,19 +622,48 @@ class Hub:
     # -- schedules ----------------------------------------------------------------------------
 
     def fire_schedule(self, schedule: dict[str, Any]) -> None:
-        """Run one due schedule: apply its look, or turn every light off (schedules.py checks them on save)."""
+        """Run one due schedule: apply its look, or turn every light off (schedules.py checks them on save).
+        A schedule that cannot run is logged and toasted as an error, never dropped quietly."""
         from . import looks
+        from .commands import CommandError
 
         name = schedule.get("name", "schedule")
         action = schedule.get("action")
-        if action == "look":
+        if action == "off":
+            self._spawn(self._run_all_off(name))
+            return
+        try:
+            if action != "look":
+                raise ValueError(f"unknown action {action!r}")
             looks.apply(self, str(schedule.get("target") or ""))
-        elif action == "off":
-            self._spawn(looks.all_off(self))
-        else:
-            raise ValueError(f"unknown action {action!r}")
+        except CommandError as err:
+            self._schedule_failed(name, str(err))
+            return
+        except Exception:  # noqa: BLE001 - a bad stored entry must be reported, and the others must still run
+            logger.exception("schedule %s failed", name)
+            self._schedule_failed(name, "it is not a schedule Gaffer can run")
+            return
+        self._schedule_ran(name)
+
+    async def _run_all_off(self, name: str) -> None:
+        """The all-off schedule: the success log and toast come only after every light has been told."""
+        from . import looks
+
+        try:
+            await looks.all_off(self)
+        except Exception:  # noqa: BLE001 - reported to the user below; the hub keeps running
+            logger.exception("schedule %s failed", name)
+            self._schedule_failed(name, "the lights did not all turn off")
+            return
+        self._schedule_ran(name)
+
+    def _schedule_ran(self, name: str) -> None:
         self._log("schedule", f"ran {name}")
         self._toast("info", f"Schedule: {name}")
+
+    def _schedule_failed(self, name: str, why: str) -> None:
+        self._log("error", f"schedule {name} did not run: {why}")
+        self._toast("error", f"Schedule {name} did not run: {why}")
 
     # -- state --------------------------------------------------------------------------------
 
