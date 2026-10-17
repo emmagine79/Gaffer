@@ -156,8 +156,14 @@ async def _set_many(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, An
         fixture.stream_source = None
         # Each picked light has its own target: a group mirroring one write onto the others would undo the ratio.
         _start(hub, fixture, targets[light_id], 0, mirror=False)
-    # Group members that were not picked follow the dragged light once.
-    hub.mirror_from(fixtures[anchor], skip=frozenset(fixtures))
+    # Group members that were not picked follow a picked light of their group, once per group.
+    # The dragged light goes first, so where picked lights share a group it is the one that leads.
+    picked, followed = frozenset(fixtures), set()
+    for light_id in sorted(fixtures, key=lambda i: i != anchor):
+        group = hub.group_of(light_id)
+        if group is not None and group["id"] not in followed:
+            followed.add(group["id"])
+            hub.mirror_from(fixtures[light_id], skip=picked)
     return {"type": "ack", "of": "set.many"}
 
 

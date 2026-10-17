@@ -1006,8 +1006,9 @@ class Hub:
         fixture = self.fixtures.get(light.id)
         if fixture is not None:
             old = fixture.light
-            if (old.network, old.node_address, old.num_elements, old.device_key, old.radio_id) == (
-                    light.network, light.node_address, light.num_elements, light.device_key, light.radio_id):
+            if (old.network, old.node_address, old.num_elements, old.device_key, old.radio_id, old.address) == (
+                    light.network, light.node_address, light.num_elements, light.device_key, light.radio_id,
+                    light.address):
                 fixture.light = light  # a name or model source may differ; nothing else
                 return False
             self._save_states(force=True)
@@ -1039,9 +1040,8 @@ class Hub:
             raise HubError(str(err)) from err
         changed = await self._take_imported(light)
         client.selected = light.id
-        if changed or self.network != light.network:
-            async with self._switch_lock:
-                await self._relink(light.network)
+        async with self._switch_lock:
+            await (self._relink if changed else self._move_to_network)(light.network)
         self._broadcast_lights()
         self._log("lights", f"imported keys for {light.name}")
         return light
@@ -1071,9 +1071,8 @@ class Hub:
         if not saved:
             raise HubError("No light could be added. " + " ".join(skipped))
         client.selected = saved[0].id
-        if changed or self.network != saved[-1].network:
-            async with self._switch_lock:
-                await self._relink(saved[-1].network)
+        async with self._switch_lock:
+            await (self._relink if changed else self._move_to_network)(saved[-1].network)
         self._broadcast_lights()
         self._log("lights", f"imported {len(saved)} lights from the Godox app")
         return saved, skipped

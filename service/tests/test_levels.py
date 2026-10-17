@@ -107,3 +107,19 @@ def test_a_ratio_drag_over_grouped_lights_keeps_the_ratio_and_moves_unpicked_mem
         assert _send(ws, {"type": "set.many", "anchor": key, "lights": [key, fill], "brightness": 80})["type"] == "ack"
         after = _levels(client)
         assert (after["Key light"], after["Fill"], after["Backlight"]) == (80, 50, 80)
+
+
+def test_a_ratio_drag_moves_the_unpicked_members_of_every_picked_lights_group(client):
+    """SPEC-023: Key is dragged with Fill; Backlight shares a group with Fill only, and must follow Fill."""
+    with client.websocket_connect("/ws") as ws:
+        ids = {light["name"]: light["id"] for light in ws.receive_json()["lights"]}
+        key, fill, backlight = ids["Key light"], ids["Fill"], ids["Backlight"]
+        for light_id, level in ((key, 40), (fill, 25), (backlight, 10)):
+            ws.send_json({"type": "set", "light": light_id, "patch": {"brightness": level}})
+        ws.send_json({"type": "group.save", "rid": 2, "leader": ids["Hair light"], "group": {
+            "name": "Fill pair", "members": [fill, backlight], "props": ["brightness"]}})
+        while ws.receive_json().get("rid") != 2:
+            pass
+        assert _send(ws, {"type": "set.many", "anchor": key, "lights": [key, fill], "brightness": 80})["type"] == "ack"
+        after = _levels(client)
+        assert (after["Key light"], after["Fill"], after["Backlight"]) == (80, 50, 50)
