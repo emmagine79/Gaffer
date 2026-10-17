@@ -430,6 +430,16 @@ async def _identify(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, An
     return {"type": "ack", "of": "lights.identify", "light": light, "driver": await hub.identify(light)}
 
 
+@command("light.max_mode")
+async def _max_mode(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    fixture = _fixture(hub, client, m)
+    on = m.get("on")
+    if not isinstance(on, bool):
+        raise CommandError("on must be true or false")
+    await hub.set_max_mode(fixture.id, on)
+    return {"type": "ack", "of": "light.max_mode", "light": fixture.id, "on": on}
+
+
 @command("demo.held")
 async def _demo_held(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     hub.demo_hold(str(m.get("light") or ""), bool(m.get("held")))

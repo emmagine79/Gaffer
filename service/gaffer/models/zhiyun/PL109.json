@@ -18,6 +18,7 @@
   "effects": [],
   "fan_modes": [],
   "battery": false,
+  "max_mode": true,
   "note": "Model code and name from didim99/HA-Zhiyun-Light (MIT). Only the white controls are driven; colour models still show white only.",
   "driver_data": {
     "control_mode": 1

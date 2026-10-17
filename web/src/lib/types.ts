@@ -87,6 +87,8 @@ export interface Caps {
   kind: LightKind
   kind_label: string
   features: Features
+  /** The model has a Max Mode (turbo) switch: Glass shows "Max" for it. */
+  max_mode: boolean
 }
 
 export interface GelChip extends Gel { series: string; family: string; how: 'native' | 'white' | 'colour' }
@@ -194,6 +196,8 @@ export interface LightView {
   reachable: boolean | null
   /** Another controller (the brand's own app) holds this light's one connection. */
   held: boolean
+  /** Max Mode as the driver last set it. null for a model without the switch (caps.max_mode false). */
+  max_mode: boolean | null
   online: boolean
 }
 
@@ -287,7 +291,7 @@ export type ServerMessage =
   | { type: 'readback'; light: string; readback: Readback }
   | { type: 'heartbeat'; light: string; at: number }
   | { type: 'engine'; light: string; engine: EngineStatus }
-  | { type: 'stats'; stats: { pump: PumpStats; link: LinkSnapshot; clients: number }; reachable: Record<string, boolean | null>; held?: Record<string, boolean> }
+  | { type: 'stats'; stats: { pump: PumpStats; link: LinkSnapshot; clients: number }; reachable: Record<string, boolean | null>; held?: Record<string, boolean>; max_mode?: Record<string, boolean | null> }
   | { type: 'log'; entry: LogEntry }
   | { type: 'toast'; kind: string; text: string }
   | { type: 'device'; light: string; device: Device }

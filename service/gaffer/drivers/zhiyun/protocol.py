@@ -49,7 +49,9 @@ class Command(IntEnum):
     SET_BRIGHTNESS = 0x1001
     SET_COLOR_TEMP = 0x1002
     POWER_STATE = 0x1008
-    QUERY_BRIGHTNESS = 0x1009
+    #: Max Mode (turbo): one value byte after the object and op, 1 on and 0 off. Read with ``encode_query``.
+    #: Named QUERY_BRIGHTNESS here until 18 Oct 2026; the handshake still sends it as a read (docs/research/molus-turbo.md).
+    MAX_MODE = 0x1009
     READ_DEVICE_STATE = 0x0006
     GET_DEVICE_INFO = 0x2005
     GET_DEVICE_NAME = 0x2003
@@ -115,6 +117,13 @@ def _number(value: object, what: str) -> float:
 
 
 def encode_power(on: bool, op: int = OP_LEGACY) -> bytes:
+    return _control(op) + (b"\x01" if on else b"\x00")
+
+
+def encode_max_mode(on: bool, op: int = OP_LEGACY) -> bytes:
+    """Max Mode: the control object and op, then one byte, 1 for on and 0 for off."""
+    if not isinstance(on, bool):
+        raise ProtocolError(f"max mode must be true or false, not {type(on).__name__}")
     return _control(op) + (b"\x01" if on else b"\x00")
 
 

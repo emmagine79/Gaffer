@@ -437,8 +437,9 @@ function handle(m: ServerMessage) {
       set({ pump: m.stats.pump, link: m.stats.link })
       const lights = useStudio.getState().lights
       const heldNow = (id: string) => m.held?.[id] ?? false
-      const changed = lights.some((l) => (m.reachable[l.id] ?? null) !== l.reachable || heldNow(l.id) !== l.held)
-      if (changed) set((s) => withLights(s.selected, s.lights.map((l) => ({ ...l, reachable: m.reachable[l.id] ?? null, held: heldNow(l.id) }))))
+      const maxNow = (id: string) => m.max_mode?.[id] ?? null
+      const changed = lights.some((l) => (m.reachable[l.id] ?? null) !== l.reachable || heldNow(l.id) !== l.held || maxNow(l.id) !== l.max_mode)
+      if (changed) set((s) => withLights(s.selected, s.lights.map((l) => ({ ...l, reachable: m.reachable[l.id] ?? null, held: heldNow(l.id), max_mode: maxNow(l.id) }))))
       break
     }
     case 'log':

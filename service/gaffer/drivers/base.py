@@ -104,6 +104,15 @@ class Driver(ABC):
     def status(self, light: SavedLight) -> LightStatus:
         """``{"reachable": bool | None, "held": bool}`` for this light."""
 
+    async def set_max_mode(self, light: SavedLight, on: bool) -> None:
+        """Switch Max Mode (turbo) on or off. Only a model with ``max_mode`` in its file is asked; the
+        hub checks that, and that the light is on, first. Default: this brand has no Max Mode."""
+        raise NotImplementedError(f"the {self.id} driver has no Max Mode")
+
+    def max_mode(self, light: SavedLight) -> bool | None:
+        """Max Mode as the driver last set it, or None for a driver that has no such switch."""
+        return None
+
     def needs_channel(self, caps: Any) -> bool:
         """True when a light of this model must be told a radio channel when it is added (Yongnuo).
 
