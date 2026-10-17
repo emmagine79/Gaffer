@@ -33,7 +33,6 @@ export default async function startService() {
     ['run', '--project', SERVICE, '--frozen', 'python', '-m', 'gaffer', '--demo', '--port', '0', '--data', data, '--session-from-stdin'],
     { cwd: SERVICE, stdio: ['pipe', 'pipe', 'ignore'], detached: true },
   )
-  child.stdin.write(`${secret}\n`)
   const killGroup = () => {
     try { process.kill(-child.pid!, 'SIGKILL') } catch { /* already gone */ }
   }
@@ -42,6 +41,14 @@ export default async function startService() {
   try {
     port = await new Promise<number>((done, fail) => {
       const timer = setTimeout(() => fail(new Error('the service did not start')), START_MS)
+      const failNow = (error: Error) => {
+        clearTimeout(timer)
+        fail(error)
+      }
+      // A missing uv or a child that dies before it reads the secret surfaces as 'error'.
+      child.on('error', failNow)
+      child.stdin.on('error', failNow)
+      child.stdin.write(`${secret}\n`)
       let out = ''
       child.stdout.on('data', (chunk: Buffer) => {
         out += chunk.toString()

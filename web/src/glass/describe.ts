@@ -16,8 +16,10 @@ export interface Readout { big: string; unit: string; what: string }
  * Describes the state the light is in: Kelvin for white, degrees for colour, and the mode's
  * own name for gel, effect and RGBW, which have no single Kelvin or hue to show.
  */
-export function readout(state: LightState, caps: Pick<Caps, 'effects'>): Readout {
-  switch (state.mode) {
+export function readout(state: LightState, caps: Pick<Caps, 'effects' | 'features'>): Readout {
+  // Same guard as the panel's controls: a light with no colour has no hue to show.
+  const mode = state.mode === 'hsi' && !caps.features.colour ? 'cct' : state.mode
+  switch (mode) {
     case 'hsi':
       return { big: String(Math.round(state.hsi.hue)), unit: '°', what: hueName(state.hsi.hue) }
     case 'gel':
@@ -34,7 +36,7 @@ export function readout(state: LightState, caps: Pick<Caps, 'effects'>): Readout
 }
 
 /** "40% brightness, daylight": the line under the big number. */
-export function sentence(state: LightState, caps: Pick<Caps, 'effects'>): string {
+export function sentence(state: LightState, caps: Pick<Caps, 'effects' | 'features'>): string {
   if (!state.power) return 'Off'
   return `${pct(state.brightness)} brightness, ${readout(state, caps).what}`
 }

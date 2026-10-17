@@ -43,12 +43,12 @@ Every saved light with its abilities and its current state: the same `lights`, `
 {
   "lights": [{"id": "...", "name": "Key light", "model": "ML100R", "caps": {"features": {"white": true, "colour": true}}, "state": {"power": true, "brightness": 40, "mode": "cct"}, "online": true}],
   "gel_tables": {"native:2": [{"...": "..."}]},
-  "network": "<mesh network name>"
+  "network": "<mesh network name or null>"
 }
 ```
 
 - Each light is the object `hello` gives, with `online` (reachable or on the mesh). `state` has `power`, `brightness`, `mode` (`cct`, `hsi`, `rgbw`, `gel` or `fx`) and one object per mode. `caps.features` does not change its keys.
-- `gel_tables` is keyed by the gel table a light uses (its `gel_key`). `network` is the mesh network name, a string.
+- `gel_tables` is keyed by the gel table a light uses (its `gel_key`). `network` is the mesh network name, a string, or `null` when no light is saved or the link is dropped.
 
 ### Model files
 
