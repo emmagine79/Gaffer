@@ -32,6 +32,15 @@ IDENTIFY_LEVELS = (100.0, 15.0, 100.0, 15.0)
 IDENTIFY_HOLD_SECONDS = 0.35
 
 
+def retry_delay(failures: int) -> float:
+    """Seconds to wait before the next try after ``failures`` failures in a row.
+
+    The same bounded back-off as gaffer/link.py (the Godox link supervisor):
+    ``min(30, 1 * 2 ** min(failures, 5))``, and 1 s before any failure.
+    """
+    return min(30.0, 1.0 * 2 ** min(failures, 5)) if failures else 1.0
+
+
 class ZhiyunError(Exception):
     """A plain-words error with a code. Never carries a path."""
 
@@ -60,6 +69,10 @@ class _Light:
         self.generation = 0
         #: Background closes of replaced links; the next open waits for them.
         self.closers: set[asyncio.Future[None]] = set()
+        #: Failures in a row since the last good send; sets the back-off.
+        self.failures = 0
+        #: The pending back-off, after which ``wanted`` is tried again.
+        self.retry: asyncio.Task[None] | None = None
         self.reachable: bool | None = None
         self.wanted: LightState | None = None
         self.sent = _Sent()
@@ -89,10 +102,12 @@ class ZhiyunDriver(Driver):
         *,
         transport: Transport | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        backoff_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         super().__init__(context)
         self._transport: Transport = transport or BleakTransport()
         self._sleep = sleep
+        self._backoff_sleep = backoff_sleep
         self._lights: dict[str, _Light] = {}
         self._closing: set[asyncio.Future[None]] = set()
         self._connecting: set[asyncio.Future[None]] = set()
@@ -113,7 +128,11 @@ class ZhiyunDriver(Driver):
     async def stop(self) -> None:
         self._stopped = True
         states = list(self._lights.values())
-        tasks = [st.task for st in states if st.task] + list(self._connecting)
+        for st in states:
+            if st.retry:
+                st.retry.cancel()
+        tasks = [st.task for st in states if st.task] + [st.retry for st in states if st.retry]
+        tasks += list(self._connecting)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -131,6 +150,9 @@ class ZhiyunDriver(Driver):
         connecting.add_done_callback(self._connecting.discard)
         try:
             await connecting
+        except (LinkError, ZhiyunError):
+            self._schedule_retry(st)  # an unsent ``wanted`` is tried again
+            raise
         except asyncio.CancelledError:
             if self._stopped and asyncio.current_task().cancelling() == 0:
                 raise ZhiyunError("stopped", "Gaffer is shutting down.") from None
@@ -143,6 +165,8 @@ class ZhiyunDriver(Driver):
             await self._ensure_link(st)
         if st.task is None or st.task.done():
             st.task = asyncio.create_task(self._worker(st))
+        if st.wanted is not None:
+            st.wake.set()  # send what was asked for while the light was away
 
     def apply(self, light: Any, state: LightState) -> None:
         if self._stopped:
@@ -150,6 +174,8 @@ class ZhiyunDriver(Driver):
         st = self._state_for(light)
         st.wanted = state
         st.idle.clear()
+        if st.retry:
+            st.retry.cancel()  # new input ends the back-off at once
         if st.task is None or st.task.done():
             st.task = asyncio.create_task(self._worker(st))
         st.wake.set()
@@ -217,14 +243,33 @@ class ZhiyunDriver(Driver):
             try:
                 if want is not None:
                     await self._send_state(st, want)
+                    st.failures = 0
             except (ZhiyunError, LinkError) as err:
                 log.warning("zhiyun light %s: %s", st.id, err)
                 self._lost(st)
+                self._schedule_retry(st)
             except Exception:  # noqa: BLE001 - one bad apply never ends the worker
                 log.exception("zhiyun light %s: unexpected error", st.id)
                 self._lost(st)
+                self._schedule_retry(st)
             if not st.wake.is_set():
                 st.idle.set()
+
+    def _schedule_retry(self, st: _Light) -> None:
+        """Try ``wanted`` again after a back-off, so a dropped command is not lost."""
+        if self._stopped or st.wanted is None or (st.retry and not st.retry.done()):
+            return  # nothing to send, or one failure already has its retry
+        st.failures += 1
+        if st.retry:
+            st.retry.cancel()
+        st.retry = asyncio.ensure_future(self._retry(st, retry_delay(st.failures)))
+        if st.task is None or st.task.done():
+            st.task = asyncio.create_task(self._worker(st))
+
+    async def _retry(self, st: _Light, delay: float) -> None:
+        await self._backoff_sleep(delay)
+        st.idle.clear()
+        st.wake.set()
 
     def _lost(self, st: _Light) -> None:
         was = st.reachable
@@ -273,6 +318,7 @@ class ZhiyunDriver(Driver):
     def _on_lost(self, st: _Light, generation: int) -> None:
         if generation == st.generation:  # a late callback from a replaced link changes nothing
             self._lost(st)
+            self._schedule_retry(st)
 
     async def _handshake(self, st: _Light) -> None:
         """Identity and state queries, in the iOS app's order; the light drops commands without them."""

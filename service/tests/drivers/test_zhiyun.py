@@ -92,9 +92,33 @@ async def nosleep(_s: float) -> None:
     pass
 
 
+async def never(_s: float) -> None:
+    await asyncio.Event().wait()  # a back-off that only ends when the test says so, or on stop
+
+
+class Backoff:
+    """A fake clock for the retry back-off: records each wait, ends it when the test puts a token."""
+
+    def __init__(self):
+        self.delays: list[float] = []
+        self.ends: asyncio.Queue = asyncio.Queue()
+
+    async def __call__(self, seconds: float) -> None:
+        self.delays.append(seconds)
+        await self.ends.get()
+
+
+async def until(condition) -> None:
+    for _ in range(1000):
+        if condition():
+            return
+        await asyncio.sleep(0.001)
+    raise AssertionError("condition not reached")
+
+
 def make():
     transport = FakeTransport()
-    return ZhiyunDriver(transport=transport, sleep=nosleep), transport
+    return ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=never), transport
 
 
 def on(brightness: float, kelvin: int) -> LightState:
@@ -421,7 +445,7 @@ async def test_identify_on_a_light_that_drops_mid_pulse_does_not_keep_the_pulse_
                 transport.fail_writes = True  # the light drops after the first pulse level
 
     transport = FakeTransport()
-    driver = ZhiyunDriver(transport=transport, sleep=sleep)
+    driver = ZhiyunDriver(transport=transport, sleep=sleep, backoff_sleep=never)
     light = Light()
     await driver.connect(light)
     driver.apply(light, on(80, 4300))
@@ -454,6 +478,7 @@ class FakeBleakClient:
     notify_error: Exception | None = None
     disconnect_gate: asyncio.Event | None = None
     connect_started = asyncio.Event()
+    disconnect_started = asyncio.Event()
 
     def __init__(self, address, disconnected_callback=None):
         self.is_connected = False
@@ -476,6 +501,7 @@ class FakeBleakClient:
             raise FakeBleakClient.notify_error
 
     async def disconnect(self):
+        FakeBleakClient.disconnect_started.set()
         if FakeBleakClient.disconnect_gate is not None:
             await FakeBleakClient.disconnect_gate.wait()
         self.disconnected = True
@@ -491,6 +517,7 @@ def fake_bleak(monkeypatch):
     FakeBleakClient.notify_error = None
     FakeBleakClient.disconnect_gate = None
     FakeBleakClient.connect_started = asyncio.Event()
+    FakeBleakClient.disconnect_started = asyncio.Event()
     return FakeBleakClient
 
 
@@ -520,4 +547,101 @@ async def test_cancelling_a_connect_does_not_wait_for_the_client_to_finish_disco
     await asyncio.wait_for(asyncio.gather(opening, return_exceptions=True), 1)
     assert opening.cancelled()
     fake_bleak.disconnect_gate.set()  # let the background disconnect end
+    await asyncio.wait_for(fake_bleak.instances[0].disconnect_done.wait(), 1)
+
+
+# -- a command is not dropped when the link fails ---------------------------------------------
+
+
+async def test_a_failed_send_is_tried_again_with_a_growing_back_off_until_the_light_answers():
+    backoff = Backoff()
+    transport = FakeTransport()
+    driver = ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=backoff)
+    light = Light()
+    await driver.connect(light)
+    transport.fail_writes = True
+    driver.apply(light, A)
+    await driver.flush(light)
+    assert backoff.delays == [2.0]  # min(30, 1 * 2 ** failures), as in gaffer/link.py
+    backoff.ends.put_nowait(None)
+    await until(lambda: len(backoff.delays) == 2)  # the retry failed too
+    assert backoff.delays == [2.0, 4.0]
+    transport.fail_writes = False
+    backoff.ends.put_nowait(None)
+    await until(lambda: driver.status(light)["reachable"] is True)
+    await driver.flush(light)
+    assert last_value(transport, p.Command.SET_BRIGHTNESS, "<f") == 37.5
+    assert last_value(transport, p.Command.SET_COLOR_TEMP, "<H") == 4300
+    await driver.stop()
+
+
+async def test_a_light_that_drops_and_comes_back_gets_its_wanted_state_again():
+    backoff = Backoff()
+    transport = FakeTransport()
+    driver = ZhiyunDriver(transport=transport, sleep=nosleep, backoff_sleep=backoff)
+    light = Light()
+    await driver.connect(light)
+    driver.apply(light, A)
+    await driver.flush(light)
+    transport.writes.clear()
+    transport.lost_callbacks[0]()  # the light power-cycles
+    assert driver.status(light)["reachable"] is False
+    backoff.ends.put_nowait(None)
+    await until(lambda: driver.status(light)["reachable"] is True)
+    await driver.flush(light)
+    assert transport.opens == 2
+    assert len(transport.writes) == HANDSHAKE + 3  # handshake again, then the wanted state
+    await driver.stop()
+
+
+async def test_connect_sends_a_wanted_state_that_was_waiting_for_the_light():
+    driver, transport = make()
+    light = Light()
+    transport.fail_open = True
+    driver.apply(light, A)
+    await driver.flush(light)  # failed: the state is wanted but unsent
+    transport.fail_open = False
+    await driver.connect(light)  # the back-off has not ended, but connect has the light now
+    await until(lambda: len(transport.writes) == HANDSHAKE + 3)
+    assert last_value(transport, p.Command.SET_BRIGHTNESS, "<f") == 37.5
+    await driver.stop()
+
+
+async def test_identify_on_a_light_that_drops_mid_pulse_gets_its_own_state_back_when_it_returns():
+    holds = 0
+    backoff = Backoff()
+
+    async def sleep(seconds: float) -> None:
+        nonlocal holds
+        if seconds == IDENTIFY_HOLD_SECONDS:
+            holds += 1
+            if holds == 1:
+                transport.fail_writes = True
+
+    transport = FakeTransport()
+    driver = ZhiyunDriver(transport=transport, sleep=sleep, backoff_sleep=backoff)
+    light = Light()
+    await driver.connect(light)
+    driver.apply(light, on(80, 4300))
+    await driver.flush(light)
+    with pytest.raises(ZhiyunError):
+        await driver.identify(light)
+    transport.fail_writes = False
+    backoff.ends.put_nowait(None)
+    await until(lambda: driver.status(light)["reachable"] is True)
+    await driver.flush(light)
+    assert last_value(transport, p.Command.SET_BRIGHTNESS, "<f") == 80.0
+    await driver.stop()
+
+
+async def test_a_cancel_during_the_disconnect_after_a_failed_connect_still_releases_the_client(fake_bleak):
+    from bleak.exc import BleakError
+
+    fake_bleak.notify_error = BleakError("dropped")
+    fake_bleak.disconnect_gate = asyncio.Event()
+    opening = asyncio.ensure_future(transport_module.BleakTransport().open("addr", lambda _d: None, lambda: None))
+    await asyncio.wait_for(fake_bleak.disconnect_started.wait(), 1)  # open() is awaiting the disconnect
+    opening.cancel()
+    await asyncio.gather(opening, return_exceptions=True)
+    fake_bleak.disconnect_gate.set()
     await asyncio.wait_for(fake_bleak.instances[0].disconnect_done.wait(), 1)

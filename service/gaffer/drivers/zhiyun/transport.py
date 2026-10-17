@@ -76,6 +76,15 @@ def _release_in_background(client) -> None:
     closing.add_done_callback(_background.discard)
 
 
+async def _close_or_release(client) -> None:
+    """Disconnect, bounded by CONNECT_TIMEOUT. A cancel during it hands the disconnect to the background."""
+    try:
+        await _BleakLink(client, None).close()
+    except asyncio.CancelledError:
+        _release_in_background(client)
+        raise
+
+
 class BleakTransport:
     """Connects with bleak to service 0xFEE9: write ``...9600``, notify ``...9601``."""
 
@@ -96,10 +105,10 @@ class BleakTransport:
                 await client.start_notify(notify_char, lambda _c, data: on_notify(bytes(data)))
         except (TimeoutError, BleakError, OSError) as err:
             # A timed-out connect may still finish later: release the client so it cannot hold the light.
-            await _BleakLink(client, None).close()
+            await _close_or_release(client)
             raise LinkError("connect_failed", "Could not connect to the light.") from err
         except LinkError:
-            await _BleakLink(client, None).close()
+            await _close_or_release(client)
             raise
         except BaseException:
             # A cancel (shutdown) must not wait for the disconnect, which can take CONNECT_TIMEOUT.
