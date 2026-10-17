@@ -71,6 +71,11 @@ def check_settings(patch: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+def _id_of(item: Any) -> Any:
+    """An item's id, or None for an entry a hand-edit left without one (it is kept, not fatal)."""
+    return item.get("id") if isinstance(item, dict) else None
+
+
 class Store:
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -122,15 +127,15 @@ class Store:
         now = time.time()
         stored = {**item, "id": item.get("id") or uuid.uuid4().hex[:10], "updated": now}
         stored.setdefault("created", now)
-        replaced = [stored if i["id"] == stored["id"] else i for i in items]
-        if not any(i["id"] == stored["id"] for i in items):
+        replaced = [stored if _id_of(i) == stored["id"] else i for i in items]
+        if not any(_id_of(i) == stored["id"] for i in items):
             replaced.append(stored)
         self.collections[collection] = replaced
         _atomic_write(self._path(collection), replaced)
         return stored
 
     def delete(self, collection: str, item_id: str) -> None:
-        kept = [i for i in self.items(collection) if i["id"] != item_id]
+        kept = [i for i in self.items(collection) if _id_of(i) != item_id]
         self.collections[collection] = kept
         _atomic_write(self._path(collection), kept)
 

@@ -34,6 +34,7 @@ from .drivers.godox import GodoxDriver
 from .effects import REGISTRY
 from .effects.profile import effect_profile
 from .fixture import Fixture, gel_key
+from .godox_import import ImportProblem, light_plans, mesh_import_from_message
 from .lights import LightLibrary, SavedLight
 from .link import LinkManager, Member, SequenceVault
 from .mirror import ALL_PROPS, mirror
@@ -854,6 +855,37 @@ class Hub:
         self._broadcast_lights()
         self._log("lights", f"imported keys for {light.name}")
         return light
+
+    async def import_godox(self, client: Client, message: dict[str, Any]) -> tuple[list[SavedLight], list[str]]:
+        """Save every Godox light in the Godox app's export. A light that cannot be added is skipped, not fatal."""
+        try:
+            # Parsing a file of several megabytes would stall every light's updates if it ran on the event loop.
+            plans = light_plans(await asyncio.to_thread(mesh_import_from_message, message))
+        except ImportProblem as err:
+            raise HubError(str(err)) from err
+        saved: list[SavedLight] = []
+        skipped: list[str] = []
+        for name, address, state in plans:
+            try:
+                problem = keys_problem(state)
+                if problem:
+                    raise ValueError(problem)
+                light = self.library.import_keys(state, address=address, name=name, source="unknown")
+            except ValueError as err:
+                skipped.append(f"{name}: {err}")
+                continue
+            if light.id in self.fixtures:
+                await self._drop_fixture(light.id)
+            self._add_fixture(light)
+            saved.append(light)
+        if not saved:
+            raise HubError("No light could be added. " + " ".join(skipped))
+        client.selected = saved[0].id
+        async with self._switch_lock:
+            await self._relink(saved[-1].network)
+        self._broadcast_lights()
+        self._log("lights", f"imported {len(saved)} lights from the Godox app")
+        return saved, skipped
 
     def rename(self, light_id: str, name: str) -> None:
         try:

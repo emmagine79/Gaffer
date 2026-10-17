@@ -181,9 +181,8 @@ def create_app(
 
     @app.post("/api/all-off")
     async def all_off() -> dict[str, Any]:
-        """Every light off at once (the Mac shortcut Ctrl-Option-0)."""
-        await looks.all_off(hub)
-        return {"ok": True}
+        """Every light off at once (the Mac shortcut Ctrl-Option-0). ``skipped`` names lights that could not be reached."""
+        return {"ok": True, "skipped": await looks.all_off(hub)}
 
     @app.get("/api/bluetooth")
     async def bluetooth() -> dict[str, Any]:

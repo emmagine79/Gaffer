@@ -6,8 +6,11 @@ A look is stored in the ``looks`` collection as::
      "lights": {"<light id>": {<state patch>}, ...}}
 
 Applying a look runs every light in it to its patch with lumen's ``_start``: a fade of
-0 sets the light at once, anything longer starts ``engine.start_transition``. The list
-order is the slot order: slot 1 is the first look (the Mac shortcuts and keys 1 to 9).
+0 sets the light at once, anything longer starts ``engine.start_transition``. Every
+light's values are worked out first and the lights are started only after that, so a
+look is never half applied. A light that is not saved, not on the network or cannot
+take its patch is left alone and named in ``skipped``. The list order is the slot
+order: slot 1 is the first look (the Mac shortcuts and keys 1 to 9).
 
 The same functions serve the HTTP routes the Mac shell calls (``app.py``) and the
 WebSocket commands the web page sends (registered below).
@@ -42,12 +45,20 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", ascii_name.lower()).strip("-")[:MAX_NAME] or "look"
 
 
+def _valid_id(look_id: Any) -> bool:
+    """The one rule for a look id, whether the client sent it or we made it from the name."""
+    return isinstance(look_id, str) and len(look_id) <= MAX_NAME and bool(_ID.fullmatch(look_id)) and look_id not in _RESERVED_IDS
+
+
 def _unique_id(hub: Hub, name: str) -> str:
-    taken = {look["id"] for look in all_looks(hub)}
+    # Every id in the file counts, also those of entries a hand-edit left unreadable: all_looks hides
+    # those, and a new look must not take their id and overwrite them.
+    taken = {x["id"] for x in hub.store.items(COLLECTION) if isinstance(x, dict) and isinstance(x.get("id"), str)}
     base = _slug(name)
     candidate, n = base, 2
-    while candidate in taken:
-        candidate = f"{base}-{n}"
+    while candidate in taken or not _valid_id(candidate):
+        suffix = f"-{n}"
+        candidate = base[: MAX_NAME - len(suffix)].rstrip("-") + suffix  # still within the id length limit
         n += 1
     return candidate
 
@@ -97,7 +108,7 @@ def checked(hub: Hub, raw: Any) -> dict[str, Any]:
     if look_id is None or look_id == "":
         look_id = None
     else:
-        if not isinstance(look_id, str) or len(look_id) > MAX_NAME or not _ID.fullmatch(look_id) or look_id in _RESERVED_IDS:
+        if not _valid_id(look_id):
             raise CommandError("A look id uses letters, numbers, - and _ only.")
         existing = next((x for x in all_looks(hub) if x["id"] == look_id), None)
 
@@ -155,37 +166,43 @@ def delete(hub: Hub, look_id: str) -> None:
 
 
 def apply(hub: Hub, look_id: str) -> dict[str, Any]:
-    """Run every light in the look to its values. A light that cannot take its part is skipped
-    and named in ``skipped``; the others still move. Raises CommandError when none could."""
+    """Run every light in the look to its values. A light that is not saved, not on the network or
+    cannot take its part is skipped and named in ``skipped``; the others still move. Every target is
+    worked out before any light starts, so a failure there leaves all lights and the current look as
+    they were. Raises CommandError when no light could move."""
     look = find(hub, look_id)
     fade = float(look["fade_seconds"])
     skipped: list[str] = []
-    done = 0
+    plan = []
     for light_id, patch in look["lights"].items():
         fixture = hub.fixtures.get(light_id)
-        if fixture is None:
+        if fixture is None or not hub.on_network(fixture):
             skipped.append(light_id)
             continue
         try:
-            target = _fitted(fixture, patch)
+            plan.append((fixture, _fitted(fixture, patch)))
         except CommandError:
             skipped.append(light_id)
-            continue
+    if not plan:
+        raise CommandError("None of the lights in this look can be reached right now.")
+    for fixture, target in plan:
         fixture.stream_source = None  # a look takes the light over, like any command
         _start(hub, fixture, target, fade)
-        done += 1
-    if done == 0:
-        raise CommandError("None of the lights in this look are saved in Gaffer any more.")
     set_current(hub, look)
     return {"id": look["id"], "name": look["name"], "skipped": skipped}
 
 
-async def all_off(hub: Hub) -> None:
-    """Every light off at once, and no look is current."""
+async def all_off(hub: Hub) -> list[str]:
+    """Every light off at once. Returns the ids of the lights it could not reach (not on the network):
+    it leaves those alone, and when one of them is on the current look stays, because not everything is off."""
     for fixture in hub.fixtures.values():
-        fixture.stream_source = None
+        if hub.on_network(fixture):
+            fixture.stream_source = None
     await hub.power_all(False)  # lumen: stops each light's engine, then sets power off at once
-    set_current(hub, None)
+    unreached = [f for f in hub.fixtures.values() if not hub.on_network(f)]
+    if not any(f.state.power for f in unreached):
+        set_current(hub, None)
+    return [f.id for f in unreached]
 
 
 # -- WebSocket commands -------------------------------------------------------------------
