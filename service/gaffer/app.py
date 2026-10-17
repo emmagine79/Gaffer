@@ -176,9 +176,8 @@ def create_app(
 
     @app.post("/api/all-off")
     async def all_off() -> dict[str, Any]:
-        """Every light off at once (the Mac shortcut Ctrl-Option-0)."""
-        await looks.all_off(hub)
-        return {"ok": True}
+        """Every light off at once (the Mac shortcut Ctrl-Option-0). ``skipped`` names lights that could not be reached."""
+        return {"ok": True, "skipped": await looks.all_off(hub)}
 
     @app.post("/api/cues/{cue_id}/go")
     async def go_cue(cue_id: str) -> Any:
