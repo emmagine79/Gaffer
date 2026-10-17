@@ -41,7 +41,7 @@ function typing(target: EventTarget | null): boolean {
 }
 
 /**
- * Keys 1 to 9 apply the looks in order and 0 turns every light off (the lighting desk's
+ * Keys 1 to 9 apply the looks in order and 0 turns every light off, or back on when all are off (the lighting desk's
  * numbered buttons, a-desk mockup). Ignored while typing and with a modifier held, so
  * the browser's and the Mac's own shortcuts still work.
  */
@@ -51,7 +51,9 @@ export function useLookKeys() {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || typing(e.target)) return
       if (!/^[0-9]$/.test(e.key)) return
       if (e.key === '0') {
-        allOff()
+        const { lights } = useStudio.getState()
+        if (lights.length > 0 && lights.every((l) => !l.state.power)) allOn()  // 0 is the All off / All on button
+        else void allOff()
       } else {
         const look = (useStudio.getState().store?.looks ?? EMPTY)[Number(e.key) - 1]
         if (!look) return

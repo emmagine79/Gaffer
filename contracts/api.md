@@ -195,7 +195,7 @@ reconnects with back-off until the service process ends.
 
 ## Phone access
 
-Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie).
+Off until the Mac window switches it on. Once on, it stays on with the same PIN after Gaffer restarts, until it is switched off (Captain, 18 Oct 2026): the service keeps the setting and the PIN in `phone.json` in its data folder, readable by the Mac user only, and quitting only closes the listener and signs phones out. While it is on, the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie).
 
 What is guaranteed:
 

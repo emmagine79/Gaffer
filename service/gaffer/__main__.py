@@ -173,9 +173,10 @@ def main(argv: list[str] | None = None) -> None:
 
     write_runtime_file(port, secret)
     # Removed on every clean shutdown (SIGTERM, SIGINT, stdin end of file), and by the watcher's backstop.
-    # Phone access (SPEC-015) is off at every launch: the Mac window switches it on, and only then
-    # does the service listen beyond 127.0.0.1.
-    phone = PhoneAccess(port=port)
+    # Phone access (SPEC-015) is switched on from the Mac window, and only then does the service listen
+    # beyond 127.0.0.1. Once on, it stays on with the same PIN across restarts until switched off
+    # (Captain, 18 Oct 2026), so it is kept in the data folder.
+    phone = PhoneAccess(port=port, saved=Path(args.data) / "phone.json")
     app = create_app(demo=args.demo, data_dir=args.data, on_shutdown=_remove_runtime_file, phone=phone)
     guarded = protect(app, secret, phone)
     phone.bind_listener(guarded, CONNECTIONS_SECONDS)

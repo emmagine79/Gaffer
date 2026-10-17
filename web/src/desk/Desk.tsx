@@ -215,7 +215,7 @@ function Looks() {
   const { looks, apply, allOff } = useDeskLooks()
   const lights = useStudio((s) => s.lights)
   const [last, setLast] = useState<string | null>(null)
-  const off = lights.every((l) => !l.state.power)
+  const off = lights.length > 0 && lights.every((l) => !l.state.power)
   return (
     <div className="d-looks">
       {looks.map((look, i) => (

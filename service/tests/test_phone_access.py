@@ -77,10 +77,10 @@ class Studio:
 
 
 @contextmanager
-def studio_with(tmp_path: Path, cli: str | None):
+def studio_with(tmp_path: Path, cli: str | None, saved: Path | None = None):
     """The app behind the guard. The phone client is entered (it holds the app's life and the sockets);
     the Mac client only makes plain requests."""
-    access = PhoneAccess(port=PORT, lan_ip=lambda: LAN, tailscale_cli=lambda: cli)
+    access = PhoneAccess(port=PORT, lan_ip=lambda: LAN, tailscale_cli=lambda: cli, saved=saved)
     app = create_app(demo=True, data_dir=tmp_path / "data", phone=access)
     guarded = protect(app, SECRET, access)
     with TestClient(guarded, base_url=f"http://{LAN}:{PORT}", client=(PHONE, 50000)) as phone:
@@ -603,3 +603,20 @@ def test_opening_the_panel_again_replaces_a_check_that_never_answered(tmp_path):
         status = s.mac.get("/api/phone?wait=1").json()
         assert status["checking"] is False and status["tailscale"] is True
         assert [t["kind"] for t in status["targets"]] == ["wifi", "tailscale"]
+
+
+def test_phone_access_stays_on_with_the_same_pin_after_gaffer_restarts_until_switched_off(tmp_path):
+    # Captain, 18 Oct 2026: every restart for a new build had switched phone access off again.
+    cli, saved = fake_tailscale(tmp_path, RUNNING), tmp_path / "data" / "phone.json"
+    with studio_with(tmp_path, cli, saved) as first:
+        pin = first.switch_on()
+    assert stat.S_IMODE(saved.stat().st_mode) == 0o600  # it holds the PIN
+
+    with studio_with(tmp_path, cli, saved) as second:  # Gaffer started again
+        status = second.mac.get("/api/phone?wait=1").json()
+        assert (status["enabled"], status["pin"]) == (True, pin)
+        assert second.sign_in(pin).status_code == 200  # a phone still gets in with the PIN it knows
+        assert second.mac.post("/api/phone", json={"enabled": False}).json()["enabled"] is False
+
+    with studio_with(tmp_path, cli, saved) as third:  # switched off stays off
+        assert third.mac.get("/api/phone").json()["enabled"] is False

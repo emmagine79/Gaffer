@@ -28,6 +28,7 @@ import shutil
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import segno
@@ -248,8 +249,12 @@ class PhoneAccess:
         port: int,
         lan_ip: Callable[[], str | None] = default_lan_ip,
         tailscale_cli: Callable[[], str | None] = find_tailscale_cli,
+        saved: Path | None = None,
     ) -> None:
         self.port = port
+        #: Where phone access and its PIN are kept, so a restart leaves them as they were (Captain,
+        #: 18 Oct 2026). None keeps them in memory only.
+        self._saved = saved
         self._lan_ip, self._tailscale_cli = lan_ip, tailscale_cli
         self.enabled = False
         self.pin: str | None = None
@@ -385,7 +390,33 @@ class PhoneAccess:
             finally:
                 self._waiters.discard(waiter)
 
-    async def enable(self) -> None:
+    def _save(self) -> None:
+        """Write whether access is on and its PIN, readable by this user only."""
+        if self._saved is None:
+            return
+        data = json.dumps({"enabled": self.enabled, "pin": self.pin if self.enabled else None})
+        tmp = self._saved.with_name(self._saved.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(data)
+        os.replace(tmp, self._saved)
+
+    async def restore(self) -> None:
+        """Switch access back on with its old PIN if it was on when Gaffer last stopped."""
+        if self._saved is None:
+            return
+        try:
+            saved = json.loads(self._saved.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError):
+            logger.warning("phone access settings could not be read; phone access stays off")
+            return
+        pin = saved.get("pin") if isinstance(saved, dict) and saved.get("enabled") is True else None
+        if isinstance(pin, str) and len(pin) == PIN_DIGITS and pin.isascii() and pin.isdigit():
+            await self.enable(pin=pin)
+
+    async def enable(self, *, pin: str | None = None) -> None:
         async with self._guard():
             if self.enabled:
                 return
@@ -394,13 +425,20 @@ class PhoneAccess:
                 listener = PhoneListener(self._listener_args[0], self.port, self._listener_args[1])
                 await listener.start()
                 self._listener = listener
-            self._new_pin()
+            if pin is None:
+                self._new_pin()
+            else:
+                self.pin, self.wrong = pin, 0
             self.enabled = True
+            self._save()
             self.refresh()  # the Tailscale names join the allowed set when the tool answers
 
-    async def disable(self) -> None:
+    async def disable(self, *, save: bool = True) -> None:
+        """Switch access off. ``save=False`` (Gaffer quitting) closes it now but leaves it on for the next start."""
         async with self._guard():
             self.enabled = False
+            if save:
+                self._save()
             self.pin = None
             self._sign_everyone_out()
             self._hosts, self._targets = frozenset(), []
@@ -416,6 +454,7 @@ class PhoneAccess:
         async with self._guard():
             if self.enabled:
                 self._new_pin()
+                self._save()
 
     def status(self) -> dict[str, Any]:
         """What the Mac window shows. Only ever sent to the Mac itself: it holds the PIN."""
