@@ -719,6 +719,20 @@ def test_the_mac_is_told_when_a_change_cannot_be_saved_at_all_and_no_copy_of_the
         assert not (saved.parent / "phone.json.tmp").exists()  # the failed save left no copy holding the PIN
 
 
+def test_the_mac_is_told_when_switching_on_cannot_be_saved_even_though_nothing_old_is_left_behind(tmp_path):
+    # SPEC-025 review: the file was removed cleanly, so the window said nothing, and a restart silently switched access off.
+    cli, saved = fake_tailscale(tmp_path, RUNNING), tmp_path / "data" / "phone.json"
+    with studio_with(tmp_path, cli, saved) as studio:
+        saved.parent.chmod(0o500)  # nothing can be saved here, and there is no old file to remove
+        try:
+            status = studio.mac.post("/api/phone", json={"enabled": True}).json()
+        finally:
+            saved.parent.chmod(0o700)
+        assert status["enabled"] is True
+        assert status["notice"]["code"] == "not_saved" and "restart" in status["notice"]["message"]
+        assert str(tmp_path) not in status["notice"]["message"] and status["pin"] not in status["notice"]["message"]
+
+
 def test_a_saved_port_held_on_every_network_address_falls_back_to_a_free_port_at_start(tmp_path):
     # SPEC-025: the 127.0.0.1 bind passed, then the phone listener failed at every start and phone access stayed off.
     folder = tmp_path / "bin"

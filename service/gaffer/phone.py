@@ -453,11 +453,11 @@ class PhoneAccess:
             logger.warning("phone access settings could not be withdrawn", exc_info=True)
             return False
 
-    def _persist(self, *, withdraw_on_failure: bool = True) -> None:
+    def _persist(self, *, restoring: bool = False) -> None:
         """Save the setting. When that fails, fail closed: the file must not keep an older setting
-        (an old PIN, or "on" after switching off), so it is removed instead. Only when even that
-        fails is the Mac window told. A restore passes ``withdraw_on_failure=False``: the file already
-        holds that PIN, so keeping it loses nothing."""
+        (an old PIN, or "on" after switching off), so it is removed or overwritten instead. Either way
+        the change will not last through a restart, so the Mac window is told. A restore is the one
+        exception: the file already holds that PIN, so a failed save there loses nothing and is left alone."""
         if self._saved is None:
             return
         try:
@@ -465,12 +465,14 @@ class PhoneAccess:
             return
         except OSError:
             logger.warning("phone access settings could not be saved", exc_info=True)
-        if withdraw_on_failure and not self._withdraw_saved():
-            self.notice = {
-                "code": "not_saved",
-                "message": "Gaffer could not save this change. After Gaffer restarts, phone access may be back as it was before. "
-                           "Check that Gaffer's data folder can be written.",
-            }
+        if restoring:
+            return
+        self._withdraw_saved()
+        self.notice = {
+            "code": "not_saved",
+            "message": "Gaffer could not save this change, so it will not last through a restart. "
+                       "Check that Gaffer's data folder can be written.",
+        }
 
     async def restore(self) -> None:
         """Switch access back on with its old PIN if it was on when Gaffer last stopped."""
@@ -511,7 +513,7 @@ class PhoneAccess:
                 self.pin, self.wrong = pin, 0
             self.enabled = True
             self.notice = None
-            self._persist(withdraw_on_failure=not restoring)
+            self._persist(restoring=restoring)
             self.refresh()  # the Tailscale names join the allowed set when the tool answers
 
     async def disable(self, *, save: bool = True) -> None:
