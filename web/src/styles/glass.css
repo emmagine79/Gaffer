@@ -138,7 +138,7 @@ html[data-surface='phone'] .glass {
 .g-hero { display: flex; align-items: flex-end; gap: 10px; margin: 12px 0 4px; }
 .g-big { font-size: 68px; font-weight: 200; letter-spacing: -2px; line-height: 0.9; }
 .g-unit { font-size: 22px; font-weight: 300; color: var(--dim); padding-bottom: 6px; }
-.g-sub { font-size: 13px; color: var(--dim); }
+.g-sub { font-size: 13px; color: var(--dim); overflow-wrap: anywhere; }
 .g-art { display: block; margin: 8px calc(-1 * var(--pad)) 4px; width: calc(100% + 2 * var(--pad)); height: 100px; }
 
 /* ---------- controls: lumen's Slider, drawn as the mockup's track ---------- */
@@ -212,7 +212,10 @@ html[data-surface='phone'] .glass {
 }
 .g-toast--error { background: #d9473b; color: #fff; }
 
-button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+/* Every control shows a keyboard ring: buttons, inputs, selects and links. */
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+/* The add-a-light sheet is dark in both schemes (addlight.css), so its ring is light. */
+.addlight :focus-visible { outline-color: var(--chalk); }
 
 @media (prefers-reduced-motion: reduce) {
   .g-toggle, .g-toggle::after { transition: none; }

@@ -7,7 +7,7 @@
  */
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -34,23 +34,34 @@ export default async function startService() {
     { cwd: SERVICE, stdio: ['pipe', 'pipe', 'ignore'], detached: true },
   )
   child.stdin.write(`${secret}\n`)
+  const killGroup = () => {
+    try { process.kill(-child.pid!, 'SIGKILL') } catch { /* already gone */ }
+  }
 
-  const port = await new Promise<number>((done, fail) => {
-    const timer = setTimeout(() => fail(new Error('the service did not start')), START_MS)
-    let out = ''
-    child.stdout.on('data', (chunk: Buffer) => {
-      out += chunk.toString()
-      const match = /GAFFER_SERVICE_READY port=(\d+)/.exec(out)
-      if (match) {
+  let port: number
+  try {
+    port = await new Promise<number>((done, fail) => {
+      const timer = setTimeout(() => fail(new Error('the service did not start')), START_MS)
+      let out = ''
+      child.stdout.on('data', (chunk: Buffer) => {
+        out += chunk.toString()
+        const match = /GAFFER_SERVICE_READY port=(\d+)/.exec(out)
+        if (match) {
+          clearTimeout(timer)
+          done(Number(match[1]))
+        }
+      })
+      child.on('exit', (code) => {
         clearTimeout(timer)
-        done(Number(match[1]))
-      }
+        fail(new Error(`the service exited (${code})`))
+      })
     })
-    child.on('exit', (code) => {
-      clearTimeout(timer)
-      fail(new Error(`the service exited (${code})`))
-    })
-  })
+  } catch (error) {
+    // Setup failed before teardown could be returned: stop the service group and drop its data.
+    killGroup()
+    rmSync(data, { recursive: true, force: true })
+    throw error
+  }
   child.stdout.resume()
   child.removeAllListeners('exit')
 
@@ -71,9 +82,7 @@ export default async function startService() {
       else child.once('exit', () => done())
     })
     child.stdin.end()
-    const timer = setTimeout(() => {
-      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* already gone */ }
-    }, STOP_MS)
+    const timer = setTimeout(killGroup, STOP_MS)
     await exited
     clearTimeout(timer)
   }

@@ -9,7 +9,12 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 type Surface = 'menubar' | 'window' | 'phone'
-interface ApiLight { id: string; name: string; state: { brightness: number; power: boolean } }
+interface ApiLight {
+  id: string
+  name: string
+  state: { brightness: number; power: boolean; mode: string }
+  caps: { effects: { symbol: number; name: string }[] }
+}
 
 const base = () => process.env.GAFFER_URL!
 const SHOTS = process.env.GLASS_SHOTS ?? join(process.cwd(), 'test-results', 'shots')
@@ -101,6 +106,44 @@ test('AC2: dragging brightness changes GET /api/lights for that light', async ({
   const shown = Number(await slider.getAttribute('aria-valuenow'))
   expect(shown).not.toBe(before)
   await expect.poll(async () => (await lights(page)).find((l) => l.id === id)!.state.brightness).toBe(shown)
+})
+
+// Verifier finding 1: a look can leave a light in gel or effect mode. The big number and the
+// line under it must say so, not keep showing the old Kelvin figure.
+test('a light in gel or effect mode says so instead of showing a stale Kelvin number', async ({ page }) => {
+  await open(page, 'window', 1280)
+  await selectLight(page, 'Key light')
+  const key = (await lights(page)).find((l) => l.name === 'Key light')!
+  const hero = page.locator('.g-hero')
+  const line = page.locator('.g-sub')
+
+  const gel = { version: 1, brand: 0, number: 201, sub_brand: 0, label: 'L201', hex: '#3d7bd6' }
+  await command(page, { type: 'set', light: key.id, patch: { power: true, brightness: 40, mode: 'gel', gel }, fade: 0 }, false)
+  await expect.poll(async () => (await lights(page)).find((l) => l.id === key.id)!.state.mode).toBe('gel')
+  await expect(hero).toHaveText('Gel')
+  await expect(line).toHaveText('40% brightness, gel L201')
+
+  const effect = key.caps.effects[0]
+  await command(page, { type: 'set', light: key.id, patch: { mode: 'fx', fx: { symbol: effect.symbol, speed: null, params: {} } }, fade: 0 }, false)
+  await expect.poll(async () => (await lights(page)).find((l) => l.id === key.id)!.state.mode).toBe('fx')
+  await expect(hero).toHaveText('Effect')
+  await expect(line).toHaveText(`40% brightness, ${effect.name}`)
+})
+
+// Verifier finding 5: the Add a light sheet's inputs must show a keyboard focus ring.
+test('the Add a light sheet shows a focus ring on its input', async ({ page }) => {
+  await open(page, 'window', 1280)
+  await page.getByRole('button', { name: '+ Add' }).click()
+  const input = page.locator('.addlight input.input')
+  await input.focus()
+  await expect(input).toBeFocused()
+  const ring = await input.evaluate((el) => {
+    const css = getComputedStyle(el)
+    return { style: css.outlineStyle, width: css.outlineWidth, focusVisible: el.matches(':focus-visible') }
+  })
+  expect(ring.focusVisible).toBe(true)
+  expect(ring.style).not.toBe('none')
+  expect(ring.width).not.toBe('0px')
 })
 
 test('AC3: the panel renders light and dark at 360, 390 and window width', async ({ page }) => {

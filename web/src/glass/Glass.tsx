@@ -4,7 +4,7 @@ import { clamp, hueName } from '../lib/color'
 import { hueTrack, kelvinTrack, satTrack } from '../lib/tracks'
 import type { LightView } from '../lib/types'
 import { useStudio } from '../state/store'
-import { beamOf, modelLine, sentence } from './describe'
+import { beamOf, modelLine, readout, sentence } from './describe'
 import { Lamp } from './Lamp'
 import { LookCards } from './LookCards'
 
@@ -58,6 +58,7 @@ function LightPanel({ light }: { light: LightView }) {
   const f = caps.features
   const showKelvin = f.white && !f.daylight
   const hsi = state.mode === 'hsi' && f.colour
+  const shown = readout(state, caps)
   return (
     <div className="g-light" data-light={light.id}>
       <div className="g-row">
@@ -75,11 +76,10 @@ function LightPanel({ light }: { light: LightView }) {
         />
       </div>
       <div className="g-hero">
-        {hsi
-          ? <><span className="g-big">{Math.round(state.hsi.hue)}</span><span className="g-unit">°</span></>
-          : <><span className="g-big">{state.cct.kelvin}</span><span className="g-unit">K</span></>}
+        <span className="g-big">{shown.big}</span>
+        {shown.unit && <span className="g-unit">{shown.unit}</span>}
       </div>
-      <p className="g-sub">{sentence(state)}</p>
+      <p className="g-sub">{sentence(state, caps)}</p>
       <Lamp level={beamOf(state).level} />
 
       <Control label="Brightness" aside={`${Math.round(state.brightness)}%`}>
