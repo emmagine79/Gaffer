@@ -273,3 +273,40 @@ async def test_a_light_added_and_then_forgotten_during_the_scan_can_be_added_aga
         assert again.address == address.upper()
     finally:
         await yongnuo.stop()
+
+
+class _AirWithOneMolus:
+    """Stands in for bleak's scanner: hands the callback a MOLUS G200 advert shaped like the real one.
+
+    The real light advertises "PL109_..." with the Mesh Proxy Service 0x1828 and manufacturer bytes whose
+    offsets 6 and 7 read as Godox model 0039 (SL60IID) (Captain's live check, 18 Oct 2026).
+    """
+
+    def __init__(self, detection_callback):
+        self.callback = detection_callback
+
+    async def __aenter__(self):
+        from bleak.backends.scanner import AdvertisementData
+
+        payload = bytes([0x01, 0x02, 0x03, 0x04, 0x39, 0x00, 0x07, 0x08])  # blob[6:8] = 39 00 -> "0039"
+        advert = AdvertisementData(
+            local_name="PL109_C75E", manufacturer_data={0xC75E: payload},
+            service_data={"00001828-0000-1000-8000-00805f9b34fb": bytes(9)},
+            service_uuids=["00001828-0000-1000-8000-00805f9b34fb"], tx_power=None, rssi=-55, platform_data=(),
+        )
+        self.callback(SimpleNamespace(address="00000000-0000-0000-0000-0000000000b1", name="PL109_C75E"), advert)
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+async def test_a_molus_g200_advertising_the_mesh_proxy_is_listed_as_zhiyun_not_a_godox_sl60iid(tmp_path, monkeypatch):
+    import bleak
+
+    from gaffer.discovery import Scanner
+
+    monkeypatch.setattr(bleak, "BleakScanner", _AirWithOneMolus)
+    hub = Hub(Store(tmp_path), LightLibrary(tmp_path), demo=False, scanner=Scanner())
+    listed = await hub.scan(0)
+    assert [(n["brand"], n["model"], n["relation"]) for n in listed] == [("Zhiyun", "MOLUS G200", "new")]

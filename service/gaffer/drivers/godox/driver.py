@@ -16,7 +16,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...catalog import model_caps
-from ...discovery import MESH_PROV, MESH_PROXY, radio_id_from_manufacturer
+from ...discovery import MESH_PROV, MESH_PROXY, other_brand_name, radio_id_from_manufacturer
 from ...pump import AuxJob, CommandPump, Sender
 from ...state import LightState
 from ..base import Advert, Driver, DriverContext, LightStatus
@@ -57,6 +57,8 @@ class GodoxDriver(Driver):
         if MESH_PROV not in services and MESH_PROXY not in services:
             return None
         try:
+            if other_brand_name(advert.name):
+                return None
             return radio_id_from_manufacturer(advert.manufacturer_data)
         except Exception:  # an odd advertisement is not ours, never an error
             return None
