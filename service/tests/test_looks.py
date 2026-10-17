@@ -143,3 +143,19 @@ def test_the_routes_the_mac_shell_calls(shell):
     shell.cookies.clear()
     for method, path in (("get", "/api/looks"), ("post", f"/api/looks/{first}/apply"), ("post", "/api/all-off")):
         assert getattr(shell, method)(path).status_code == 401
+
+
+def test_a_page_on_another_port_cannot_post_to_the_lights(shell):
+    """CSRF: SameSite does not separate localhost ports, so a foreign Origin is refused and nothing changes."""
+    look = _save_three(shell, "Talking head", 0)
+    assert any(light["state"]["power"] for light in _lights(shell).values())
+    for origin in ("http://127.0.0.1:9", "http://evil.example", "null"):
+        for path in ("/api/all-off", f"/api/looks/{look}/apply", "/api/looks"):
+            refused = shell.post(path, headers={"origin": origin}, json={"name": "x"})
+            assert refused.status_code == 403 and refused.json()["error"] == "origin_not_allowed", (origin, path)
+    assert any(light["state"]["power"] for light in _lights(shell).values())
+    assert len(shell.get("/api/looks").json()["looks"]) == 1
+    assert shell.hub.look is None
+    # The page's own origin and the shell (no Origin) still work; a POST body must say it is JSON.
+    assert shell.post("/api/all-off", headers={"origin": "http://127.0.0.1"}).status_code == 200
+    assert shell.post("/api/looks", content='{"name": "x"}', headers={"content-type": "text/plain"}).status_code == 415

@@ -117,6 +117,12 @@ def create_app(
         # DNS rebinding: a foreign page reaching 127.0.0.1 still names its own host.
         if not host_allowed(request.headers.get("host"), allowed):
             return PlainTextResponse("unknown host", status_code=421)
+        # Cross-site request forgery: SameSite does not tell one localhost port from another, so a
+        # page on another port could send our cookie with a POST. Browsers always send Origin on those;
+        # the Mac shell's URLSession sends none, so a missing Origin is let through (as /ws does).
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not origin_allowed(
+                request.headers.get("origin"), request.headers.get("host"), allowed):
+            return _error(403, "origin_not_allowed", "That page may not change Gaffer's lights.")
         return await call_next(request)
 
     @app.get("/api/health")
@@ -147,6 +153,8 @@ def create_app(
     @app.post("/api/looks")
     async def save_look(request: Request) -> Any:
         """Add a look, or replace the one with the same id. No ``lights`` on a new look saves what the lights do now."""
+        if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            return _error(415, "json_required", "Send the look as JSON (Content-Type: application/json).")
         try:
             body = await request.json()
         except ValueError:
