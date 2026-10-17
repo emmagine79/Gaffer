@@ -634,7 +634,7 @@ class Hub:
                     continue
                 if time.monotonic() - fixture.last_control_at < SETTLE_SECONDS:
                     continue
-                before = fixture.max_mode
+                before, asked = fixture.max_mode, fixture.state
                 try:
                     after = await fixture.driver.read_max_mode(fixture.light)
                 except Exception as err:  # noqa: BLE001 - one light not answering never stops the loop
@@ -642,7 +642,7 @@ class Hub:
                     continue
                 if after is None or after == before:
                     continue
-                if after and fixture.state.brightness != 100:
+                if after and fixture.state is asked and fixture.state.brightness != 100:  # never over a newer setting
                     # Sent, so the driver wants 100 too and a reconnect does not dim the light back; the driver
                     # already counts 100 as sent, so no frame goes out.
                     self.set_state(fixture, fixture.state.model_copy(update={"brightness": 100.0}), "light")

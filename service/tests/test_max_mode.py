@@ -249,3 +249,42 @@ def test_max_mode_switched_on_at_the_light_shows_in_gaffer_at_full_brightness(tm
 
         unit["max"] = False  # and switches it off again on the light
         _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is False, "Max Mode to show as off")
+
+
+def test_a_slider_move_while_the_light_answers_is_not_overwritten_by_max_mode(tmp_path, monkeypatch):
+    """Review round 2: the light's 'Max on' answer must not put 100% over a level set while it was asked."""
+    from gaffer import hub as hub_module
+
+    monkeypatch.setattr(demo, "PACE", 0.05)
+    monkeypatch.setattr(hub_module, "SETTLE_SECONDS", 0.0)
+    held: list = []
+
+    class SlowG200(Wire):
+        """Says Max Mode is on, but only when the test lets the answer through."""
+
+        async def open(self, address, on_notify, on_lost):
+            writes = self.writes
+
+            class HoldingLink(Link):
+                async def write(self, data):
+                    writes.append(bytes(data))
+                    frame = zy.parse_frame(bytes(data))
+                    if frame.command == zy.Command.MAX_MODE and frame.payload == bytes.fromhex("03800000"):
+                        held.append(lambda s=frame.sequence: on_notify(_answer(zy.Command.MAX_MODE, bytes.fromhex("03800001"), s)))
+
+            return HoldingLink(writes)
+
+    wire = SlowG200()
+    app = create_app(demo=True, data_dir=tmp_path)
+    app.state.hub.store.update_settings({"sync_interval": 0.05})
+    app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        held.clear()  # the handshake's own Max Mode query; nobody waits for its answer
+        _wait(lambda: held, "Gaffer to ask the light about Max Mode")
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 40}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 40, "the slider at 40%")
+        client.portal.call(lambda: [answer() for answer in list(held)])  # the light answers late: Max on
+        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 40
