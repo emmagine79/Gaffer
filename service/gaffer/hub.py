@@ -629,27 +629,31 @@ class Hub:
             await asyncio.sleep(interval if interval > 0 else 2.0)
             if interval <= 0:
                 continue
-            for fixture in list(self.fixtures.values()):
-                if not fixture.caps.max_mode or not fixture.state.power or fixture.engine.kind is not None:
-                    continue
-                if time.monotonic() - fixture.last_control_at < SETTLE_SECONDS:
-                    continue
-                before, asked = fixture.max_mode, fixture.state
-                try:
-                    after = await fixture.driver.read_max_mode(fixture.light)
-                except Exception as err:  # noqa: BLE001 - one light not answering never stops the loop
-                    logger.debug("Max Mode read failed for %s: %s", fixture.light.name, err)
-                    continue
-                if after is None or after == before:
-                    continue
-                if after and fixture.state is not asked:
-                    continue  # a newer setting wins; the light is asked again next time
-                fixture.driver.note_max_mode(fixture.light, after)  # the reading is taken: the driver counts it
-                if after:
-                    self._max_mode_came_on(fixture, "light")
-                self._log("sync", f"{fixture.light.name} changed on the light: Max Mode {'on' if after else 'off'}")
-                self._toast("sync", f"Picked up a change made on {fixture.light.name}")
-                self._broadcast_lights()
+            await self._max_mode_tick()
+
+    async def _max_mode_tick(self) -> None:
+        """One pass of the Max Mode read: ask each Max Mode light that is on and not just commanded."""
+        for fixture in list(self.fixtures.values()):
+            if not fixture.caps.max_mode or not fixture.state.power or fixture.engine.kind is not None:
+                continue
+            if time.monotonic() - fixture.last_control_at < SETTLE_SECONDS:
+                continue
+            before, asked = fixture.max_mode, fixture.state
+            try:
+                after = await fixture.driver.read_max_mode(fixture.light)
+            except Exception as err:  # noqa: BLE001 - one light not answering never stops the loop
+                logger.debug("Max Mode read failed for %s: %s", fixture.light.name, err)
+                continue
+            if after is None or after == before:
+                continue
+            if fixture.state is not asked:
+                continue  # a newer setting wins, for Max off as for Max on; the light is asked again next time
+            fixture.driver.note_max_mode(fixture.light, after)  # the reading is taken: the driver counts it
+            if after:
+                self._max_mode_came_on(fixture, "light")
+            self._log("sync", f"{fixture.light.name} changed on the light: Max Mode {'on' if after else 'off'}")
+            self._toast("sync", f"Picked up a change made on {fixture.light.name}")
+            self._broadcast_lights()
 
     async def _battery_loop(self) -> None:
         while True:
@@ -742,8 +746,8 @@ class Hub:
 
     def set_state(self, fixture: Fixture, state: LightState, source: str, *, send: bool = True,
                   mirror: bool = True) -> None:
-        if fixture.before_max is not None and state.cct.kelvin != fixture.state.cct.kelvin and fixture.max_mode:
-            fixture.before_max = fixture.before_max._replace(kelvin_changed=True)  # set while Max Mode is on
+        if source == "app" and state.cct.kelvin != fixture.state.cct.kelvin:
+            self.kelvin_chosen(fixture)  # a scene or look that moves the kelvin counts as the user's choice
         fixture.state = state
         fixture.state_source = source
         fixture.dirty = True
@@ -756,6 +760,12 @@ class Hub:
         self._save_due = self._save_due or time.monotonic() + SAVE_AFTER_SECONDS
         if mirror:
             self._mirror_from(fixture)
+
+    def kelvin_chosen(self, fixture: Fixture) -> None:
+        """The user chose a colour temperature (even the one the light already shows). Max off in Gaffer then
+        keeps it instead of putting the earlier one back. Engine, group and light readings never call this."""
+        if fixture.before_max is not None and fixture.max_mode:
+            fixture.before_max = fixture.before_max._replace(kelvin_changed=True)
 
     def _apply_engine(self, fixture: Fixture, state: LightState) -> None:
         self.set_state(fixture, state, "engine", mirror=not fixture.own_values)

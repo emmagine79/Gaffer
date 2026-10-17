@@ -483,13 +483,13 @@ def _g200(unit, held=None):
     return G200()
 
 
-def _g200_studio(tmp_path, monkeypatch, wire, *, settle=0.0):
+def _g200_studio(tmp_path, monkeypatch, wire, *, settle=0.0, interval=0.05):
     from gaffer import hub as hub_module
 
     monkeypatch.setattr(demo, "PACE", 0.05)
     monkeypatch.setattr(hub_module, "SETTLE_SECONDS", settle)
     app = create_app(demo=True, data_dir=tmp_path)
-    app.state.hub.store.update_settings({"sync_interval": 0.05})
+    app.state.hub.store.update_settings({"sync_interval": interval})
     app.state.hub.registry.drivers["zhiyun"] = ZhiyunDriver(DriverContext(), transport=wire, sleep=_nosleep, reply_timeout=0)
     return app
 
@@ -500,8 +500,8 @@ def _ask_seen(ws, message, rid, seen):
 
 
 def test_a_kelvin_set_during_max_that_equals_the_shown_one_still_survives_max_off(tmp_path, monkeypatch):
-    """Review round 3: Max pressed on the light shows 4300 K. Gaffer set 3200 K and then 4300 K again. That is
-    a colour temperature set during Max, so Max off keeps 4300 K and does not put the earlier 5700 K back."""
+    """Review round 3: Max pressed on the light shows 4300 K. The user then sets 4300 K, the value already shown.
+    That is a colour temperature set during Max, so Max off keeps 4300 K and does not put the earlier 5700 K back."""
     unit = {"max": False}
     wire = _g200(unit)
     app = _g200_studio(tmp_path, monkeypatch, wire)
@@ -512,9 +512,7 @@ def test_a_kelvin_set_during_max_that_equals_the_shown_one_still_survives_max_of
         _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 5700, "Gaffer at 5700 K")
         unit["max"] = True  # Max pressed on the light
         _wait(lambda: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == 4300, "the light's 4300 K")
-        for kelvin in (3200, 4300):
-            ws.send_json({"type": "set", "light": light, "patch": {"cct": {"kelvin": kelvin}}})
-            _wait(lambda k=kelvin: _light(client, "Zhiyun panel")["state"]["cct"]["kelvin"] == k, f"Gaffer at {kelvin} K")
+        ws.send_json({"type": "set", "light": light, "patch": {"cct": {"kelvin": 4300}}})  # changes nothing on screen
         assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 1)["type"] == "ack"
         state = _light(client, "Zhiyun panel")["state"]
         assert (state["brightness"], state["cct"]["kelvin"]) == (51, 4300)
@@ -549,9 +547,45 @@ def test_a_pickup_the_hub_skipped_is_not_announced_and_is_tried_again(tmp_path, 
         _until(ws, lambda m: m["type"] == "toast" and "Picked up" in m["text"])
 
 
+def test_a_max_off_reading_over_a_newer_setting_is_left_and_asked_again(tmp_path, monkeypatch):
+    """Review round 3, as for Max on: the light says Max is off while a slider move is on its way. The hub
+    leaves it (Max still shows as on, no toast) and takes the reading when it asks again."""
+    unit, held, seen = {"max": False}, [], []
+    wire = _g200(unit, held)
+    app = _g200_studio(tmp_path, monkeypatch, wire)
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        held.clear()
+        _wait(lambda: held, "Gaffer to ask the light about Max Mode")
+        unit["max"] = True  # Max pressed on the light, and picked up
+        client.portal.call(lambda: [answer() for answer in list(held)])
+        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
+        _ask_seen(ws, {"type": "round.trip"}, 1, seen)
+        toasts = len([m for m in seen if m["type"] == "toast"])
+
+        held.clear()
+        _wait(lambda: held, "Gaffer to ask the light again")
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 40}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 40, "the slider at 40%")
+        unit["max"] = False  # Max ended on the light, and the answer comes after the slider move
+        asked = len(held)
+        client.portal.call(lambda: [answer() for answer in list(held)])
+        _wait(lambda: len(held) > asked, "the hub to ask again after leaving the reading")
+        seen.clear()
+        _ask_seen(ws, {"type": "round.trip"}, 2, seen)
+        assert len([m for m in seen if m["type"] == "toast"]) == 0, "the hub announced a reading it left"
+        assert _light(client, "Zhiyun panel")["max_mode"] is True
+
+        client.portal.call(lambda: [answer() for answer in list(held)])  # asked again, nothing moved: taken
+        _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is False, "Max Mode to show as off")
+        assert toasts == 1
+
+
 def test_a_zhiyun_light_is_not_read_while_the_settle_time_after_a_control_has_not_passed(tmp_path, monkeypatch):
     """Review round 3: Godox lights are not read for SETTLE_SECONDS after Gaffer commands them. A G200 was
-    asked about Max Mode straight after a slider move. The clock is a fake one, so no real wait decides it."""
+    asked about Max Mode straight after a slider move. The clock is a fake one and the test runs the read
+    pass itself, so no real wait decides it."""
     from gaffer import hub as hub_module
 
     class Clock:
@@ -564,7 +598,8 @@ def test_a_zhiyun_light_is_not_read_while_the_settle_time_after_a_control_has_no
             return Clock.now
 
     wire = _g200({"max": False})
-    app = _g200_studio(tmp_path, monkeypatch, wire, settle=hub_module.SETTLE_SECONDS)
+    # The longest interval the setting allows (store.py, 30 s): the hub's own read loop never runs in this test, the test steps it.
+    app = _g200_studio(tmp_path, monkeypatch, wire, settle=hub_module.SETTLE_SECONDS, interval=30.0)
     monkeypatch.setattr(hub_module, "time", Clock())
 
     def reads():
@@ -574,12 +609,12 @@ def test_a_zhiyun_light_is_not_read_while_the_settle_time_after_a_control_has_no
     with TestClient(app) as client, client.websocket_connect("/ws") as ws:
         _until(ws, lambda m: m["type"] == "hello")
         light = _molus(client, ws, wire)
-        _wait(lambda: reads() >= 2, "the hub to be reading the light")
+        before = len(wire.writes)
         ws.send_json({"type": "set", "light": light, "patch": {"brightness": 60}})
-        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS for w in wire.writes[-3:]), "60% sent")
-        time.sleep(0.3)  # several read intervals (0.05 s) to let any read already on its way finish
+        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS for w in wire.writes[before:]), "60% sent")
         settled = reads()
-        time.sleep(0.3)
+        client.portal.call(app.state.hub._max_mode_tick)
         assert reads() == settled, "the light was read inside the settle time after a control"
         Clock.now += 10  # the settle time passes
-        _wait(lambda: reads() > settled, "reads to start again once the settle time has passed")
+        client.portal.call(app.state.hub._max_mode_tick)
+        assert reads() == settled + 1, "the light was not read once the settle time had passed"

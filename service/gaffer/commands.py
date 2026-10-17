@@ -115,7 +115,10 @@ def _start(hub: Hub, fixture: Fixture, target: LightState, fade: float, easing: 
 @command("set")
 async def _set(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     fixture = _fixture(hub, client, m)
-    _start(hub, fixture, _patched(fixture, m.get("patch")), float(m.get("fade") or 0), str(m.get("easing", "inout")))
+    target = _patched(fixture, m.get("patch"))
+    if isinstance(m["patch"].get("cct"), dict) and "kelvin" in m["patch"]["cct"]:
+        hub.kelvin_chosen(fixture)  # a colour temperature the user picked, even if it is the one shown
+    _start(hub, fixture, target, float(m.get("fade") or 0), str(m.get("easing", "inout")))
 
 
 def _is_level_map(value: Any, fixtures: dict[str, Fixture]) -> bool:
