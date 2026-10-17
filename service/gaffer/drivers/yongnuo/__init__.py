@@ -145,6 +145,12 @@ class YongnuoDriver(Driver):
         except Exception:  # the contract: match never raises on odd input
             return None
 
+    def needs_channel(self, caps: Any) -> bool:
+        return True  # every Yongnuo frame carries the light's channel
+
+    def check_channel(self, channel: Any) -> int:
+        return protocol.check_channel(channel)
+
     # -- frames ---------------------------------------------------------------
 
     def _model(self, light: Any) -> dict[str, Any]:

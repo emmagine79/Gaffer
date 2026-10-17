@@ -47,7 +47,7 @@ Every saved light with its abilities and its current state: the same `lights`, `
 }
 ```
 
-- Each light is the object `hello` gives, with `online` (reachable or on the mesh). `state` has `power`, `brightness`, `mode` (`cct`, `hsi`, `rgbw`, `gel` or `fx`) and one object per mode. `caps.features` does not change its keys.
+- Each light is the object `hello` gives, with `online` (reachable or on the mesh) and `held` (true while another controller, such as the brand's own phone app, holds the light's one connection; from the light's driver `status`). The Glass footer reads `held` and `caps.brand` to say "Key is held by the Zhiyun app". The WebSocket `stats` message carries a `held` map (light id to boolean) beside `reachable`, so the page learns of a change within a second. `state` has `power`, `brightness`, `mode` (`cct`, `hsi`, `rgbw`, `gel` or `fx`) and one object per mode. `caps.features` does not change its keys.
 - `gel_tables` is keyed by the gel table a light uses (its `gel_key`). `network` is the mesh network name, a string, or `null` when no light is saved or the link is dropped.
 
 ### Model files
@@ -85,3 +85,14 @@ The light objects in `hello`, `lights` and `/api/export` gain:
 
 - `channel`: integer or null. The radio channel a light is set to, for brands that need one told to them (Yongnuo). Saved with the light.
 - `caps.driver`, `caps.brand`, `caps.match`, `caps.driver_data`.
+
+### Adding a light
+
+Drivers add two optional methods to the contract: `needs_channel(caps)` (true for a model whose lights must be told a radio channel when added; Yongnuo) and `check_channel(channel)` (the channel as the driver sends it, or a plain-words `ValueError`).
+
+WebSocket commands (the page sends them; each takes `rid` and is answered by an `ack` or an `error` with the same `rid`):
+
+- `lights.scan` listens for lights of every brand. Godox adverts are read as before; any other advert is offered to each driver's `match`, and the first model it names is listed by that model's name. The `nearby` list (in the `ack`, the `nearby` message and `hello`) gains `driver`, `brand` and `needs_channel` (true only for a `new` light whose driver needs a channel), and `relation` gains `new`: a light of a brand with nothing to pair, found by the scan and not yet saved. A `new` light that is already saved shows as `saved`.
+- `lights.add {address, name?, channel?}` saves a `new` light the last scan found. It answers `{type: "ack", of: "lights.add", light: <id>}`. It is refused, and nothing is saved, when the address is not a `new` light from the last scan, or when the model's driver needs a channel and `channel` is missing or not valid for that driver (Yongnuo: a whole number from 0 to 255). A second request for an address already added is refused. A Godox light is not added this way; it pairs with `lights.pair`.
+- `lights.identify {light}` flashes the light through its own driver (a brightness pulse, then the light is put back) and answers `{type: "ack", of: "lights.identify", light, driver}` when the pulse ends. It is long-running (the socket stays usable). A second request for a light already flashing returns at once. A driver that has not finished in 30 seconds is stopped, with an `error` that says the light did not answer.
+- `demo.held {light, held}` is for `--demo` only: it makes the demo stand-in driver report the light as held (or not). Outside the demo it is refused.

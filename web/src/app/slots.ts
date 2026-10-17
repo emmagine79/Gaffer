@@ -6,7 +6,7 @@
  * its own folder (web/src/<area>/) and swaps the import here and in app/Shell.tsx.
  *
  *   SPEC-007  lighting desk         app/DeskSlot.tsx            -> web/src/desk/
- *   SPEC-008  add a light           app/AddLight.tsx            -> web/src/addlight/
+ *   SPEC-008  add a light           add/AddLight.tsx            (done; SPEC-009's Godox import goes in add/ImportSlot.tsx)
  *   SPEC-010  looks with their fade glass/LookCards.tsx reads lumen scenes until looks exist
  *   SPEC-011  groups                tabs/mesh/Groups.tsx        -> web/src/groups/
  *   SPEC-012  effects               tabs/EffectsTab.tsx         -> web/src/effects/
@@ -15,7 +15,7 @@
  */
 
 export { DeskSlot } from './DeskSlot'
-export { AddLight } from './AddLight'
+export { AddLight } from '../add/AddLight'
 export { Groups } from '../tabs/mesh/Groups'
 export { EffectsTab as Effects } from '../tabs/EffectsTab'
 export { ScheduleTab as Schedules } from '../tabs/ScheduleTab'

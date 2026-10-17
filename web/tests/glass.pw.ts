@@ -134,7 +134,7 @@ test('a light in gel or effect mode says so instead of showing a stale Kelvin nu
 test('the Add a light sheet shows a focus ring on its input', async ({ page }) => {
   await open(page, 'window', 1280)
   await page.getByRole('button', { name: '+ Add' }).click()
-  const input = page.locator('.addlight input.input')
+  const input = page.locator('.ad-sheet input.ad-input').first()
   await input.focus()
   await expect(input).toBeFocused()
   const ring = await input.evaluate((el) => {
