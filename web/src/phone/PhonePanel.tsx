@@ -4,12 +4,20 @@ import './phone.css'
 interface Target { kind: 'wifi' | 'tailscale'; label: string; url: string; qr: string }
 interface PhoneStatus { enabled: boolean; pin: string | null; locked: boolean; checking: boolean; tailscale: boolean | null; targets: Target[] }
 
+/** An answer the service gave, so the panel can tell "this is a phone" (403 mac_only) from a failed request. */
+class PhoneError extends Error {
+  constructor(message: string, readonly status: number, readonly code: string | undefined) { super(message) }
+}
+
 async function call(path: string, body?: unknown, signal?: AbortSignal): Promise<PhoneStatus> {
   const res = await fetch(path, body === undefined ? { signal } : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal,
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error((data as { message?: string }).message ?? 'That did not work. Try again.')
+  if (!res.ok) {
+    const { message, error } = data as { message?: string; error?: string }
+    throw new PhoneError(message ?? 'That did not work. Try again.', res.status, error)
+  }
   return data as PhoneStatus
 }
 
@@ -19,12 +27,16 @@ export function PhonePanel() {
   const [status, setStatus] = useState<PhoneStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
-  // The Phone button is the Mac window's. The service answers anyone else with 403, and then there is nothing to show.
-  const [offered, setOffered] = useState(false)
+  // The Phone button is the Mac window's. Only the service's 403 mac_only means "this is a phone": hide it then.
+  // Any other failure (the service is slow or restarting) keeps the button, and opening the panel asks again.
+  const [offered, setOffered] = useState<'unknown' | 'yes' | 'no'>('unknown')
+  const look = (path = '/api/phone') =>
+    call(path).then(
+      (s) => { setStatus(s); setOffered('yes') },
+      (error: unknown) => setOffered(error instanceof PhoneError && error.status === 403 && error.code === 'mac_only' ? 'no' : 'yes'),
+    )
 
-  useEffect(() => {
-    call('/api/phone').then((s) => { setStatus(s); setOffered(true) }).catch(() => setOffered(false))
-  }, [])
+  useEffect(() => { void look() }, [])
 
   // The service never waits for the Tailscale tool. While it is still looking, hold one request open
   // until it has answered (or access is switched off), then show what it found.
@@ -32,7 +44,10 @@ export function PhonePanel() {
   useEffect(() => {
     if (!checking) return
     const stop = new AbortController()
-    call('/api/phone?wait=1', undefined, stop.signal).then(setStatus).catch(() => {})
+    call('/api/phone?wait=1', undefined, stop.signal).then(setStatus).catch(() => {
+      // The held request was dropped: stop saying "checking". Opening the panel again looks again.
+      if (!stop.signal.aborted) setStatus((s) => (s ? { ...s, checking: false } : s))
+    })
     return () => stop.abort()
   }, [checking])
 
@@ -50,11 +65,11 @@ export function PhonePanel() {
   }
 
   const open = () => {
-    call('/api/phone').then(setStatus).catch(() => {})
+    void look()
     dialog.current?.showModal()
   }
 
-  if (!offered) return null
+  if (offered !== 'yes') return null
   return (
     <>
       <button type="button" className="ph-open" onClick={open}>

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { SOCKET_CLOSED } from '../lib/socket'
 import { PinScreen } from './PinScreen'
 
@@ -15,6 +15,8 @@ type Gate =
  */
 export function PhoneGate({ children }: { children: ReactNode }) {
   const [gate, setGate] = useState<Gate>({ kind: 'checking' })
+  // Counts sign-ins. An answer to a question asked before a sign-in is out of date and is ignored.
+  const signIns = useRef(0)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -36,10 +38,12 @@ export function PhoneGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     const controller = new AbortController()
     const onClosed = () => {
+      const asked = signIns.current
       fetch('/api/session', { signal: controller.signal })
         .then(async (res) => {
           if (res.ok) return
           const body = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+          if (asked !== signIns.current) return
           if (body.error === 'pin_required') setGate({ kind: 'pin' })
           else if (body.error === 'phone_access_off') setGate({ kind: 'blocked', text: body.message ?? 'Phone access is off.' })
         })
@@ -53,7 +57,7 @@ export function PhoneGate({ children }: { children: ReactNode }) {
   }, [])
 
   if (gate.kind === 'in') return <>{children}</>
-  if (gate.kind === 'pin') return <PinScreen onSignedIn={() => setGate({ kind: 'in' })} />
+  if (gate.kind === 'pin') return <PinScreen onSignedIn={() => { signIns.current++; setGate({ kind: 'in' }) }} />
   if (gate.kind === 'blocked') {
     return (
       <main className="pin">

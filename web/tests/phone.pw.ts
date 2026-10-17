@@ -6,7 +6,7 @@
  * tool (Chromium maps that name to this machine). The service sees a connection that names a host
  * other than 127.0.0.1, so it treats it as a phone and asks for the PIN.
  */
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Browser, type Page } from '@playwright/test'
 import { startPhoneService, TAILNET_NAME, type PhoneService } from './phone-service.ts'
 
 test.use({ launchOptions: { args: [`--host-resolver-rules=MAP ${TAILNET_NAME} 127.0.0.1`] }, storageState: { cookies: [], origins: [] } })
@@ -16,6 +16,19 @@ test.beforeAll(async () => { service = await startPhoneService() })
 test.afterAll(async () => { await service?.stop() })
 
 const mac = () => `http://127.0.0.1:${service.port}`
+
+/** A browser context signed in as the Mac window. */
+const macWindow = (browser: Browser) => browser.newContext({
+  viewport: { width: 1280, height: 800 },
+  storageState: { cookies: [{ name: 'gaffer_session', value: service.secret, domain: '127.0.0.1', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Strict' }], origins: [] },
+})
+
+// The tests share one service: each starts with phone access off.
+test.beforeEach(async ({ browser }) => {
+  const window = await macWindow(browser)
+  await window.request.post(`${mac()}/api/phone`, { data: { enabled: false } })
+  await window.close()
+})
 
 /** Read the QR code in an <img> by drawing it on a canvas and giving that to the browser's own barcode reader. */
 async function decode(page: Page, alt: string): Promise<string> {
@@ -37,10 +50,7 @@ async function noSideways(page: Page) {
 
 test('the QR codes decode to addresses a phone can reach, and the phone needs the PIN there', async ({ browser }) => {
   // The Mac window switches phone access on and shows the codes and the PIN.
-  const window = await browser.newContext({
-    viewport: { width: 1280, height: 800 },
-    storageState: { cookies: [{ name: 'gaffer_session', value: service.secret, domain: '127.0.0.1', path: '/', expires: -1, httpOnly: true, secure: false, sameSite: 'Strict' }], origins: [] },
-  })
+  const window = await macWindow(browser)
   const macPage = await window.newPage()
   await macPage.goto(`${mac()}/?surface=window`)
   await macPage.getByRole('button', { name: 'Phone' }).click()
@@ -94,4 +104,73 @@ test('the QR codes decode to addresses a phone can reach, and the phone needs th
 
   await window.close()
   await phone.close()
+})
+
+test('the Mac window keeps its Phone button when a request fails, and stops saying "checking" when the wait is dropped', async ({ browser }) => {
+  const window = await macWindow(browser)
+  const macPage = await window.newPage()
+  let first = true
+  await macPage.route(/\/api\/phone$/, (route) => { if (first) { first = false; return route.abort() } return route.continue() })
+  await macPage.route(/\/api\/phone\?wait=1$/, (route) => route.abort())
+  await macPage.goto(`${mac()}/?surface=window`)
+
+  // The first look at phone access failed on the network: the button stays, and opening the panel asks again.
+  await macPage.getByRole('button', { name: 'Phone' }).click()
+  await macPage.getByRole('button', { name: 'Turn on phone access' }).click()
+  await expect(macPage.getByLabel('PIN', { exact: true })).toHaveText(/^\d{6}$/)
+  // The held-open request for the Tailscale answer was dropped: the panel does not stay on "checking" for ever.
+  await expect(macPage.getByText('Tailscale: checking')).toHaveCount(0)
+  await window.close()
+})
+
+test('a late "are you signed in?" answer does not send a phone that has just signed in back to the PIN screen', async ({ browser }) => {
+  const window = await macWindow(browser)
+  const macPage = await window.newPage()
+  await macPage.goto(`${mac()}/?surface=window`)
+  await macPage.getByRole('button', { name: 'Phone' }).click()
+  await macPage.getByRole('button', { name: 'Turn on phone access' }).click()
+  const pinOf = async () => (await macPage.getByLabel('PIN', { exact: true }).textContent())!
+  await expect(macPage.getByLabel('PIN', { exact: true })).toHaveText(/^\d{6}$/)
+  const pin = await pinOf()
+
+  // This phone's page holds back the answer to every "am I signed in?" question once told to.
+  const phone = await browser.newContext({ viewport: { width: 375, height: 812 } })
+  const page = await phone.newPage()
+  await page.addInitScript(() => {
+    const w = window as unknown as { __hold: boolean; __held: (() => void)[]; __delivered: number }
+    const real = window.fetch.bind(window)
+    w.__hold = false; w.__held = []; w.__delivered = 0
+    window.fetch = async (input, init) => {
+      const res = await real(input, init)
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+      if (w.__hold && (init?.method ?? 'GET') === 'GET' && new URL(url, location.href).pathname === '/api/session') {
+        await new Promise<void>((release) => w.__held.push(release))
+        w.__delivered++
+      }
+      return res
+    }
+  })
+  await page.goto(`http://${TAILNET_NAME}:${service.port}/`)
+  await page.getByLabel('Enter the PIN shown on the Mac').fill(pin)
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(page.getByRole('group', { name: 'View' })).toBeVisible()
+
+  // New PIN signs the phone out: it shows the PIN screen. Its socket keeps retrying, and each try asks again; hold those answers.
+  await macPage.getByRole('button', { name: 'New PIN' }).click()
+  await expect(page.getByLabel('Enter the PIN shown on the Mac')).toBeVisible()
+  await page.evaluate(() => { (window as unknown as { __hold: boolean }).__hold = true })
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __held: unknown[] }).__held.length)).toBeGreaterThan(0)
+
+  // The phone signs in with the new PIN, and only then do the old answers arrive.
+  await expect(macPage.getByLabel('PIN', { exact: true })).not.toHaveText(pin)
+  await page.getByLabel('Enter the PIN shown on the Mac').fill(await pinOf())
+  await page.getByRole('button', { name: 'Connect' }).click()
+  await expect(page.getByRole('group', { name: 'View' })).toBeVisible()
+  const late = await page.evaluate(() => { const w = window as unknown as { __held: (() => void)[] }; w.__held.forEach((release) => release()); return w.__held.length })
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __delivered: number }).__delivered)).toBeGreaterThanOrEqual(late)
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))))
+  await expect(page.getByRole('group', { name: 'View' })).toBeVisible()
+  await expect(page.getByLabel('Enter the PIN shown on the Mac')).toHaveCount(0)
+  await phone.close()
+  await window.close()
 })
