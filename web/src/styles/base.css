@@ -1,44 +1,25 @@
 *, *::before, *::after { box-sizing: border-box; }
 
-html, body, #root { height: 100%; }
+html, body { margin: 0; }
 
 body {
-  margin: 0;
-  font-family: var(--font);
-  font-size: var(--fs-md);
-  line-height: 1.45;
-  color: var(--chalk);
-  background: var(--room);
+  font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+  line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums;
-  overflow: hidden;
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
-:focus-visible { outline: 2px solid var(--chalk); outline-offset: 2px; border-radius: 4px; }
 
-h1, h2, h3, h4 { margin: 0; font-weight: 640; font-stretch: var(--semi-wide); letter-spacing: -0.01em; line-height: 1.15; }
-p { margin: 0; }
+h1, h2, h3, h4, p { margin: 0; }
 
-.readout {
-  font-stretch: var(--wide);
-  font-weight: 760;
-  letter-spacing: -0.035em;
-  line-height: 0.95;
-}
-
+/* Kept for lumen screens still in use (add a light, groups, effects, schedules). */
+.readout { font-stretch: var(--wide); font-weight: 760; letter-spacing: -0.035em; line-height: 0.95; }
 .muted { color: var(--graphite); }
 .dim { color: var(--graphite-dim); }
 .narrow { font-stretch: var(--narrow); }
-
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
-
-::selection { background: var(--live-soft); }
-
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--anodized-3); border-radius: 10px; border: 3px solid transparent; background-clip: padding-box; }
-::-webkit-scrollbar-track { background: transparent; }
