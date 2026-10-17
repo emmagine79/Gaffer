@@ -645,3 +645,22 @@ async def test_a_cancel_during_the_disconnect_after_a_failed_connect_still_relea
     await asyncio.gather(opening, return_exceptions=True)
     fake_bleak.disconnect_gate.set()
     await asyncio.wait_for(fake_bleak.instances[0].disconnect_done.wait(), 1)
+
+
+async def test_forget_light_closes_the_link_and_writes_nothing_more():
+    driver, transport = make()
+    light = Light()
+    await driver.connect(light)
+    driver.apply(light, A)
+    await driver.flush(light)
+    transport.hang_after = len(transport.writes)  # the next write blocks: a send is in flight
+    driver.apply(light, on(80, 4300))
+    await asyncio.wait_for(transport.blocked.wait(), 1)
+    await asyncio.wait_for(driver.forget_light(light.id), 1)
+    assert not any(link.connected for link in transport.links)
+    written = len(transport.writes)
+    transport.hang_after = None
+    await asyncio.sleep(0.05)  # time for a surviving worker to write
+    assert len(transport.writes) == written
+    assert transport.opens == 1
+    await driver.stop()

@@ -73,6 +73,8 @@ class _Light:
         self.failures = 0
         #: The pending back-off, after which ``wanted`` is tried again.
         self.retry: asyncio.Task[None] | None = None
+        #: The connect in flight for this light, if any.
+        self.connecting: asyncio.Future[None] | None = None
         self.reachable: bool | None = None
         self.wanted: LightState | None = None
         self.sent = _Sent()
@@ -142,10 +144,23 @@ class ZhiyunDriver(Driver):
         await asyncio.gather(*self._closing, return_exceptions=True)
         self._lights.clear()
 
+    async def forget_light(self, light_id: str) -> None:
+        """Let go of a light: cancel its worker, connect and back-off, close its link, drop its state."""
+        st = self._lights.pop(light_id, None)
+        if st is None:
+            return
+        tasks = [t for t in (st.task, st.retry, st.connecting) if t is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        st.idle.set()  # release anyone waiting in flush()
+        self._drop_link(st)
+        await asyncio.gather(*st.closers, return_exceptions=True)
+
     async def connect(self, light: Any) -> None:
         st = self._state_for(light)
         # The connect runs in a task the driver owns, so stop() can end it.
-        connecting = asyncio.ensure_future(self._connect(st))
+        connecting = st.connecting = asyncio.ensure_future(self._connect(st))
         self._connecting.add(connecting)
         connecting.add_done_callback(self._connecting.discard)
         try:
