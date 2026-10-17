@@ -363,11 +363,12 @@ def test_the_cue_message_follows_a_light_that_is_forgotten_and_back_stops_at_the
     with shell.websocket_connect(WS) as ws:
         # The only light of the first step is forgotten: the label must name step 2, which Go will run.
         ws.send_json({"type": "lights.forget", "light": key["id"]})
-        frames = []
-        while not frames or frames[-1]["next"] != {"id": on_fill, "name": "On fill"}:
-            m = ws.receive_json()
-            if m["type"] == "cue":
-                frames.append(m)
+        ws.send_json({"type": "cue.back", "rid": 7})  # refused at the top; its answer marks the end of the frames above
+        seen = []
+        while (m := ws.receive_json()).get("rid") != 7:
+            seen.append(m)
+        frames = [x for x in seen if x["type"] == "cue"]
+        assert frames and frames[-1]["next"] == {"id": on_fill, "name": "On fill"}, seen
         assert _go(ws)["look"]["id"] == on_fill
         assert _go(ws)["look"]["id"] == on_both
         # Back from step 3 goes to step 2; step 1 is gone, so from step 2 there is nothing earlier.
