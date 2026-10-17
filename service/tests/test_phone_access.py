@@ -27,8 +27,10 @@ from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import connect
 
 from gaffer.app import create_app
+from gaffer.listener import guarded_config
 from gaffer.phone import MAX_WRONG_GUESSES, PHONE_COOKIE, PIN_DIGITS, PhoneAccess
 from gaffer.session import COOKIE, protect
+from phone_peer import as_if_from_phone
 
 SECRET = "test-secret-for-this-launch"
 LAN = "192.168.1.20"  # the Mac's Wi-Fi address
@@ -265,20 +267,6 @@ def test_the_mac_shows_a_wifi_code_and_a_tailscale_code_from_the_tailscale_tool(
             assert s.phone.get("/api/session", headers={"host": TAILNET_NAME}).status_code == 400
 
 
-def as_if_from_phone(app, address: str = PHONE):
-    """Tests reach the real listener over loopback, but a phone never does. This stands in for the network:
-    a request that names a host other than this Mac's own arrives from ``address``, as a phone's would."""
-
-    async def wrapped(scope, receive, send):
-        if scope["type"] in ("http", "websocket"):
-            host = dict(scope["headers"]).get(b"host", b"").decode().rsplit(":", 1)[0].strip("[]")
-            if host not in ("127.0.0.1", "localhost", "::1"):
-                scope = {**scope, "client": (address, 50000)}
-        await app(scope, receive, send)
-
-    return wrapped
-
-
 async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
     """The real second listener: closed at launch, open on a real socket while on, closed again after."""
     with socket.socket() as probe:
@@ -287,7 +275,7 @@ async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
     access = PhoneAccess(port=port, lan_ip=lambda: LAN, tailscale_cli=lambda: fake_tailscale(tmp_path, RUNNING))
     app = create_app(demo=True, data_dir=tmp_path / "data", phone=access)
     guarded = protect(app, SECRET, access)
-    access.bind_listener(as_if_from_phone(guarded), 1.0)
+    access.bind_listener(as_if_from_phone(guarded, PHONE), 1.0)
     name = {"host": TAILNET_NAME}  # a phone names the Tailscale name; here it reaches this machine over loopback
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as web:
@@ -392,6 +380,25 @@ def test_a_loopback_request_with_forwarding_headers_is_refused(studio):
     # The same request from a phone's own address is not a loopback request: the PIN decides.
     phone = studio.client_at(PHONE)
     assert phone.get("/api/session", headers={"x-forwarded-for": "192.168.1.50"}).json()["error"] == "pin_required"
+
+
+def test_a_proxy_that_sends_no_header_the_gate_knows_still_needs_the_launch_secret(studio):
+    """SPEC-024, the limit of the header check: a proxy on this Mac that sends no forwarding header we list
+    (here X-Real-IP) and rewrites Host to 127.0.0.1 looks like the Mac window. The launch secret cookie is what
+    stops its visitor, and the contract says so."""
+    studio.switch_on()
+    proxy = TestClient(studio.guarded, base_url=f"http://127.0.0.1:{PORT}", client=("127.0.0.1", 50000))
+    proxy.portal = studio.phone.portal
+    headers = {"x-real-ip": "203.0.113.9"}
+    reply = proxy.get("/api/lights", headers=headers)
+    assert reply.status_code == 401 and reply.json()["error"] == "not_signed_in"
+    assert refused_socket(proxy, f"ws://127.0.0.1:{PORT}/ws", headers=headers) == 4401
+
+
+def test_a_listener_for_the_guarded_app_never_takes_the_peer_address_from_a_header():
+    """SPEC-024: uvicorn's default would let X-Forwarded-For replace the 127.0.0.1 peer. Every listener is built by
+    guarded_config, which cannot be asked to turn that back on."""
+    assert guarded_config(object(), log_level="warning", proxy_headers=True).proxy_headers is False
 
 
 def test_the_running_service_does_not_take_a_forwarded_for_header_as_the_peer_address(tmp_path):

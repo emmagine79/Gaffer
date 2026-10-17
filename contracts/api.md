@@ -194,7 +194,14 @@ reconnects with back-off until the service process ends.
 
 ## Phone access
 
-Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie). A loopback connection is never a phone: a proxy on the Mac (`tailscale serve` or Funnel, `ssh -L`, a dev proxy) connects from loopback for visitors who could be anywhere. The service takes the peer address from the TCP connection only, never from `X-Forwarded-For`.
+Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback, `Host` is `127.0.0.1` or `localhost`, and the request carries no forwarding header; needs the launch secret cookie, no PIN) and a **phone** (a connection from a private network or Tailscale; needs the PIN cookie).
+
+What is guaranteed:
+
+* A loopback connection is the Mac window only, and it still needs the launch secret cookie. It is never a phone: a loopback connection with another `Host`, or with an `X-Forwarded-*`, `Forwarded` or `Tailscale-*` header, is refused.
+* The service takes the peer address from the TCP connection only, never from `X-Forwarded-For`.
+* A proxy on the Mac that sends no forwarding header we list (for example `X-Real-IP`, `X-Client-IP` or `Cf-Connecting-Ip`) and rewrites `Host` to `127.0.0.1` is handled as a Mac window request without the cookie, so it is refused with `401 not_signed_in`. The launch secret cookie is the safety net here, not the header check.
+* `tailscale serve` and Funnel are not a supported way in; neither is `ssh -L` or a dev proxy. A phone uses the Wi-Fi or Tailscale address shown in the Mac window's phone access panel.
 
 A phone's request is refused when:
 

@@ -12,25 +12,21 @@ request that names a host other than this Mac's own arrives from PHONE_ADDRESS, 
 checks are all the real ones. The Mac window names 127.0.0.1 and stays a loopback connection.
 """
 
-from gaffer import __main__ as service
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "service" / "tests"))
+
+from gaffer import __main__ as service  # noqa: E402
+from phone_peer import as_if_from_phone  # noqa: E402
 
 PHONE_ADDRESS = "100.101.102.103"
-MAC_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 real_protect = service.protect
 
 
 def protect(app, secret, phone=None):
-    gate = real_protect(app, secret, phone)
-
-    async def from_the_network(scope, receive, send):
-        if scope["type"] in ("http", "websocket"):
-            host = dict(scope["headers"]).get(b"host", b"").decode().rsplit(":", 1)[0].strip("[]")
-            if host not in MAC_HOSTS:
-                scope = {**scope, "client": (PHONE_ADDRESS, 50000)}
-        await gate(scope, receive, send)
-
-    return from_the_network
+    return as_if_from_phone(real_protect(app, secret, phone), PHONE_ADDRESS)
 
 
 service.protect = protect

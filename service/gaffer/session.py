@@ -19,6 +19,8 @@ own only when it comes from this Mac AND names this Mac (127.0.0.1 or localhost)
 header, and carries no forwarding header. A proxy on this Mac connects from loopback for visitors
 who are not on it, so a loopback connection is never a phone (SPEC-024): with another Host it is
 refused as ``network_not_allowed`` once phone access is on, and as a bad Host while it is off.
+A proxy that sends no forwarding header we list and rewrites Host to 127.0.0.1 looks like the Mac
+window; the launch secret cookie is what stops it.
 Everything else is a phone: it is refused while phone access is off, its Host must be
 one of the addresses phone access listed, and it needs the cookie that the right PIN earns
 instead of the launch secret. The launch secret never goes to a phone, and a phone's cookie is
