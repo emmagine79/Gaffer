@@ -117,22 +117,37 @@ async def _set(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     _start(hub, fixture, _patched(fixture, m.get("patch")), float(m.get("fade") or 0), str(m.get("easing", "inout")))
 
 
+def _is_level_map(value: Any, fixtures: dict[str, Fixture]) -> bool:
+    """A level from 0 to 100 for exactly the lights being moved."""
+    return (
+        isinstance(value, dict)
+        and value.keys() == fixtures.keys()
+        and all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100 for v in value.values())
+    )
+
+
 @command("set.many")
 async def _set_many(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
     """One fader over several lights: ``anchor`` goes to ``brightness``, the others keep their ratio to it.
+
+    ``start_levels`` (optional) holds every light's level when the drag began; the ratio is
+    then taken from those for the whole drag, so a drag to 0 and back keeps the balance.
 
     Everything is checked before any light moves, so a refused request changes nothing.
     """
     ids = m.get("lights")
     # A list longer than the studio has lights must repeat or invent ids: refuse it unread.
-    if not isinstance(ids, list) or len(ids) > len(hub.fixtures) or not all(isinstance(i, str) for i in ids):
+    if not isinstance(ids, list) or len(ids) > len(hub.fixtures) or not all(isinstance(i, str) and i for i in ids):
         raise CommandError("expected a list of lights")
     anchor = m.get("anchor")
     if not isinstance(anchor, str) or anchor not in ids:
         raise CommandError("the light being moved must be one of the lights")
     fixtures = {i: _fixture(hub, client, {"light": i}) for i in dict.fromkeys(ids)}
+    start = m.get("start_levels")
+    if start is not None and not _is_level_map(start, fixtures):
+        raise CommandError("start_levels must give a level from 0 to 100 for every light")
     try:
-        levels = scale_levels({i: _base(f).brightness for i, f in fixtures.items()}, anchor, m.get("brightness"))
+        levels = scale_levels({i: _base(f).brightness for i, f in fixtures.items()}, anchor, m.get("brightness"), start)
     except ValueError as err:
         raise CommandError(str(err)) from err
     targets = {i: _patched(f, {"brightness": levels[i]}) for i, f in fixtures.items()}

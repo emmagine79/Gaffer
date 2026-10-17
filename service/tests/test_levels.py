@@ -57,3 +57,36 @@ def test_set_many_over_the_socket_moves_every_light_and_a_refusal_moves_none(cli
         for bad in ({"lights": crowd, "brightness": 10}, {"lights": trio, "brightness": "10"}, {"lights": trio, "brightness": None}):
             assert _send(ws, {"type": "set.many", "anchor": trio[0], **bad})["type"] == "error"
         assert _levels(client) == after
+
+
+def test_a_drag_to_zero_and_back_gives_the_original_balance(client):
+    with client.websocket_connect("/ws") as ws:
+        hello = ws.receive_json()
+        ids = {light["name"]: light["id"] for light in hello["lights"]}
+        trio = [ids["Key light"], ids["Fill"], ids["Hair light"]]
+        start = dict(zip(trio, (40, 25, 60)))
+        for light_id, level in start.items():
+            ws.send_json({"type": "set", "light": light_id, "patch": {"brightness": level}})
+        drag = {"type": "set.many", "anchor": trio[0], "lights": trio, "start_levels": start}
+
+        assert _send(ws, {**drag, "brightness": 0})["type"] == "ack"
+        assert [_levels(client)[n] for n in ("Key light", "Fill", "Hair light")] == [0, 0, 0]
+        assert _send(ws, {**drag, "brightness": 40})["type"] == "ack"
+        assert [_levels(client)[n] for n in ("Key light", "Fill", "Hair light")] == [40, 25, 60]
+
+        # start_levels that do not cover exactly these lights, or hold a bad level, are refused and nothing moves.
+        for bad in ({trio[0]: 40}, {**start, trio[1]: 101}, {**start, trio[1]: "25"}, "40"):
+            assert _send(ws, {**drag, "start_levels": bad, "brightness": 10})["type"] == "error"
+        assert [_levels(client)[n] for n in ("Key light", "Fill", "Hair light")] == [40, 25, 60]
+
+
+def test_an_empty_light_id_is_refused_instead_of_moving_the_selected_light(client):
+    with client.websocket_connect("/ws") as ws:
+        hello = ws.receive_json()
+        before = _levels(client)
+        for message in (
+            {"anchor": "", "lights": [""], "brightness": 100},
+            {"anchor": hello["lights"][0]["id"], "lights": [hello["lights"][0]["id"], ""], "brightness": 100},
+        ):
+            assert _send(ws, {"type": "set.many", **message})["type"] == "error"
+        assert _levels(client) == before

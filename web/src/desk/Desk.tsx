@@ -10,6 +10,16 @@ import './desk.css'
 const LONG_PRESS_MS = 500
 
 /**
+ * How far a held finger may drift, in CSS pixels, before the press stops counting as a selection.
+ * Apple documents 10 points as the default for UILongPressGestureRecognizer.allowableMovement
+ * (developer.apple.com/documentation/uikit/uilongpressgesturerecognizer/allowablemovement).
+ */
+const LONG_PRESS_DRIFT = 10
+
+/** One drag of a grouped fader: every picked light's level when it began, and the newest level asked for. */
+interface Drag { start: Record<string, number>; level: number | null; frame: number }
+
+/**
  * The lighting desk (design/directions/b-desk.html): one strip per light, numbered looks.
  * Shift-click or long-press selects lights; dragging one selected fader sends one
  * set.many and the service scales the others (service/gaffer/levels.py).
@@ -61,41 +71,85 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
   const applyTo = useStudio((s) => s.applyTo)
   const powerOf = useStudio((s) => s.powerOf)
   const send = useStudio((s) => s.send)
+  const showLevel = useStudio((s) => s.showLevel)
   const { state, caps } = light
   const shown = readout(state, caps)
-  const press = useRef<{ timer: number; fired: boolean } | null>(null)
-  const frame = useRef<{ id: number; level: number } | null>(null)
+  const press = useRef<{ timer: number; fired: boolean; x: number; y: number } | null>(null)
+  const drag = useRef<Drag | null>(null)
+  // The level under the finger while a grouped fader is dragged. The server's copy lags and
+  // the Slider drops a move that equals its own value, so it must not decide what the fader shows.
+  const [held, setHeld] = useState<number | null>(null)
+  const grouped = picked && group.length > 1
+  const level = held ?? state.brightness
 
   useEffect(() => () => {
     if (press.current) window.clearTimeout(press.current.timer)
-    if (frame.current) cancelAnimationFrame(frame.current.id)
+    if (drag.current) cancelAnimationFrame(drag.current.frame)
   }, [])
 
-  const move = (level: number) => {
-    if (!picked || group.length < 2) {
-      applyTo(light.id, { brightness: level })
+  const sendMany = (d: Drag) =>
+    send({ type: 'set.many', anchor: light.id, lights: group, start_levels: d.start, brightness: d.level })
+
+  // A drag begins with the first pointer-down or key press on the fader and lasts until the
+  // pointer lifts or the fader loses focus. The service scales from the levels at its start.
+  const begin = () => {
+    if (drag.current || !grouped) return
+    const now = useStudio.getState().lights
+    const start = Object.fromEntries(group.map((id) => [id, now.find((l) => l.id === id)?.state.brightness ?? 0]))
+    drag.current = { start, level: null, frame: 0 }
+  }
+  const end = () => {
+    const d = drag.current
+    drag.current = null
+    if (!d) return
+    if (d.frame) {
+      cancelAnimationFrame(d.frame)
+      sendMany(d)
+    }
+    if (d.level !== null) showLevel(light.id, d.level)
+    setHeld(null)
+  }
+
+  const move = (next: number) => {
+    if (!grouped) {
+      applyTo(light.id, { brightness: next })
       return
     }
+    begin()
+    const d = drag.current!
+    d.level = next
+    setHeld(next)
     // One set.many per frame, latest level wins; the service does the scaling.
-    if (frame.current) {
-      frame.current.level = level
-      return
-    }
-    const job = { id: 0, level }
-    job.id = requestAnimationFrame(() => {
-      frame.current = null
-      send({ type: 'set.many', anchor: light.id, lights: group, brightness: job.level })
-    })
-    frame.current = job
+    if (!d.frame) d.frame = requestAnimationFrame(() => { d.frame = 0; sendMany(d) })
   }
 
   const down = (e: PointerEvent) => {
-    if (e.pointerType !== 'touch' || (e.target as Element).closest('.d-fader, button')) return
-    const held = { fired: false, timer: window.setTimeout(() => { held.fired = true; onToggle(light.id) }, LONG_PRESS_MS) }
-    press.current = held
-  }
-  const cancel = () => {
+    // A new touch ends whatever the last one left behind (a long press whose click never came).
     if (press.current) window.clearTimeout(press.current.timer)
+    press.current = null
+    if (e.pointerType !== 'touch' || (e.target as Element).closest('.d-fader, button')) return
+    const rest = {
+      fired: false, x: e.clientX, y: e.clientY,
+      timer: window.setTimeout(() => { rest.fired = true; onToggle(light.id) }, LONG_PRESS_MS),
+    }
+    press.current = rest
+  }
+  const drift = (e: PointerEvent) => {
+    const rest = press.current
+    if (rest && !rest.fired && Math.hypot(e.clientX - rest.x, e.clientY - rest.y) > LONG_PRESS_DRIFT) {
+      window.clearTimeout(rest.timer)
+      press.current = null
+    }
+  }
+  const lift = () => {
+    if (press.current && !press.current.fired) {
+      window.clearTimeout(press.current.timer)
+      press.current = null
+    }
+  }
+  const abandon = () => {
+    if (press.current) window.clearTimeout(press.current.timer)
+    press.current = null
   }
 
   return (
@@ -104,9 +158,9 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
       data-light={light.id}
       aria-selected={picked}
       onPointerDown={down}
-      onPointerUp={cancel}
-      onPointerCancel={cancel}
-      onPointerMove={cancel}
+      onPointerUp={lift}
+      onPointerCancel={abandon}
+      onPointerMove={drift}
       onClick={(e) => {
         if ((e.target as Element).closest('.d-fader, button')) return
         if (press.current?.fired) {
@@ -125,11 +179,14 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
       </button>
       <div className="d-model">{modelLine(light)}</div>
       <div className="d-read">{shown.big}{shown.unit && <small>{shown.unit}</small>}</div>
-      <div className="d-k">{state.power ? `${Math.round(state.brightness)}%` : 'Off'}</div>
-      <div className="d-fader">
+      <div className="d-k">{state.power ? `${Math.round(level)}%` : 'Off'}</div>
+      <div
+        className="d-fader"
+        onPointerDownCapture={begin} onPointerUp={end} onPointerCancel={end} onBlur={end}
+      >
         <Slider
           vertical showValue={false} label={`${light.name} brightness`}
-          value={state.brightness} min={0} max={100} step={1} onChange={move}
+          value={level} min={0} max={100} step={1} onChange={move}
         />
       </div>
       <button

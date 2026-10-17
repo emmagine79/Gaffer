@@ -73,6 +73,93 @@ test('AC4: select three lights at 40, 25 and 60, drag the first to 80: the servi
   expect(await levelOf(page, 'Backlight')).toBe(70) // not picked, not moved
 })
 
+const TRIO = ['Key light', 'Fill', 'Hair light']
+const trioLevels = async (page: Page) => Promise.all(TRIO.map((name) => levelOf(page, name)))
+
+/** Put the three lights at these levels through the service, then open the desk with all three picked. */
+async function pickTrio(page: Page, levels: number[], surface: Surface = 'window') {
+  await open(page, surface)
+  const ids = Object.fromEntries((await lights(page)).map((l) => [l.name, l.id]))
+  for (const [i, name] of TRIO.entries()) {
+    await command(page, { type: 'set', light: ids[name], patch: { brightness: levels[i] }, fade: 0 })
+    await expect.poll(() => levelOf(page, name)).toBe(levels[i])
+  }
+  await page.getByRole('button', { name: 'All lights' }).click()
+  for (const name of TRIO) await strip(page, name).click({ modifiers: ['Shift'], position: { x: 6, y: 6 } })
+  await expect(desk(page).locator('.d-strip.picked')).toHaveCount(3)
+}
+
+/** The y position on the Key light fader that reads this level (0 at the bottom, 100 at the top). */
+async function faderY(page: Page, level: number) {
+  const box = (await fader(page, 'Key light').boundingBox())!
+  return { x: box.x + box.width / 2, y: box.y + box.height * (1 - level / 100), bottom: box.y + box.height }
+}
+
+// Finding 6 (code review): the balance built before a drag must survive dragging the anchor to 0 and back.
+test('dragging the first fader to 0 and back to 40 gives 40, 25, 60 again', async ({ page }) => {
+  await pickTrio(page, [40, 25, 60])
+  const at40 = await faderY(page, 40)
+  await page.mouse.move(at40.x, at40.y)
+  await page.mouse.down()
+  await page.mouse.move(at40.x, at40.bottom + 20, { steps: 20 })
+  await expect.poll(() => trioLevels(page)).toEqual([0, 0, 0])
+  await page.mouse.move(at40.x, at40.y, { steps: 20 })
+  await page.mouse.up()
+  await expect.poll(async () => (await trioLevels(page)).map((n) => Math.round(n * 100) / 100)).toEqual([40, 25, 60])
+})
+
+// Finding 1: a move that equals the stale value on screen was dropped, so the lights stopped one step short.
+test('dragging up and straight back while the service is slow to answer still ends where the finger is', async ({ page }) => {
+  let slow = false
+  const held: (() => void)[] = []
+  await page.routeWebSocket(/\/ws/, (ws) => {
+    const server = ws.connectToServer()
+    server.onMessage((message) => {
+      if (slow) held.push(() => ws.send(message))
+      else ws.send(message)
+    })
+  })
+  await pickTrio(page, [20, 10, 30])
+  const at20 = await faderY(page, 20)
+  const at40 = await faderY(page, 40)
+  slow = true
+  await page.mouse.move(at20.x, at20.y)
+  await page.mouse.down()
+  await page.mouse.move(at40.x, at40.y, { steps: 15 })
+  await page.mouse.move(at20.x, at20.y, { steps: 15 })
+  await page.mouse.up()
+  await expect.poll(async () => (await trioLevels(page)).map((n) => Math.round(n * 100) / 100)).toEqual([20, 10, 30])
+  slow = false
+  held.splice(0).forEach((release) => release())
+  await expect(fader(page, 'Key light')).toHaveAttribute('aria-valuenow', '20')
+})
+
+// Finding 3: Tab on a control moves focus; it only flips the view from the page itself.
+test('Tab on a fader moves focus to the next control and leaves the view alone', async ({ page }) => {
+  await open(page, 'window')
+  await page.getByRole('button', { name: 'All lights' }).click()
+  await fader(page, 'Key light').focus()
+  await page.keyboard.press('Tab')
+  await expect(desk(page)).toBeVisible()
+  await expect(page.getByRole('switch', { name: 'Key light power' })).toBeFocused()
+})
+
+// Finding 7: a held finger drifts a few pixels; that must not cancel the long press.
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true })
+  test('a long press that drifts 3 px still picks the light', async ({ page }) => {
+    await open(page, 'phone', 375)
+    await page.getByRole('button', { name: 'All lights' }).click()
+    const box = (await strip(page, 'Fill').locator('.d-chip').boundingBox())!
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    const cdp = await page.context().newCDPSession(page)
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: point.x + 3, y: point.y + 1 }] })
+    await expect(strip(page, 'Fill')).toHaveClass(/picked/)
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  })
+})
+
 // SPEC AC8
 test('AC8: the switch shows the desk, Tab shows Glass again, a reload opens on the last view', async ({ page }) => {
   await open(page, 'phone', 390)
