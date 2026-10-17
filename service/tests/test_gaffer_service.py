@@ -12,6 +12,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from websockets.sync.client import connect
 
 from gaffer import app as app_module
 from gaffer.app import create_app
+from gaffer.hub import SAVE_AFTER_SECONDS
 from gaffer.paths import data_home
 from gaffer.session import COOKIE, protect
 
@@ -116,8 +118,11 @@ def test_quitting_gaffer_saves_the_last_light_state(tmp_path):
                 and m["light"] == light and m["state"]["brightness"] == 17
             ):
                 pass
-            service.stdin.close()  # what Quit Gaffer does, before the hub's 2 s save is due
+            changed = time.monotonic()  # the hub's own save falls due SAVE_AFTER_SECONDS after the change
+            service.stdin.close()  # what Quit Gaffer does
             assert service.wait(timeout=30) == 0
+            # Gone before that save was due, so the state on disk came from a clean Hub.stop.
+            assert time.monotonic() - changed < SAVE_AFTER_SECONDS
         assert json.loads((data / "settings.json").read_text())["light_states"][light]["brightness"] == 17
     finally:
         if service.poll() is None:

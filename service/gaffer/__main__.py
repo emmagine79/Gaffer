@@ -34,7 +34,7 @@ from pathlib import Path
 import uvicorn
 
 from .app import create_app
-from .lifetime import GRACE_SECONDS
+from .hub import LINK_STOP_SECONDS
 from .paths import AlreadyRunning, data_home, hold_data_folder
 from .session import protect, runtime_file, write_runtime_file
 
@@ -53,6 +53,18 @@ class _QuietExpectedNoise(logging.Filter):
         return not str(record.msg).startswith(self.EXPECTED)
 
 
+#: After uvicorn asks open requests and sockets to close, they get this long before it cancels
+#: them, so a hung one can't hold the stop. Measured 18 Oct 2026 (demo lights, one open
+#: socket): they closed within uvicorn's own 0.1 s pause. A stop with nothing hung never
+#: reaches this limit, so uvicorn logs no "graceful shutdown exceeded" error.
+CONNECTIONS_SECONDS = 1.0
+#: Hub.stop saves the lights' state first, then gives the link LINK_STOP_SECONDS to let go of
+#: the light. Everything else from stdin's end of file to exit (uvicorn's loop tick and pause,
+#: the save, cancelling the hub's tasks, interpreter exit) measured 0.3 s on 18 Oct 2026.
+SAVE_AND_EXIT_SECONDS = 1.0
+BACKSTOP_SECONDS = CONNECTIONS_SECONDS + LINK_STOP_SECONDS + SAVE_AND_EXIT_SECONDS
+
+
 def _remove_runtime_file() -> None:
     runtime_file(os.getpid()).unlink(missing_ok=True)
 
@@ -60,8 +72,8 @@ def _remove_runtime_file() -> None:
 def _stop_when_stdin_closes(server: uvicorn.Server) -> None:
     """Stop cleanly once stdin closes, so the hub saves the lights' state and drops the link.
 
-    A hard exit after lumen-studio's grace period is the backstop: the service must
-    never outlive Gaffer holding a light's only Bluetooth connection.
+    A hard exit after BACKSTOP_SECONDS is the backstop: the service must never outlive
+    Gaffer holding a light's only Bluetooth connection.
     """
 
     def watch() -> None:
@@ -70,7 +82,7 @@ def _stop_when_stdin_closes(server: uvicorn.Server) -> None:
                 pass
         finally:
             server.should_exit = True
-            time.sleep(GRACE_SECONDS)
+            time.sleep(BACKSTOP_SECONDS)
             _remove_runtime_file()
             os._exit(0)
 
@@ -161,7 +173,8 @@ def main(argv: list[str] | None = None) -> None:
     # Removed on every clean shutdown (SIGTERM, SIGINT, stdin end of file), and by the watcher's backstop.
     app = create_app(demo=args.demo, data_dir=args.data, on_shutdown=_remove_runtime_file)
     # No access log: the one-time sign-in link carries the secret in its query string.
-    server = uvicorn.Server(uvicorn.Config(protect(app, secret), log_level="info", access_log=False))
+    server = uvicorn.Server(uvicorn.Config(protect(app, secret), log_level="info", access_log=False,
+                                            timeout_graceful_shutdown=CONNECTIONS_SECONDS))
     if args.session_from_stdin:
         _stop_when_stdin_closes(server)  # an end of file that came earlier is seen at once
     else:
