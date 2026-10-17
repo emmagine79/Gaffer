@@ -4,7 +4,7 @@ The HTTP and WebSocket contract between the Gaffer service and its clients (the 
 
 ## Service
 
-Everything in this section is served by the Python service in `service/`. It listens on `127.0.0.1` only. Every route and `/ws` need the session cookie. Errors are `{"error": "<code>", "message": "<plain words>"}` and never carry a path.
+Everything in this section is served by the Python service in `service/`. It listens on `127.0.0.1`, and also on the network while phone access is on (see Phone access). Every route and `/ws` need a cookie: the Mac window's session cookie, or a phone's PIN cookie. Errors are `{"error": "<code>", "message": "<plain words>"}` and never carry a path.
 
 ### GET /api/models
 
@@ -192,11 +192,62 @@ Service to shell:
 The shell sends nothing. If the socket closes, the shell shows no look name and
 reconnects with back-off until the service process ends.
 
+## Phone access
+
+Off at every launch. The Mac window switches it on; then the service also listens on all network addresses at the same port, and a phone gets in with a PIN. Two kinds of caller: the **Mac window** (peer address is loopback and `Host` is `127.0.0.1` or `localhost`; needs the launch secret cookie, no PIN) and a **phone** (anything else; needs the PIN cookie).
+
+A phone's request is refused when:
+
+| Case | Answer |
+| --- | --- |
+| Phone access is off | `403 phone_access_off` (socket closed with code 4403) |
+| The connection comes from a public address: not loopback, private IPv4 (RFC 1918), link-local (RFC 3927, RFC 4291), unique local IPv6 (RFC 4193) or Tailscale (100.64.0.0/10, fd7a:115c:a1e0::/48). An IPv4-mapped IPv6 address counts as its IPv4 address. Checked before the Host and the PIN | `403 network_not_allowed` (socket 4403) |
+| `Host` is not an address phone access listed (the Wi-Fi address, the Tailscale addresses and MagicDNS name) | `400 Invalid host header` (socket 4403) |
+| No valid PIN cookie, and the route is not one of the open ones below | `401 pin_required` (socket closed with code 4401 before it opens) |
+
+Open to a phone without the cookie: `GET /` (answered with status 401, so the page can show the PIN screen), `GET /assets/*`, `GET /favicon.svg`, `GET /api/session` and `POST /api/session`. A signed-in phone reaches everything except the Mac-only routes.
+
+### GET /api/session
+
+`200 {"signed_in": true, "local": <bool>}` when this browser may use the studio. `401 {"error": "pin_required"}` when it is a phone that has not entered the PIN. The page asks this first and shows the PIN screen on 401.
+
+### POST /api/session
+
+Body `{"pin": "123456"}`, at most 64 bytes. Answers:
+
+- `200 {"ok": true}` and `Set-Cookie: gaffer_phone=<random token>; HttpOnly; SameSite=Strict; Path=/` (a session cookie, as the Mac window's).
+- `401 wrong_pin`. `403 pin_locked` after 100 wrong PINs on one PIN (NIST SP 800-63B section 5.2.2 allows at most 100 consecutive failures); the right PIN is refused too until New PIN. `403 phone_access_off`. `400 bad_pin` for a body that is not six ASCII digits (not counted as a guess).
+
+The PIN is six digits from a CSPRNG, kept in memory only, compared in constant time.
+
+### GET /api/phone, POST /api/phone, POST /api/phone/pin
+
+Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request whose `Origin` is another site is `403 wrong_origin`.
+
+```json
+{
+  "enabled": true, "pin": "042917", "locked": false, "checking": false, "tailscale": true,
+  "targets": [
+    {"kind": "wifi", "label": "Same Wi-Fi", "url": "http://192.168.1.20:8787/", "qr": "data:image/svg+xml;..."},
+    {"kind": "tailscale", "label": "Away, over Tailscale", "url": "http://studio-mac.tail1234.ts.net:8787/", "qr": "data:image/svg+xml;..."}
+  ]
+}
+```
+
+- `POST /api/phone` with `{"enabled": true|false}` switches phone access on or off and answers with the status. Switching on makes a new PIN and opens the network port; `503 phone_unavailable` if the port cannot be opened. Switching off closes the port, signs every phone out and closes their sockets.
+- `POST /api/phone/pin` makes a new PIN, clears the wrong-guess count, signs every phone out and closes their sockets.
+- When off, `pin` is `null`, `targets` is empty and `tailscale` is `null`. `tailscale` is `false` when the `tailscale` tool is missing or not running; then there is no second target.
+- Nothing waits for the `tailscale` tool. Switching on answers at once with `checking: true`, `tailscale: null` and the Wi-Fi target only; the Tailscale target joins when the tool answers. Switching off, or the service stopping, ends the check and kills the tool. `GET /api/phone` also starts a new check (so opening the panel looks again), ending one that is still running. The last good Tailscale answer, and its names in the allowed Host set, stay in use when a check fails, hangs or is replaced, and also across switching access off and on. Only an answer from the tool that Tailscale is not running (or no tool at all) replaces it. `GET /api/phone?wait=1` does not start one; it answers when no check is running, however long that takes.
+- `GET /api/export` is Mac window only (it holds the lights' keys): a phone gets `403 mac_only`. `GET /api/health` carries no folder path.
+- A phone that is signed out (New PIN, or access switched off) has its socket closed with code 4401. The page then asks `GET /api/session` again and shows the PIN screen (or "Phone access is off").
+- The network listener takes IPv6 and IPv4 together (`::`, dual-stack), and falls back to IPv4 alone on a Mac with no IPv6.
+- Tailscale addresses come from `tailscale status --json` (`Self.TailscaleIPs`, `Self.DNSName`), found on `PATH` or in `/Applications/Tailscale.app`.
+
 ## Looks (SPEC-010)
 
 A look is `{"id", "name", "fade_seconds", "lights": {"<light id>": <state patch>}}`. It is saved in the `looks` collection, so it is also in `hello.store.looks` and in `store` messages. The order of the list is the slot order: slot 1 is the first look, and keys 1 to 9 and the Mac shortcuts use it. `lights` holds one state patch per light, in the same shape `set` takes, so a look made on one model is fitted to the light it is applied to.
 
-Applying a look runs every light in it. A fade of `0` sets each light at once. Any other fade starts a transition of that many seconds on each light, ending on the look's values. The service works out every light's values first and starts the lights only after that, so one light that cannot be worked out never leaves the others half moved (a driver error while a light starts is not rolled back). Each light gets its own values, also when it is in a group: a look does not mirror one light onto another. A light the look names that is no longer saved, is not on the network the service is connected to, or whose values cannot be worked out is left alone and named in `skipped`; the others still move.
+Applying a look runs every light in it. A fade of `0` sets each light at once. Any other fade starts a transition of that many seconds on each light, ending on the look's values. The service works out every light's values first and starts the lights only after that, so a look is never half applied. A light the look names that is no longer saved, is not on the network the service is connected to, or cannot take its patch is left alone and named in `skipped`; the others still move.
 
 | Method and path | Answer |
 | --- | --- |
@@ -212,7 +263,7 @@ WebSocket messages from the page:
 - `{"type":"looks.apply","id"}`: apply. Answers `{"type":"ack","of":"looks.apply","id","name","skipped"}`.
 - `{"type":"looks.save","look":{...}}`: the same body as `POST /api/looks`. Answers `{"type":"ack","of":"looks.save","look":{...}}`.
 - `{"type":"looks.delete","id"}`: delete. Deleting the current look makes no look current.
-- `{"type":"all.off"}`: all off. Answers `{"type":"ack","of":"all.off","skipped":[<light ids>]}`. The page shows a toast naming the `skipped` lights, which stayed on. The Mac shell's `POST /api/all-off` call reads the same `skipped` in the reply body but does not show it yet.
+- `{"type":"all.off"}`: all off.
 - `store.upsert`, `store.delete` refuse the `looks` collection; use the messages above.
 
 WebSocket messages to every client:
@@ -226,3 +277,16 @@ The current look is the one last applied. It is held in memory: after a restart 
 `GET /?surface=menubar|window|bare` is the page for each surface. The service serves the same page for all three; the page reads `surface` itself (`web/src/app/surface.ts`). Only `window` shows the look editor.
 
 Every HTTP request that is not a GET, HEAD or OPTIONS is refused with `403 {"error":"origin_not_allowed"}` when it carries an `Origin` header that is not the service's own origin (same check as `/ws`), because `SameSite` does not separate localhost ports. A request with no `Origin` (the Mac shell) is allowed. `POST /api/looks` also needs `Content-Type: application/json` (`415 json_required` otherwise).
+
+## Schedules (SPEC-013)
+
+A schedule is `{"id", "name", "enabled", "at": "HH:MM", "days": [0-6], "action": "look" | "off", "target"}`. It is saved in the `schedules` collection, so it is also in `hello.store.schedules` and in `store` messages. `at` is 24-hour local time on the Mac. `days` counts from Monday = 0 and holds at least one day. `target` is a look id and is needed for `look` only. When the minute comes on one of its days the service applies the look (as `looks.apply`) or turns every light off (as `all.off`), once. Schedules run only while Gaffer is open and the Mac is awake. A schedule whose look has been deleted does nothing.
+
+WebSocket messages from the page:
+
+- `{"type":"schedules.save","schedule":{...}}`: add one, or replace the one with the same `id`. Answers `{"type":"ack","of":"schedules.save","schedule":{...}}`. Refused with `{"type":"error","text":...}` and nothing stored: no name, a name over 80 characters or with control characters, a time that is not `HH:MM`, no days or a day outside 0 to 6, an action other than `look` or `off`, a `look` with no target or a look that does not exist.
+- `{"type":"schedules.delete","id"}`: delete.
+- `store.upsert`, `store.delete` refuse the `schedules` collection; use the messages above.
+- `{"type":"store","collection":"schedules","items":[...]}` goes to every client after a save or delete.
+
+Only the `window` surface shows the schedule editor.

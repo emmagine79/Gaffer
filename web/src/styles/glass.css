@@ -215,6 +215,7 @@ html[data-surface='phone'] .glass {
   color: var(--sel-ink); background: var(--sel-bg); box-shadow: 0 8px 24px rgb(0 0 0 / 0.3);
 }
 .g-toast--error { background: #d9473b; color: #fff; }
+.g-toast--warn { background: #f0b429; color: #1f1700; }
 
 /* Every control shows a keyboard ring: buttons, inputs, selects and links. */
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }

@@ -8,6 +8,8 @@ dependencies = [
     "bleak>=3.0.2",
     "fastapi>=0.143.3",
     "godox-mesh-bt",
+    # Draws the phone-access QR code (SPEC-015). BSD-3, licence in THIRD-PARTY/segno/.
+    "segno>=1.6.6",
     # [standard] brings the WebSocket library the /ws endpoint needs.
     "uvicorn[standard]>=0.54.0",
 ]
