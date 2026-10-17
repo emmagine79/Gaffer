@@ -99,13 +99,14 @@ async def dispatch(hub: Hub, client: Client, message: dict[str, Any]) -> dict[st
         raise CommandError(str(err)) from err
 
 
-def _start(hub: Hub, fixture: Fixture, target: LightState, fade: float, easing: str = "inout") -> None:
+def _start(hub: Hub, fixture: Fixture, target: LightState, fade: float, easing: str = "inout", *,
+           mirror: bool = True) -> None:
     if fixture.engine.kind is not None:
         fixture.engine.stop(restore=False)
     if fade > 0:
         fixture.engine.start_transition(target, fade, easing)
     else:
-        hub.set_state(fixture, target, "app")
+        hub.set_state(fixture, target, "app", mirror=mirror)
 
 
 # -- light ---------------------------------------------------------------------------
@@ -153,7 +154,16 @@ async def _set_many(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, An
     targets = {i: _patched(f, {"brightness": levels[i]}) for i, f in fixtures.items()}
     for light_id, fixture in fixtures.items():
         fixture.stream_source = None
-        _start(hub, fixture, targets[light_id], 0)
+        # Each picked light has its own target: a group mirroring one write onto the others would undo the ratio.
+        _start(hub, fixture, targets[light_id], 0, mirror=False)
+    # Group members that were not picked follow a picked light of their group, once per group.
+    # The dragged light goes first, so where picked lights share a group it is the one that leads.
+    picked, followed = frozenset(fixtures), set()
+    for light_id in sorted(fixtures, key=lambda i: i != anchor):
+        group = hub.group_of(light_id)
+        if group is not None and group["id"] not in followed:
+            followed.add(group["id"])
+            hub.mirror_from(fixtures[light_id], skip=picked)
     return {"type": "ack", "of": "set.many"}
 
 

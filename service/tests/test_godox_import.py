@@ -19,7 +19,7 @@ from gaffer.app import create_app
 from gaffer.demo import DemoScanner
 from gaffer.discovery import MESH_PROXY, Nearby
 from gaffer.godox_import import light_plans, parse_mesh_export
-from gaffer.hub import Client, Hub
+from gaffer.hub import Client, Hub, NoLink
 from gaffer.lights import LightLibrary
 from gaffer.link import LinkManager, Member, SequenceVault
 from gaffer.store import Store
@@ -84,6 +84,59 @@ def test_pasted_mesh_json_saves_one_light_per_godox_node(client):
 
 def test_a_godox_light_db_gives_the_same_lights(client, tmp_path):
     _check_imported(client, _import(client, db=_db(tmp_path, {**MESH, "nodes": []}, MESH)))
+
+
+def _do_in_gaffer(client, key, fill):
+    """Rename one light, pick its model, dim it and start an effect on the other.
+
+    Only set.many answers with an ack; the others stay silent unless refused. Commands are handled in order,
+    so a refusal of an earlier one arrives before set.many's ack, and fails the test here.
+    """
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "lights.rename", "light": key, "name": "Key"})
+        ws.send_json({"type": "lights.model", "light": key, "radio_id": "008F"})
+        ws.send_json({"type": "engine.start", "light": fill, "effect": "rainbow", "params": {"period": 60}})
+        ws.send_json({"type": "set.many", "rid": 9, "anchor": key, "lights": [key], "brightness": 33})
+        for _ in range(400):
+            message = ws.receive_json()
+            assert message.get("type") != "error", f"a command was refused: {message}"
+            if message.get("rid") == 9:
+                assert message["type"] == "ack"
+                return
+    raise AssertionError("no reply")
+
+
+def test_importing_the_same_export_again_keeps_a_lights_name_model_and_live_state(client):
+    """SPEC-023: the Godox app's export read a second time must not undo what was done in Gaffer."""
+    _import(client, meshJson=json.dumps(MESH))
+    studio = _saved(client)
+    key, fill = studio["Test key"]["id"], studio["Test fill"]["id"]
+    _do_in_gaffer(client, key, fill)
+
+    assert len(_import(client, meshJson=json.dumps(MESH))["lights"]) == 2
+
+    with client.websocket_connect("/ws") as ws:
+        lights = {light["id"]: light for light in ws.receive_json()["lights"]}
+    assert len(lights) == len(studio) and lights[key]["name"] == "Key"  # no second copy either
+    assert lights[key]["model_source"] == "manual" and lights[key]["radio_id"] == "008F"
+    assert lights[key]["state"]["brightness"] == 33
+    assert lights[fill]["engine"]["kind"] is not None  # the running effect was not stopped
+
+
+async def test_importing_the_same_export_again_repairs_a_link_that_failed_to_open(tmp_path):
+    """SPEC-023: after 'Could not open this network's keys', reading the same export again must bring the link back."""
+    hub = await _studio(tmp_path)
+    try:
+        await hub.import_godox(Client(), {"meshJson": json.dumps(MESH)})
+        await hub._stop_link()  # what _relink leaves behind when the keys will not open
+        hub.link = NoLink(hub._link_changed, "Could not open this network's keys: broken")
+        hub._link_task = asyncio.create_task(hub.link.run())
+
+        await hub.import_godox(Client(), {"meshJson": json.dumps(MESH)})
+        assert not isinstance(hub.link, NoLink)
+    finally:
+        await hub.stop()
 
 
 @pytest.mark.parametrize(("fields", "reason"), [
