@@ -202,6 +202,7 @@ What is guaranteed:
 * The service takes the peer address from the TCP connection only, never from `X-Forwarded-For`.
 * A proxy on the Mac that sends no forwarding header we list (for example `X-Real-IP`, `X-Client-IP` or `Cf-Connecting-Ip`) and rewrites `Host` to `127.0.0.1` is handled as a Mac window request without the cookie, so it is refused with `401 not_signed_in`. The launch secret cookie is the safety net here, not the header check.
 * `tailscale serve` and Funnel are not a supported way in; neither is `ssh -L` or a dev proxy. A phone uses the Wi-Fi or Tailscale address shown in the Mac window's phone access panel.
+* The supported Tailscale setup is Tailscale.app (the network extension), which delivers a tailnet peer's connection with its own `100.x` or `fd7a:` address. Userspace-networking `tailscaled`, which delivers tailnet connections from loopback, is not supported: its phone gets `403 network_not_allowed`.
 
 A phone's request is refused when:
 

@@ -28,7 +28,7 @@ from websockets.asyncio.client import connect
 
 from gaffer.app import create_app
 from gaffer.listener import guarded_config
-from gaffer.phone import MAX_WRONG_GUESSES, PHONE_COOKIE, PIN_DIGITS, PhoneAccess
+from gaffer.phone import MAX_WRONG_GUESSES, PHONE_COOKIE, PIN_DIGITS, PhoneAccess, PhoneListener
 from gaffer.session import COOKIE, protect
 from phone_peer import as_if_from_phone
 
@@ -265,6 +265,23 @@ def test_the_mac_shows_a_wifi_code_and_a_tailscale_code_from_the_tailscale_tool(
             status = s.mac.get("/api/phone").json()
             assert [t["kind"] for t in status["targets"]] == ["wifi"] and status["tailscale"] is False
             assert s.phone.get("/api/session", headers={"host": TAILNET_NAME}).status_code == 400
+
+
+async def test_the_phone_listener_never_takes_the_peer_address_from_a_header():
+    """SPEC-024: the second listener, as started, must not let X-Forwarded-For replace the peer address."""
+
+    async def app(scope, receive, send):
+        pass
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    listener = PhoneListener(app, port, 1.0)
+    await listener.start()
+    try:
+        assert listener.server.config.proxy_headers is False
+    finally:
+        await listener.stop()
 
 
 async def test_the_network_port_opens_only_while_phone_access_is_on(tmp_path):
