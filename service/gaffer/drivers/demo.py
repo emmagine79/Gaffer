@@ -26,6 +26,10 @@ class DemoDriver(Driver):
         #: The last state each light was told to take: what a real driver would have written.
         self.applied: dict[str, LightState] = {}
         self._connected: dict[str, float] = {}
+        #: Lights an official app is pretending to hold, set through ``set_held`` (the demo's ``demo.held`` command).
+        self._held: set[str] = set()
+        #: Every light identify() ran on, oldest first: what a real driver would have pulsed.
+        self.identified: list[str] = []
 
     def match(self, advert: Advert) -> str | None:
         return None
@@ -37,11 +41,27 @@ class DemoDriver(Driver):
         self.applied[light.id] = state
 
     async def identify(self, light: SavedLight) -> None:
+        self.identified.append(light.id)
         await asyncio.sleep(0)
 
     def status(self, light: SavedLight) -> LightStatus:
-        return {"reachable": True if light.id in self._connected else None, "held": False}
+        return {"reachable": True if light.id in self._connected else None, "held": light.id in self._held}
+
+    def set_held(self, light_id: str, held: bool) -> None:
+        """Demo only: pretend another app takes the light's one connection, or lets go of it."""
+        (self._held.add if held else self._held.discard)(light_id)
+
+    def needs_channel(self, caps) -> bool:  # noqa: ANN001 - same signature as Driver
+        """The Yongnuo stand-in asks for a channel, as the real Yongnuo driver does."""
+        return bool(caps.driver_data.get("needs_channel"))
+
+    def check_channel(self, channel):  # noqa: ANN001, ANN201
+        # 0 to 255: the one-byte channel field of a Yongnuo frame (drivers/yongnuo/protocol.py CHANNEL_MAX).
+        if isinstance(channel, bool) or not isinstance(channel, int) or not 0 <= channel <= 255:
+            raise ValueError("The channel must be a whole number from 0 to 255.")
+        return channel
 
     async def forget_light(self, light_id: str) -> None:
         self.applied.pop(light_id, None)
         self._connected.pop(light_id, None)
+        self._held.discard(light_id)

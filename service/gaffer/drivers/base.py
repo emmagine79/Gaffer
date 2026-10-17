@@ -104,6 +104,17 @@ class Driver(ABC):
     def status(self, light: SavedLight) -> LightStatus:
         """``{"reachable": bool | None, "held": bool}`` for this light."""
 
+    def needs_channel(self, caps: Any) -> bool:
+        """True when a light of this model must be told a radio channel when it is added (Yongnuo).
+
+        ``caps`` is the model's ``ModelCaps``. The default is no: most lights have no such setting."""
+        return False
+
+    def check_channel(self, channel: Any) -> int:
+        """The channel as the driver will send it, or ``ValueError`` in plain words. Only called for a
+        model whose ``needs_channel`` is True."""
+        raise ValueError("This light has no channel setting.")
+
     async def forget_light(self, light_id: str) -> None:
         """Let go of this light: the hub no longer has it with this driver (forgotten, paired again,
         or given another brand's model). Close any link you hold for it, stop any task that writes to

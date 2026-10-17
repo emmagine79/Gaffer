@@ -4,13 +4,13 @@ import { useStudio } from '../state/store'
 
 type Tone = 'ok' | 'busy' | 'off'
 
-/** A driver may report that another app holds a light (SPEC-003 status.held). */
-const held = (l: LightView) => Boolean((l as LightView & { held?: boolean }).held)
+/** A driver reports that the brand's own app holds a light (the service's `held`). */
+const held = (l: LightView) => l.held === true
 
 function status(socketOpen: boolean, link: string | undefined, lights: LightView[]): { text: string; tone: Tone } {
   if (!socketOpen) return { text: 'Gaffer is not running', tone: 'off' }
   const holder = lights.find(held)
-  if (holder) return { text: `${holder.name} is in use by another app`, tone: 'busy' }
+  if (holder) return { text: `${holder.name} is held by the ${holder.caps.brand} app`, tone: 'busy' }
   if (link === 'scanning' || link === 'connecting' || link === 'backoff') return { text: 'Syncing', tone: 'busy' }
   if (lights.length === 0) return { text: 'No lights yet', tone: 'off' }
   const n = lights.filter((l) => l.online && l.reachable !== false).length

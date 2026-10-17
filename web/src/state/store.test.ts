@@ -32,7 +32,7 @@ function light(id: string, brightness: number): LightView {
     engine: { kind: null, effect: null, label: '', params: {}, elapsed: 0, duration: null },
     readback: { cct: null, hsi: null, heartbeat_at: null, latency_ms: null },
     device: { fan: null, battery: null, smoothness: null, control: null },
-    reachable: true, online: true,
+    reachable: true, held: false, online: true,
   }
 }
 

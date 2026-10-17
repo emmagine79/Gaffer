@@ -81,6 +81,9 @@ export interface Caps {
   brightness_steps: number
   note: string
   known: boolean
+  /** Which driver commands this model, and what its maker is called ("Zhiyun"). */
+  driver: string
+  brand: string
   kind: LightKind
   kind_label: string
   features: Features
@@ -189,12 +192,15 @@ export interface LightView {
   readback: Readback
   device: Device
   reachable: boolean | null
+  /** Another controller (the brand's own app) holds this light's one connection. */
+  held: boolean
   online: boolean
 }
 
 export interface ModelRow { radio_id: string; name: string; kind: LightKind; kind_label: string }
 
-export type Relation = 'saved' | 'unpaired' | 'your-network' | 'elsewhere'
+/** `new` is a light of a brand with nothing to pair (Zhiyun, Yongnuo) that is not saved yet. */
+export type Relation = 'saved' | 'unpaired' | 'your-network' | 'elsewhere' | 'new'
 
 export interface Nearby {
   address: string
@@ -206,6 +212,10 @@ export interface Nearby {
   relation: Relation
   light_id: string | null
   seen_at: number
+  driver: string
+  brand: string
+  /** Adding it needs a channel (Yongnuo). Only set on `new` lights. */
+  needs_channel?: boolean
 }
 
 export interface Pairing { address: string; step: 'starting' | 'provisioning' | 'binding' | 'bound' | 'done' | 'failed'; error: string; at: number }
@@ -273,7 +283,7 @@ export type ServerMessage =
   | { type: 'readback'; light: string; readback: Readback }
   | { type: 'heartbeat'; light: string; at: number }
   | { type: 'engine'; light: string; engine: EngineStatus }
-  | { type: 'stats'; stats: { pump: PumpStats; link: LinkSnapshot; clients: number }; reachable: Record<string, boolean | null> }
+  | { type: 'stats'; stats: { pump: PumpStats; link: LinkSnapshot; clients: number }; reachable: Record<string, boolean | null>; held?: Record<string, boolean> }
   | { type: 'log'; entry: LogEntry }
   | { type: 'toast'; kind: string; text: string }
   | { type: 'device'; light: string; device: Device }

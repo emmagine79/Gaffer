@@ -219,8 +219,6 @@ html[data-surface='phone'] .glass {
 
 /* Every control shows a keyboard ring: buttons, inputs, selects and links. */
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-/* The add-a-light sheet is dark in both schemes (addlight.css), so its ring is light. */
-.addlight :focus-visible { outline-color: var(--chalk); }
 
 @media (prefers-reduced-motion: reduce) {
   .g-toggle, .g-toggle::after { transition: none; }

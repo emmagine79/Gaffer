@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 #: Commands that can take seconds (a scan, a pairing, a move to another network).
 #: They run beside the socket's loop, so sliders keep working meanwhile, and
 #: answer by request id when they finish.
-LONG_RUNNING = frozenset({"lights.scan", "lights.pair", "lights.import", "select"})
+LONG_RUNNING = frozenset({"lights.scan", "lights.pair", "lights.import", "lights.identify", "select"})
 
 # The built web page. A built Gaffer.app carries it inside this package (scripts/build_app.sh
 # copies web/dist to gaffer/web); a source checkout serves web/dist from the repository root.
