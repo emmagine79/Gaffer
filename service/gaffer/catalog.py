@@ -32,6 +32,8 @@ MODELS_DIR = Path(__file__).resolve().parent / "models"
 logger = logging.getLogger(__name__)
 _GELS_PATH = PACKAGE_DATA / "gels.json"
 _CHIP_HEX_PATH = PACKAGE_DATA / "gel-colours.json"
+#: Sourced Bluetooth reset steps for Godox models, keyed by radio id (``data/reset-steps.json``).
+_RESET_PATH = PACKAGE_DATA / "reset-steps.json"
 
 #: The gel catalogue used to emulate gels on a light that has no gel mode.
 EMULATION_GEL_VERSION = 2
@@ -90,6 +92,11 @@ class ModelCaps:
     max_mode: bool = False
     #: The colour temperature the light switches itself to when Max Mode comes on, from ``"max_mode_kelvin"``.
     max_mode_kelvin: int | None = None
+    #: How to reset the light's Bluetooth so another app can pair it, one plain sentence per step.
+    #: Empty when no manufacturer source is known: the page then shows a generic line, never invented steps.
+    reset_steps: tuple[str, ...] = ()
+    #: Where ``reset_steps`` came from (a manual or support page). Provenance only; not sent to the page.
+    reset_source: str = ""
 
     # -- what kind of light ---------------------------------------------------
 
@@ -250,6 +257,18 @@ def _safe_id(value: Any, what: str) -> str:
     return value
 
 
+def _check_reset(raw: dict[str, Any]) -> None:
+    """``reset_steps`` is a non-empty list of non-empty text; ``reset_source`` is non-empty text."""
+    steps = raw.get("reset_steps")
+    if steps is not None and (
+        not isinstance(steps, list) or not steps or not all(isinstance(t, str) and t.strip() for t in steps)
+    ):
+        raise ModelFileError("reset_steps must be a list of steps, each in words")
+    source = raw.get("reset_source")
+    if source is not None and (not isinstance(source, str) or not source.strip()):
+        raise ModelFileError("reset_source must be text")
+
+
 def _check_row(raw: dict[str, Any], folder: str) -> tuple[str, dict[str, Any]]:
     """Validate one model file's content. Returns (id, row) or raises ModelFileError."""
     model_id = _safe_id(raw.get("id"), "id").upper()
@@ -283,6 +302,7 @@ def _check_row(raw: dict[str, Any], folder: str) -> tuple[str, dict[str, Any]]:
     data = raw.get("driver_data", {})
     if not isinstance(data, dict):
         raise ModelFileError("driver_data must be an object")
+    _check_reset(raw)
     if not isinstance(raw.get("max_mode", False), bool):
         raise ModelFileError("max_mode must be true or false")
     kelvin = raw.get("max_mode_kelvin")
@@ -366,6 +386,10 @@ def _caps_table() -> dict[str, Any]:
     raw = json.loads(_CAPS_PATH.read_text(encoding="utf-8"))
     # Underscore-prefixed keys carry provenance, not models.
     table: dict[str, Any] = {k.upper(): v for k, v in raw.items() if not k.startswith("_")}
+    for radio_id, entry in json.loads(_RESET_PATH.read_text(encoding="utf-8"))["models"].items():
+        _check_reset(entry)  # shipped data: a mistake fails loudly in the tests, not quietly on a user's Mac
+        if radio_id.upper() in table:
+            table[radio_id.upper()] = {**table[radio_id.upper()], **entry}
     skipped: list[dict[str, str]] = []
     for root in (MODELS_DIR, *_extra_dirs):
         _scan_model_dir(root, table, skipped)  # a later file with the same id replaces an earlier row
@@ -438,6 +462,8 @@ def _caps_from_row(key: str, row: dict[str, Any]) -> ModelCaps:
         driver_data=dict(row.get("driver_data") or {}),
         max_mode=row.get("max_mode") is True,
         max_mode_kelvin=row.get("max_mode_kelvin") if isinstance(row.get("max_mode_kelvin"), int) else None,
+        reset_steps=tuple(row.get("reset_steps") or ()),
+        reset_source=str(row.get("reset_source") or ""),
     )
 
 
@@ -460,7 +486,7 @@ def models_index() -> tuple[dict[str, str], ...]:
             continue  # demo stand-ins are for the demo's lights, not for picking
         caps = model_caps(radio_id)
         rows.append({"radio_id": radio_id, "name": caps.name, "kind": caps.kind, "kind_label": KIND_LABELS[caps.kind],
-                     "driver": caps.driver, "brand": caps.brand})
+                     "driver": caps.driver, "brand": caps.brand, "reset_steps": list(caps.reset_steps)})
     return tuple(sorted(rows, key=lambda r: r["name"].lower()))
 
 
@@ -468,7 +494,8 @@ def models_catalog() -> list[dict[str, Any]]:
     """GET /api/models: every model, demo stand-ins included, with what the UI needs to lay out its controls."""
     rows = list(models_index()) + [
         {"radio_id": k, "name": model_caps(k).name, "kind": model_caps(k).kind,
-         "kind_label": KIND_LABELS[model_caps(k).kind], "driver": model_caps(k).driver, "brand": model_caps(k).brand}
+         "kind_label": KIND_LABELS[model_caps(k).kind], "driver": model_caps(k).driver, "brand": model_caps(k).brand,
+         "reset_steps": list(model_caps(k).reset_steps)}
         for k, row in _caps_table().items() if row.get("demo")
     ]
     return [

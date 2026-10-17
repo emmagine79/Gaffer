@@ -20,6 +20,11 @@
   "battery": false,
   "max_mode": true,
   "max_mode_kelvin": 4300,
+  "reset_steps": [
+    "Press the DIM button on the light three times in a row.",
+    "The light's Bluetooth is now reset."
+  ],
+  "reset_source": "Zhiyun support page 'ZHIYUN-MOLUS G200-Tutorials' (zhiyun-tech.com/en/service/support/816/1/show): 'triple-click the DIM button to reset the bluetooth'. The G200 user guide (B&H lit_files/1032691.pdf, device.report/manual/11251303) says 'Triple press: Reset Bluetooth'. Both read as search results on 18 Oct 2026; the pages themselves would not load.",
   "note": "Model code and name from didim99/HA-Zhiyun-Light (MIT). Only the white controls are driven; colour models still show white only.",
   "driver_data": {
     "control_mode": 1

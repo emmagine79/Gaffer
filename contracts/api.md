@@ -66,6 +66,14 @@ A model file is one row of lumen's `models.json` plus these keys:
 | `modes` | list of strings | `cct`, `hsi`, `rgb`, `color_chip`, `effects` and so on. Default empty. |
 | `match` | object | Optional. `name_prefix` (non-empty text) and `service` (a Bluetooth UUID, 16, 32 or 128 bit). No other keys. |
 | `driver_data` | object | Optional. Whatever the driver needs for this model. Opaque to everything else. |
+| `reset_steps` | list of strings | Optional. How to reset the light's Bluetooth so another app can pair it: a non-empty list, one plain sentence per step, each non-empty. Copy it from the maker's manual or support page and name that page in `reset_source`. Leave it out when no source is known: the add sheet then shows one generic line, never invented steps. |
+| `reset_source` | string | Optional. Non-empty text naming where `reset_steps` came from. Provenance only; it is not in the models lists. |
+
+Godox models come from lumen's table, which has no reset steps. Their steps live in `service/gaffer/data/reset-steps.json`: `{"models": {"<radio id>": {"reset_steps": [...], "reset_source": "..."}}}`, checked by the same rules. A model file's own `reset_steps` replaces the table's. Only models with a manufacturer source have an entry: Godox models do not all reset the same way (some reset from a menu, some with a Bluetooth button), so there is no Godox-wide default.
+
+`reset_steps` reaches clients in `GET /api/models` and in the WebSocket `hello` `models` list, as a list of strings on each model (`[]` when none is known), and in a light's `caps.reset_steps`. The add sheet reads it from `hello.models` by the nearby light's `radio_id`. For a nearby light with `relation: "elsewhere"` (paired with another app) it shows **Reset and pair** first: the model's steps, then Pair, with Import keys second. With `[]` it shows the line "Reset the light's Bluetooth as its manual describes, then press Pair."
+
+A model file whose `reset_steps` is not a non-empty list of non-empty text, or whose `reset_source` is not text, is skipped with the reason "reset_steps must be a list of steps, each in words" or "reset_source must be text".
 
 Every other lumen row key (`effects`, `fan_modes`, `rgb_channels`, `battery`, `gm_min`, `gm_max` and so on) is optional and read as in `models.json`.
 

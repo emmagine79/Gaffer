@@ -1,8 +1,8 @@
 import { AnimatePresence, motion } from 'motion/react'
-import { ArrowRight, Check, FileKey2, Link2, Plus, RefreshCw, X, Zap } from 'lucide-react'
+import { ArrowRight, Check, FileKey2, Link2, Plus, RefreshCw, RotateCcw, X, Zap } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ModelPicker } from '../components/ModelPicker'
-import type { Nearby } from '../lib/types'
+import type { ModelRow, Nearby } from '../lib/types'
 import { useStudio } from '../state/store'
 import { KIND_SHORT, LightGlyph, formOf } from '../visuals/LightGlyph'
 import { GodoxImport } from './GodoxImport'
@@ -27,7 +27,7 @@ const STEPS = [
 
 const SECTIONS: { relations: Nearby['relation'][]; title: string; hint: string }[] = [
   { relations: ['new', 'unpaired'], title: 'Ready to add', hint: 'Pick the model you have. Godox lights that were factory-reset pair in about ten seconds.' },
-  { relations: ['elsewhere'], title: 'Paired with something else', hint: 'The Godox app, Home Assistant or another computer holds their keys. Reset the light to pair it here, or import its keys file.' },
+  { relations: ['elsewhere'], title: 'Paired with something else', hint: 'The Godox app, Home Assistant or another computer holds their keys. Reset the light, then pair it here. No Godox app needed.' },
   { relations: ['your-network', 'saved'], title: 'Already in the studio', hint: '' },
 ]
 
@@ -39,9 +39,15 @@ function readKeys(file: File): Promise<Record<string, unknown>> {
   })
 }
 
+/** Shown when no manufacturer source is known for a model: never invented steps. */
+const GENERIC_RESET = "Reset the light's Bluetooth as its manual describes, then press Pair."
+
+/** A model row as the service sends it: `reset_steps` is empty when no source is known. */
+type ModelWithReset = ModelRow & { reset_steps?: string[] }
+
 type Flash = 'idle' | 'flashing' | 'done' | 'failed'
 /** `added` is true for a light saved with `lights.add` (Zhiyun, Yongnuo): only that can be undone with "Not this one". */
-type Stage = { at: 'list' } | { at: 'godox' } | { at: 'pick'; n: Nearby } | { at: 'pair'; n: Nearby } | { at: 'made'; id: string; added: boolean }
+type Stage = { at: 'list' } | { at: 'godox' } | { at: 'reset'; n: Nearby } | { at: 'pick'; n: Nearby } | { at: 'pair'; n: Nearby } | { at: 'made'; id: string; added: boolean }
 
 function Key({ children, onClick, disabled, kind = 'plain' }: {
   children: ReactNode; onClick?: () => void; disabled?: boolean; kind?: 'plain' | 'primary' | 'ghost'
@@ -74,6 +80,7 @@ export function AddLight() {
   const scanning = useStudio((s) => s.scanning)
   const pairing = useStudio((s) => s.pairing)
   const lights = useStudio((s) => s.lights)
+  const models = useStudio((s) => s.models) as ModelWithReset[]
   const request = useStudio((s) => s.request)
   const send = useStudio((s) => s.send)
   const toast = useStudio((s) => s.toast)
@@ -163,6 +170,11 @@ export function AddLight() {
     }
   }
 
+  const resetSteps = (n: Nearby): string[] => {
+    const steps = models.find((m) => m.radio_id === n.radio_id)?.reset_steps
+    return steps && steps.length ? steps : [GENERIC_RESET]
+  }
+
   const close = () => setOpen(false)
   const made = stage.at === 'made' ? lights.find((l) => l.id === stage.id) ?? null : null
 
@@ -218,18 +230,20 @@ export function AddLight() {
                         <ul className="ad-list">
                           {rows.map((n) => (
                             <li key={n.address} className={`ad-row ad-row--${n.relation}`}>
-                              {n.relation === 'new' || n.relation === 'unpaired' ? (
+                              {n.relation === 'new' || n.relation === 'unpaired' || n.relation === 'elsewhere' ? (
                                 <button type="button" className="ad-pick" disabled={Boolean(pairing && !['done', 'failed'].includes(pairing.step))}
-                                  onClick={() => (n.relation === 'new' ? (setChannel(''), setStage({ at: 'pick', n })) : pair(n))}>
+                                  onClick={() => (n.relation === 'new' ? (setChannel(''), setStage({ at: 'pick', n }))
+                                    : n.relation === 'elsewhere' ? setStage({ at: 'reset', n }) : pair(n))}>
                                   <RowBody n={n} />
-                                  <span className="ad-act">{n.relation === 'new' ? <Plus size={14} /> : <Link2 size={14} />}{n.relation === 'new' ? 'Add' : 'Pair'}</span>
+                                  <span className="ad-act">
+                                    {n.relation === 'new' ? <Plus size={14} /> : n.relation === 'elsewhere' ? <RotateCcw size={14} /> : <Link2 size={14} />}
+                                    {n.relation === 'new' ? 'Add' : n.relation === 'elsewhere' ? 'Reset and pair' : 'Pair'}
+                                  </span>
                                 </button>
                               ) : (
                                 <div className="ad-pick ad-pick--static">
                                   <RowBody n={n} />
-                                  {n.relation === 'elsewhere'
-                                    ? <Key onClick={() => { setImportFor(n.address); fileRef.current?.click() }}><FileKey2 size={14} /> Import keys</Key>
-                                    : <span className="ad-yours"><Check size={14} /> Yours</span>}
+                                  <span className="ad-yours"><Check size={14} /> Yours</span>
                                 </div>
                               )}
                             </li>
@@ -255,7 +269,7 @@ export function AddLight() {
                   </div>
                   <details className="ad-help">
                     <summary>Light not listed? How to reset and pair</summary>
-                    <p>Zhiyun and Yongnuo lights show up as soon as they are on and no phone app is connected to them. Godox lights show up under Ready to add only after a factory reset: hold the light's reset button until it flashes, then scan again.</p>
+                    <p>Zhiyun and Yongnuo lights show up as soon as they are on and no phone app is connected to them. Godox lights show up under Ready to add only after their Bluetooth is reset. Pick the light under Paired with something else to see how to reset it.</p>
                   </details>
                 </footer>
               </>
@@ -263,6 +277,23 @@ export function AddLight() {
 
             {stage.at === 'godox' && (
               <GodoxImport onDone={close} onBack={() => setStage({ at: 'list' })} />
+            )}
+
+            {stage.at === 'reset' && (
+              <div className="ad-step ad-reset">
+                <div className="ad-art"><Glyph n={stage.n} size={96} /></div>
+                <h2>Reset and pair the {stage.n.model ?? 'light'}</h2>
+                <p className="ad-sub">It is paired with something else. Reset its Bluetooth, then pair it here.</p>
+                <ol className="ad-reset-steps" aria-label="Reset steps">
+                  {resetSteps(stage.n).map((text) => <li key={text}>{text}</li>)}
+                </ol>
+                <div className="ad-actions">
+                  <Key kind="primary" onClick={() => pair(stage.n)}><Link2 size={15} /> Pair</Key>
+                  <Key onClick={() => { setImportFor(stage.n.address); fileRef.current?.click() }}><FileKey2 size={14} /> Import keys</Key>
+                  <Key kind="ghost" onClick={() => setStage({ at: 'list' })}>Back to the list</Key>
+                </div>
+                <p className="ad-hint">Import keys is only for people who have the Godox app.</p>
+              </div>
             )}
 
             {stage.at === 'pick' && (

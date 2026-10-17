@@ -54,7 +54,8 @@ DEMO_NEARBY: tuple[Nearby, ...] = (
     Nearby("DE:MO:00:00:00:10", "GD_LED", -58, "unpaired", "0001"),   # TL60
     Nearby("DE:MO:00:00:00:30", "PL109_DEMO", -63, "new", "ZY-DEMO"),
     Nearby("DE:MO:00:00:00:31", "YN150_DEMO", -70, "new", "YN-DEMO"),
-    Nearby("DE:MO:00:00:00:11", "GD_LED", -81, "mesh", "0066", "0000000000000000"),  # ML100Bi, elsewhere
+    Nearby("DE:MO:00:00:00:11", "GD_LED", -81, "mesh", "0066", "0000000000000000"),  # ML100Bi, elsewhere: no reset steps known
+    Nearby("DE:MO:00:00:00:12", "GD_LED", -74, "mesh", "0022", "0000000000000000"),  # LA150Bi, elsewhere: has reset steps
 )
 
 

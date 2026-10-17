@@ -130,6 +130,33 @@ for (const width of [375, 1280]) {
   })
 }
 
+// Friction items 2 to 4: a light paired with something else leads with Reset and pair (the model's steps,
+// then Pair), and Import keys comes second. The demo scan has an LA150Bi (steps known) and an ML100Bi (none).
+for (const width of [390, 1280]) {
+  test(`a light paired with something else leads with Reset and pair at ${width}px`, async ({ page }) => {
+    await open(page, width)
+    const sheet = await openSheet(page)
+    await expect(sheet.getByRole('button', { name: 'Import keys' })).toHaveCount(0) // not offered on the list any more
+    await sheet.getByRole('button', { name: /LA150Bi/ }).getByText('Reset and pair').click()
+    await expect(sheet.getByRole('heading', { name: 'Reset and pair the LA150Bi' })).toBeVisible()
+    await expect(sheet.getByRole('list', { name: 'Reset steps' }).getByRole('listitem')).toHaveText([
+      'Switch the light on.',
+      'Press and hold the Bluetooth button for about 2 seconds.',
+      'Let go when the Bluetooth icon on the screen starts to flash. It then stays lit: the light is reset.',
+    ])
+    const names = await sheet.getByRole('button').evaluateAll((els) => els.map((el) => el.textContent?.trim()))
+    expect(names.indexOf('Pair')).toBeGreaterThan(-1)
+    expect(names.indexOf('Import keys')).toBeGreaterThan(names.indexOf('Pair'))
+    await fitsTheScreen(page)
+
+    await sheet.getByRole('button', { name: 'Back to the list' }).click()
+    await sheet.getByRole('button', { name: /ML100Bi/ }).getByText('Reset and pair').click()
+    await expect(sheet.getByRole('list', { name: 'Reset steps' }).getByRole('listitem'))
+      .toHaveText(["Reset the light's Bluetooth as its manual describes, then press Pair."])
+    await fitsTheScreen(page)
+  })
+}
+
 // AC2: a demo Yongnuo light cannot be saved without a channel.
 test('AC2: a Yongnuo light needs a channel before it is added', async ({ page }) => {
   await open(page, 375)
