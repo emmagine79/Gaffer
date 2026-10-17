@@ -8,13 +8,13 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { cpSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const SERVICE = resolve(HERE, '../../service')
-export const STATE_FILE = join(HERE, '../test-results/.auth/state.json')
+const RESULTS = join(HERE, '../test-results')
+export const STATE_FILE = join(RESULTS, '.auth/state.json')
 /** Test model files, copied to <data>/models/ where the service loads extra model files (SPEC-003). */
 const MODELS = join(HERE, 'models')
 
@@ -24,7 +24,8 @@ const START_MS = 60_000
 const STOP_MS = 10_000
 
 export default async function startService() {
-  const data = mkdtempSync(join(tmpdir(), 'gaffer-glass-'))
+  mkdirSync(RESULTS, { recursive: true })
+  const data = mkdtempSync(join(RESULTS, 'service-data-'))
   cpSync(MODELS, join(data, 'models'), { recursive: true })
   const secret = randomBytes(24).toString('base64url')
   const child = spawn(
