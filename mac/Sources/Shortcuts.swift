@@ -123,7 +123,8 @@ final class ShortcutStore {
         // UInt32(exactly:) is nil for a negative or too-large number; plain UInt32(_:) would trap.
         guard let code = (saved["keyCode"] as? Int).flatMap({ UInt32(exactly: $0) }),
               let mods = (saved["modifiers"] as? Int).flatMap({ UInt32(exactly: $0) }),
-              let label = saved["label"] as? String else {
+              let label = saved["label"] as? String,
+              mods & Shortcut.requiredModifiers != 0 else {  // a bare key would take over typing
             return action.defaultShortcut  // unreadable entry: fall back, never crash
         }
         return Shortcut(keyCode: code, modifiers: mods, label: label)

@@ -96,7 +96,8 @@ def frontmost_bundle() -> str:
     """Bundle id of the app in front. System Events' own answer never names a menu-bar-only app like Gaffer."""
     asn = run("lsappinfo", "front").strip()
     info = run("lsappinfo", "info", "-only", "bundleid", asn)
-    return info.split('bundleID="')[1].split('"')[0] if 'bundleID="' in info else ""
+    assert 'bundleID="' in info, f"lsappinfo printed no bundle id (format changed?): {info!r}"
+    return info.split('bundleID="')[1].split('"')[0]
 
 
 def tell_gaffer(shell: Shell, script: str) -> str:
@@ -191,14 +192,21 @@ def shell(tmp_path):
 def test_menu_bar_title_follows_the_look_applied_from_the_web_page(shell):
     """Criterion 1: the menu-bar title changes within a second when a look is applied.
 
-    The bound is the card's. It is checked by reading the title once, after the second is up,
-    so a slow Accessibility read can only make the check later, never fail it by itself.
+    Measured from the apply to the first read that shows the new title, less the cost of one
+    read (timed in this run), because the title can have changed at any point inside that read.
     """
     assert shell.title() == ""  # no look yet: icon only
+    costs = []
+    for _ in range(3):
+        began = time.monotonic()
+        shell.title()
+        costs.append(time.monotonic() - began)
+    read_cost = sorted(costs)[1]
     for look_id, name in (("interview", "Interview"), ("sunset", "Sunset")):
+        began = time.monotonic()
         shell.api("POST", f"/api/looks/{look_id}/apply")  # what the web page does
-        time.sleep(TITLE_WITHIN_SECONDS)
-        assert shell.title() == name
+        shell.wait_title(name)
+        assert time.monotonic() - began - read_cost <= TITLE_WITHIN_SECONDS
 
 
 def test_menu_bar_recovers_when_the_socket_drops(shell):
@@ -247,10 +255,13 @@ def test_the_shell_never_links_core_bluetooth():
     assert "CoreBluetooth" not in linked
 
 
-def test_a_corrupt_saved_shortcut_does_not_stop_gaffer_starting(tmp_path):
-    """A hand-edited or damaged setting must fall back to the default key, not crash every launch."""
-    corrupt = {"look1": {"keyCode": 5_000_000_000, "modifiers": 5_000_000_000, "label": "x"}}
-    launched = launch(tmp_path, saved_settings={"shortcuts.v1": corrupt})  # waits for the shell to come up
+@pytest.mark.parametrize("saved", [
+    {"keyCode": 5_000_000_000, "modifiers": 5_000_000_000, "label": "x"},  # a number no key code can be
+    {"keyCode": 0, "modifiers": 0, "label": "A"},  # a bare key, which would take over typing the letter
+], ids=["number-out-of-range", "no-modifier-key"])
+def test_a_bad_saved_shortcut_falls_back_to_the_default_key(tmp_path, saved):
+    """A hand-edited or damaged setting must not crash a launch or grab a plain key."""
+    launched = launch(tmp_path, saved_settings={"shortcuts.v1": {"look1": saved}})  # waits for the shell to come up
     try:
         assert alive(launched.gaffer)
         press("1")  # Look 1: back to Control-Option-1

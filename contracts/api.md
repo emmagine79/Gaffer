@@ -34,11 +34,8 @@ never holds a path, a stack or a raw exception.
 | `POST /api/all-off` | `200 {"ok":true}`. Turns every light off. | No card yet. SPEC-010 puts All off on the page but does not name this route. |
 | `POST /api/cues/active/go` | `200 {"ok":true,"look":{"id":"...","name":"..."}}` after stepping to the next look. No active cue list: `409 {"error":"no_active_cue"}`. | SPEC-014. Its card names `POST /api/cues/{id}/go`, so that route must also accept the id `active`. |
 
-Until a route exists the shell still runs. Checked 18 Oct 2026 against the real service in
-demo mode: the POST routes answer `405` and `GET /api/looks` returns the web page, so a
-shortcut press beeps once and the right-click menu says why ("There is no look in slot N" or
-"the light service said no"). It does not retry, crash or show a path. SPEC-019 (the live check) must press every shortcut against the real
-service.
+If a route answers with an error, a shortcut press beeps once and the shell shows the
+service's `message` (or a plain one of its own) in the right-click menu. It never retries.
 
 Applying a look, all off and a cue step each change the current look. The service
 tells every WebSocket client (below). The shell never decides the look itself.
