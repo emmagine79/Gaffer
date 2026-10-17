@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gaffer</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f2ee; --card: rgba(255,255,255,0.72); --line: rgba(0,0,0,0.08);
+    --text: #1c1b19; --muted: #6b675f; --accent: #e8a33d; --bad: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141312; --card: rgba(255,255,255,0.06); --line: rgba(255,255,255,0.08);
+            --text: #f2efe9; --muted: #a39e94; --accent: #f2b45a; --bad: #ff8a80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px; background: var(--bg); color: var(--text);
+         font: 14px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  button { font: inherit; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--line);
+           background: var(--accent); color: #1c1b19; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { color: var(--muted); margin: 0 0 12px; min-height: 1.4em; overflow-wrap: anywhere; }
+  #status.bad { color: var(--bad); }
+  ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  li { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px;
+       display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+  .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: var(--accent); color: #1c1b19; white-space: nowrap; }
+  .tag.other { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Nearby lights</h1>
+  <button id="scan" type="button">Scan</button>
+</header>
+<p id="status" role="status">Starting…</p>
+<ul id="devices"></ul>
+<script>
+const statusEl = document.getElementById("status");
+const listEl = document.getElementById("devices");
+const scanBtn = document.getElementById("scan");
+
+function say(text, bad) { statusEl.textContent = text; statusEl.className = bad ? "bad" : ""; }
+
+function row(d) {
+  const li = document.createElement("li");
+  const left = document.createElement("div");
+  left.style.minWidth = "0";
+  const name = document.createElement("div");
+  name.className = "name";
+  name.textContent = d.name || "Unnamed device";
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = d.rssi != null ? `Signal ${d.rssi} dBm` : "Signal unknown";
+  left.append(name, meta);
+  const tag = document.createElement("span");
+  tag.className = d.family ? "tag" : "tag other";
+  tag.textContent = d.family_label || "Other";
+  li.append(left, tag);
+  return li;
+}
+
+async function permission() {
+  try { return (await (await fetch("/api/bluetooth")).json()).permission; } catch { return "unknown"; }
+}
+
+async function scan() {
+  scanBtn.disabled = true;
+  listEl.replaceChildren();
+  say("Scanning for lights…");
+  let done = false;
+  // While the scan runs, show when macOS is still waiting for Bluetooth permission.
+  (async () => {
+    while (!done) {
+      if (await permission() === "not_determined" && !done)
+        say("Waiting for Bluetooth permission. Click Allow in the macOS message to scan.");
+      await new Promise(r => setTimeout(r, 1000));
+    }
+  })();
+  try {
+    const res = await fetch("/api/scan");
+    const body = await res.json();
+    if (!res.ok) { say(body.message || "The scan failed. Try again.", true); return; }
+    const lights = body.devices.filter(d => d.family && d.family !== "bluetooth_mesh").length;
+    say(`Found ${body.devices.length} Bluetooth devices, ${lights} of them lights we know.`);
+    listEl.replaceChildren(...body.devices.map(row));
+  } catch {
+    say("Can't reach Gaffer's light service.", true);
+  } finally {
+    done = true;
+    scanBtn.disabled = false;
+  }
+}
+
+scanBtn.addEventListener("click", scan);
+scan();
+</script>
+</body>
+</html>
