@@ -643,6 +643,7 @@ class Hub:
                 if after is None or after == before:
                     continue
                 if after and fixture.state is asked and fixture.state.brightness != 100:  # never over a newer setting
+                    fixture.level_before_max = fixture.state.brightness
                     # Sent, so the driver wants 100 too and a reconnect does not dim the light back; the driver
                     # already counts 100 as sent, so no frame goes out.
                     self.set_state(fixture, fixture.state.model_copy(update={"brightness": 100.0}), "light")
@@ -990,11 +991,20 @@ class Hub:
             raise HubError(f"{fixture.light.name} has no Max Mode.")
         if not fixture.state.power or fixture.state.brightness <= 0:
             raise HubError("Switch the light on first.")
+        was_on, level = fixture.max_mode, fixture.state.brightness
         try:
             await fixture.driver.set_max_mode(fixture.light, on)
         except Exception:  # noqa: BLE001 - the page gets plain words, the log gets the detail
             logger.exception("could not set Max Mode on %s", fixture.light.name)
             raise HubError(f"Could not change Max Mode on {fixture.light.name}. Check it is on and close by.") from None
+        # The G200 jumps to 100% when Max Mode comes on, and stays there when it goes off (Captain's live
+        # check, 18 Oct 2026). Gaffer shows the 100%, and Max off puts the light back to its earlier level.
+        if on and not was_on:
+            fixture.level_before_max = level
+            self.set_state(fixture, fixture.state.model_copy(update={"brightness": 100.0}), "app")
+        elif not on and fixture.level_before_max is not None:
+            restore, fixture.level_before_max = fixture.level_before_max, None
+            self.set_state(fixture, fixture.state.model_copy(update={"brightness": restore}), "app")
         self._broadcast_lights()
 
     def demo_hold(self, light_id: str, held: bool) -> None:

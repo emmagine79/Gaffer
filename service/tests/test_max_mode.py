@@ -288,3 +288,25 @@ def test_a_slider_move_while_the_light_answers_is_not_overwritten_by_max_mode(tm
         client.portal.call(lambda: [answer() for answer in list(held)])  # the light answers late: Max on
         _wait(lambda: _light(client, "Zhiyun panel")["max_mode"] is True, "Max Mode to show as on")
         assert _light(client, "Zhiyun panel")["state"]["brightness"] == 40
+
+
+def test_max_on_in_gaffer_shows_full_power_and_max_off_goes_back_to_the_earlier_level(studio):
+    """Captain, 18 Oct: at 33% he switched Max on in Gaffer. The G200 went to 100% by itself and stayed
+    there after Max off, while Gaffer showed 33% throughout. He chose: Max off goes back to 33%."""
+    client, wire = studio
+    with client.websocket_connect("/ws") as ws:
+        _until(ws, lambda m: m["type"] == "hello")
+        light = _molus(client, ws, wire)
+        ws.send_json({"type": "set", "light": light, "patch": {"brightness": 33}})
+        _wait(lambda: _light(client, "Zhiyun panel")["state"]["brightness"] == 33, "Gaffer at 33%")
+
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": True}, 1)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 100
+
+        before = len(wire.writes)
+        assert _ask(ws, {"type": "light.max_mode", "light": light, "on": False}, 2)["type"] == "ack"
+        assert _light(client, "Zhiyun panel")["state"]["brightness"] == 33
+        _wait(lambda: any(zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS for w in wire.writes[before:]),
+              "the light to be told 33% again")
+        sent = [zy.parse_frame(w) for w in wire.writes[before:] if zy.parse_frame(w).command == zy.Command.SET_BRIGHTNESS]
+        assert round(zy.decode_brightness_response(sent[-1].payload)) == 33

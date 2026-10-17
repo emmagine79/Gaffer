@@ -251,6 +251,8 @@ class ZhiyunDriver(Driver):
             st.max_writes += 1
             await self._write(st, p.Command.MAX_MODE, p.encode_max_mode(on, st.op))
             st.sent.max_mode = on
+            if on:
+                st.sent.brightness = 100.0  # the light jumps to full power by itself (live check, 18 Oct 2026)
 
     async def read_max_mode(self, light: Any) -> bool | None:
         """Ask a linked light whether Max Mode is on. None when it is not linked or did not answer.
