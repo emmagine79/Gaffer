@@ -34,17 +34,24 @@ HANDSHAKE = 5  # frames the driver writes on connect before any command
 class FakeLink:
     def __init__(self, transport):
         self.t = transport
+        self.n = transport.opens
         self.connected = True
 
     async def write(self, data: bytes) -> None:
         if self.t.fail_writes:
             raise LinkError("write_failed", "The light did not accept the command.")
         if self.t.hang_after is not None and len(self.t.writes) >= self.t.hang_after:
+            self.t.blocked.set()
             await asyncio.Event().wait()  # a write that never completes
         self.t.writes.append(data.hex())
 
     async def close(self) -> None:
+        self.t.events.append(f"close{self.n}_start")
+        self.t.close_started.set()
+        if self.t.close_gate is not None:
+            await self.t.close_gate.wait()
         self.connected = False
+        self.t.events.append(f"close{self.n}_end")
 
 
 class FakeTransport:
@@ -55,13 +62,26 @@ class FakeTransport:
         self.fail_open = False
         self.hang_after: int | None = None  # writes allowed before one blocks forever
         self.lost_callbacks: list = []  # the on_lost callback of each link, oldest first
+        self.links: list[FakeLink] = []
+        self.events: list[str] = []  # "open2", "close1_end" ... in the order they happened
+        self.blocked = asyncio.Event()  # set when a write is blocking
+        self.close_started = asyncio.Event()
+        self.close_gate: asyncio.Event | None = None  # when set, close() waits for it
+        self.open_gate: asyncio.Event | None = None  # when set, open() waits for it
+        self.open_started = asyncio.Event()
 
     async def open(self, address, on_notify, on_lost):
         if self.fail_open:
             raise LinkError("connect_failed", "Could not connect to the light.")
+        if self.open_gate is not None:
+            self.open_started.set()
+            await self.open_gate.wait()
         self.opens += 1
+        self.events.append(f"open{self.opens}")
         self.lost_callbacks.append(on_lost)
-        return FakeLink(self)
+        link = FakeLink(self)
+        self.links.append(link)
+        return link
 
 
 class Light:
@@ -295,13 +315,62 @@ async def test_stop_releases_a_caller_waiting_on_flush_and_nothing_reconnects_af
     transport.hang_after = 0  # the light stops answering mid-handshake
     driver.apply(light, A)
     waiting = asyncio.ensure_future(driver.flush(light))
-    for _ in range(5):
-        await asyncio.sleep(0)
+    await asyncio.wait_for(transport.blocked.wait(), 1)
     await driver.stop()
     await asyncio.wait_for(waiting, 1)
     driver.apply(light, A)  # a late caller, such as an identify that was mid-pulse
     await driver.flush(light)
     assert transport.opens == 1
+    with pytest.raises(ZhiyunError) as err:
+        await driver.identify(light)
+    assert err.value.code == "stopped"
+
+
+async def test_stop_ends_a_connect_that_is_still_opening_and_leaves_no_link_open():
+    driver, transport = make()
+    light = Light()
+    transport.open_gate = asyncio.Event()
+    connecting = asyncio.ensure_future(driver.connect(light))
+    await asyncio.wait_for(transport.open_started.wait(), 1)
+    await driver.stop()
+    transport.open_gate.set()  # the connect would have finished now
+    with pytest.raises(ZhiyunError):
+        await asyncio.wait_for(connecting, 1)
+    assert not any(link.connected for link in transport.links)
+
+
+async def test_a_new_link_is_not_opened_until_the_old_one_has_finished_closing():
+    driver, transport = make()
+    light = Light()
+    await driver.connect(light)
+    transport.close_gate = asyncio.Event()
+    transport.fail_writes = True
+    driver.apply(light, A)
+    await driver.flush(light)  # link 1 failed; its close is now waiting on the gate
+    await asyncio.wait_for(transport.close_started.wait(), 1)
+    transport.fail_writes = False
+    driver.apply(light, A)
+    reconnecting = asyncio.ensure_future(driver.flush(light))
+    await asyncio.wait({reconnecting}, timeout=0.05)  # time for a premature open to show itself
+    assert "open2" not in transport.events
+    transport.close_gate.set()
+    await asyncio.wait_for(reconnecting, 1)
+    assert transport.events.index("close1_end") < transport.events.index("open2")
+    await driver.stop()
+
+
+async def test_one_failed_connect_tells_listeners_once():
+    told = []
+    transport = FakeTransport()
+    transport.fail_open = True
+    from gaffer.drivers.base import DriverContext
+
+    driver = ZhiyunDriver(DriverContext(notify=lambda lid, status: told.append(status)), transport=transport, sleep=nosleep)
+    light = Light()
+    driver.apply(light, A)
+    await driver.flush(light)
+    assert told == [{"reachable": False, "held": False}]
+    await driver.stop()
 
 
 # -- identify -----------------------------------------------------------------------------
@@ -340,6 +409,32 @@ async def test_identify_leaves_a_change_made_during_the_pulse_alone():
     await driver.stop()
 
 
+async def test_identify_on_a_light_that_drops_mid_pulse_does_not_keep_the_pulse_as_its_state():
+    driver = None
+    holds = 0
+
+    async def sleep(seconds: float) -> None:
+        nonlocal holds
+        if seconds == IDENTIFY_HOLD_SECONDS:
+            holds += 1
+            if holds == 1:
+                transport.fail_writes = True  # the light drops after the first pulse level
+
+    transport = FakeTransport()
+    driver = ZhiyunDriver(transport=transport, sleep=sleep)
+    light = Light()
+    await driver.connect(light)
+    driver.apply(light, on(80, 4300))
+    await driver.flush(light)
+    with pytest.raises(ZhiyunError):
+        await driver.identify(light)
+    transport.fail_writes = False
+    await driver.identify(light)  # restores what was last asked for, not a pulse level
+    await driver.flush(light)
+    assert last_value(transport, p.Command.SET_BRIGHTNESS, "<f") == 80.0
+    await driver.stop()
+
+
 async def test_identify_tells_the_caller_when_the_light_does_not_answer():
     driver, transport = make()
     transport.fail_open = True
@@ -357,10 +452,13 @@ class FakeBleakClient:
     instances: list = []
     connect_hangs = False
     notify_error: Exception | None = None
+    disconnect_gate: asyncio.Event | None = None
+    connect_started = asyncio.Event()
 
     def __init__(self, address, disconnected_callback=None):
         self.is_connected = False
         self.disconnected = False
+        self.disconnect_done = asyncio.Event()
         FakeBleakClient.instances.append(self)
 
         char = type("Char", (), {})()
@@ -369,6 +467,7 @@ class FakeBleakClient:
 
     async def connect(self):
         if FakeBleakClient.connect_hangs:
+            FakeBleakClient.connect_started.set()
             await asyncio.Event().wait()
         self.is_connected = True
 
@@ -377,7 +476,10 @@ class FakeBleakClient:
             raise FakeBleakClient.notify_error
 
     async def disconnect(self):
+        if FakeBleakClient.disconnect_gate is not None:
+            await FakeBleakClient.disconnect_gate.wait()
         self.disconnected = True
+        self.disconnect_done.set()
         self.is_connected = False
 
 
@@ -387,6 +489,8 @@ def fake_bleak(monkeypatch):
     FakeBleakClient.instances = []
     FakeBleakClient.connect_hangs = False
     FakeBleakClient.notify_error = None
+    FakeBleakClient.disconnect_gate = None
+    FakeBleakClient.connect_started = asyncio.Event()
     return FakeBleakClient
 
 
@@ -405,3 +509,15 @@ async def test_a_connect_that_times_out_releases_the_client(fake_bleak, monkeypa
     with pytest.raises(LinkError):
         await transport_module.BleakTransport().open("addr", lambda _d: None, lambda: None)
     assert fake_bleak.instances[0].disconnected
+
+
+async def test_cancelling_a_connect_does_not_wait_for_the_client_to_finish_disconnecting(fake_bleak):
+    fake_bleak.connect_hangs = True
+    fake_bleak.disconnect_gate = asyncio.Event()  # a disconnect that is slow to finish
+    opening = asyncio.ensure_future(transport_module.BleakTransport().open("addr", lambda _d: None, lambda: None))
+    await asyncio.wait_for(fake_bleak.connect_started.wait(), 1)
+    opening.cancel()
+    await asyncio.wait_for(asyncio.gather(opening, return_exceptions=True), 1)
+    assert opening.cancelled()
+    fake_bleak.disconnect_gate.set()  # let the background disconnect end
+    await asyncio.wait_for(fake_bleak.instances[0].disconnect_done.wait(), 1)

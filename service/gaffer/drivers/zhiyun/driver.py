@@ -58,6 +58,8 @@ class _Light:
         #: Bumped whenever the link is replaced or dropped; a disconnect callback
         #: from an older link carries an older number and is ignored.
         self.generation = 0
+        #: Background closes of replaced links; the next open waits for them.
+        self.closers: set[asyncio.Future[None]] = set()
         self.reachable: bool | None = None
         self.wanted: LightState | None = None
         self.sent = _Sent()
@@ -93,6 +95,7 @@ class ZhiyunDriver(Driver):
         self._sleep = sleep
         self._lights: dict[str, _Light] = {}
         self._closing: set[asyncio.Future[None]] = set()
+        self._connecting: set[asyncio.Future[None]] = set()
         self._stopped = False
 
     # -- contract ------------------------------------------------------------
@@ -110,7 +113,7 @@ class ZhiyunDriver(Driver):
     async def stop(self) -> None:
         self._stopped = True
         states = list(self._lights.values())
-        tasks = [st.task for st in states if st.task]
+        tasks = [st.task for st in states if st.task] + list(self._connecting)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -121,10 +124,22 @@ class ZhiyunDriver(Driver):
         self._lights.clear()
 
     async def connect(self, light: Any) -> None:
-        if self._stopped:
-            raise ZhiyunError("stopped", "Gaffer is shutting down.")
         st = self._state_for(light)
+        # The connect runs in a task the driver owns, so stop() can end it.
+        connecting = asyncio.ensure_future(self._connect(st))
+        self._connecting.add(connecting)
+        connecting.add_done_callback(self._connecting.discard)
+        try:
+            await connecting
+        except asyncio.CancelledError:
+            if self._stopped and asyncio.current_task().cancelling() == 0:
+                raise ZhiyunError("stopped", "Gaffer is shutting down.") from None
+            raise
+
+    async def _connect(self, st: _Light) -> None:
         async with st.lock:
+            if self._stopped:
+                raise ZhiyunError("stopped", "Gaffer is shutting down.")
             await self._ensure_link(st)
         if st.task is None or st.task.done():
             st.task = asyncio.create_task(self._worker(st))
@@ -143,7 +158,8 @@ class ZhiyunDriver(Driver):
         st = self._state_for(light)
         # With nothing applied yet the light's own state is unknown. The user is looking
         # at it, so assume it was lit: never switch off a light we did not switch on.
-        restore = st.wanted or LightState(
+        original = st.wanted
+        restore = original or LightState(
             power=st.sent.on is not False,
             brightness=st.sent.brightness if st.sent.brightness is not None else 50.0,
         )
@@ -154,15 +170,17 @@ class ZhiyunDriver(Driver):
                 self.apply(light, pulse)
                 await self.flush(light)
                 if st.reachable is not True:
-                    pulse = None  # nothing was shown, so there is nothing to restore
                     raise ZhiyunError("unreachable", "The light did not answer.")
                 await self._sleep(IDENTIFY_HOLD_SECONDS)
                 if st.wanted is not pulse:
                     return  # someone else commanded the light: their state wins
         finally:
             if pulse is not None and st.wanted is pulse:
-                self.apply(light, restore)
-                await self.flush(light)
+                if st.reachable is True:
+                    self.apply(light, restore)
+                    await self.flush(light)
+                else:
+                    st.wanted = original  # the light is gone: the pulse level was never asked for
 
     def status(self, light: Any) -> LightStatus:
         st = self._lights.get(light.id)
@@ -173,13 +191,17 @@ class ZhiyunDriver(Driver):
 
     async def flush(self, light: Any) -> None:
         """Wait until everything applied so far has been sent (or has failed)."""
-        await self._state_for(light).idle.wait()
+        st = self._lights.get(light.id)
+        if st is not None:
+            await st.idle.wait()
 
     # -- internals ---------------------------------------------------------------
 
     def _state_for(self, light: Any) -> _Light:
         st = self._lights.get(light.id)
         if st is None:
+            if self._stopped:
+                raise ZhiyunError("stopped", "Gaffer is shutting down.")
             models = load_models()
             row = models.get(str(getattr(light, "radio_id", ""))) or resolve_model(getattr(light, "name", None))
             if row is None:
@@ -205,10 +227,12 @@ class ZhiyunDriver(Driver):
                 st.idle.set()
 
     def _lost(self, st: _Light) -> None:
+        was = st.reachable
         st.reachable = False
         st.sent = _Sent()
         self._drop_link(st)
-        self._notify(st)
+        if was is not False:  # one failure, one notification
+            self._notify(st)
 
     def _drop_link(self, st: _Light) -> None:
         """Forget the current link and close it in the background."""
@@ -216,8 +240,9 @@ class ZhiyunDriver(Driver):
         link, st.link = st.link, None
         if link is not None:
             closing = asyncio.ensure_future(link.close())
-            self._closing.add(closing)
-            closing.add_done_callback(self._closing.discard)
+            for pending in (self._closing, st.closers):
+                pending.add(closing)
+                closing.add_done_callback(pending.discard)
 
     def _notify(self, st: _Light) -> None:
         if self.context.notify:
@@ -230,6 +255,10 @@ class ZhiyunDriver(Driver):
         self._drop_link(st)
         generation = st.generation
         try:
+            # The old link must be fully closed first: a late disconnect of the same
+            # peripheral can cancel the new connection.
+            if st.closers:
+                await asyncio.shield(asyncio.gather(*st.closers, return_exceptions=True))
             st.link = await self._transport.open(
                 st.address, lambda data: self._on_notify(st, data), lambda: self._on_lost(st, generation)
             )

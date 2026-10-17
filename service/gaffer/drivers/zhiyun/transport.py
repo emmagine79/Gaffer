@@ -67,6 +67,15 @@ class _BleakLink:
             pass
 
 
+_background: set[asyncio.Future[None]] = set()
+
+
+def _release_in_background(client) -> None:
+    closing = asyncio.ensure_future(_BleakLink(client, None).close())
+    _background.add(closing)
+    closing.add_done_callback(_background.discard)
+
+
 class BleakTransport:
     """Connects with bleak to service 0xFEE9: write ``...9600``, notify ``...9601``."""
 
@@ -89,7 +98,11 @@ class BleakTransport:
             # A timed-out connect may still finish later: release the client so it cannot hold the light.
             await _BleakLink(client, None).close()
             raise LinkError("connect_failed", "Could not connect to the light.") from err
-        except BaseException:  # LinkError, a cancel, anything else: never leave the client connected
+        except LinkError:
             await _BleakLink(client, None).close()
+            raise
+        except BaseException:
+            # A cancel (shutdown) must not wait for the disconnect, which can take CONNECT_TIMEOUT.
+            _release_in_background(client)
             raise
         return _BleakLink(client, write_char)
