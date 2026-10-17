@@ -1,0 +1,2 @@
+.studio-set { display: block; width: 100%; height: auto; background: #08090b; }
+.studio-set-lit { transition: opacity var(--t-light) linear; }

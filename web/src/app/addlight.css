@@ -1,0 +1,65 @@
+/* ================= add a light ================= */
+.addlight {
+  position: relative;
+  width: min(640px, 100%);
+  max-height: min(820px, calc(100dvh - 48px));
+  display: flex; flex-direction: column;
+  padding: 26px 28px 22px;
+  border-radius: 26px;
+  background: var(--anodized);
+  box-shadow: 0 40px 90px -30px rgb(0 0 0 / 0.8), inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+.addlight-head { display: flex; align-items: center; gap: 16px; padding-right: 34px; }
+.addlight-title { font-size: var(--fs-2xl); font-weight: 740; font-stretch: var(--wide); letter-spacing: -0.035em; }
+
+/* a small radar: rings while listening */
+.addlight-radar { position: relative; width: 52px; height: 52px; flex: none; border-radius: 50%; background: radial-gradient(circle, rgb(255 255 255 / 0.06), transparent 70%); }
+.addlight-radar b { position: absolute; inset: 22px; border-radius: 50%; background: var(--chalk); box-shadow: 0 0 10px var(--live-glow); }
+.addlight-radar i { position: absolute; inset: 0; border-radius: 50%; border: 1px solid rgb(255 255 255 / 0.18); opacity: 0; }
+.addlight-radar.is-scanning i { animation: ring 1.8s ease-out infinite; }
+.addlight-radar.is-scanning::after {
+  content: ''; position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0 75%, rgb(var(--lr) var(--lg) var(--lb) / 0.45) 100%);
+  animation: sweep 1.6s linear infinite;
+}
+@keyframes sweep { to { transform: rotate(360deg); } }
+
+.addlight-body { margin-top: 18px; overflow-y: auto; display: grid; gap: 18px; padding-right: 4px; min-height: 120px; }
+.addlight-section h3 { font-size: var(--fs-sm); font-weight: 680; }
+.addlight-section .hint { margin-top: 2px; }
+.nearby-list { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 6px; }
+.nearby {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 10px 8px 8px;
+  border-radius: 14px;
+  background: rgb(0 0 0 / 0.2);
+  border: 1px solid var(--hairline);
+  animation: menu-in 200ms var(--ease) both;
+}
+.nearby--unpaired { border-color: rgb(var(--lr) var(--lg) var(--lb) / 0.28); }
+.nearby-text { display: grid; min-width: 0; flex: 1; }
+.nearby-text strong { font-weight: 680; }
+.nearby-text small { color: var(--graphite); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nearby-signal { color: var(--graphite); }
+.nearby-saved { display: inline-flex; align-items: center; gap: 5px; color: var(--ok); font-size: var(--fs-sm); font-weight: 600; padding: 0 6px; }
+.addlight-empty { padding: 22px 18px; border-radius: 14px; background: rgb(0 0 0 / 0.18); display: grid; gap: 6px; }
+
+.addlight-foot { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline); display: grid; gap: 10px; }
+.addlight-manual-row { display: flex; gap: 8px; margin-top: 6px; }
+.addlight-manual-row .input { flex: 1; min-width: 0; font-family: ui-monospace, 'Cascadia Mono', monospace; font-size: var(--fs-sm); }
+.addlight-help {
+  justify-self: start;
+  display: inline-flex; align-items: center; gap: 7px;
+  border: 0; background: transparent; padding: 4px 0;
+  color: var(--graphite); font-size: var(--fs-sm);
+}
+.addlight-help:hover { color: var(--chalk); }
+
+/* pairing in progress */
+.pairing { text-align: center; overflow-y: auto; }
+.pairing-visual { position: relative; display: grid; place-items: center; height: 170px; }
+.pairing-visual .conn-rings i { width: 120px; height: 120px; }
+.pairing-visual.is-done .conn-rings i { border-color: var(--ok); animation-iteration-count: 1; }
+.pairing-visual.is-failed .conn-rings i { animation: none; opacity: 0; }
+.pairing-done { margin: 20px auto 0; max-width: 520px; display: grid; gap: 16px; text-align: left; }
+.pairing-model { display: grid; gap: 8px; }
