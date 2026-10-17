@@ -1,0 +1,25 @@
+{
+  "id": "PL103",
+  "name": "MOLUS G60",
+  "driver": "zhiyun",
+  "brand": "Zhiyun",
+  "match": {
+    "name_prefix": "PL103",
+    "service": "0000fee9-0000-1000-8000-00805f9b34fb"
+  },
+  "modes": [
+    "cct"
+  ],
+  "min_kelvin": 2700,
+  "max_kelvin": 6500,
+  "gm_min": 0,
+  "gm_max": 0,
+  "brightness_steps": 100,
+  "effects": [],
+  "fan_modes": [],
+  "battery": false,
+  "note": "Model code and name from didim99/HA-Zhiyun-Light (MIT). Only the white controls are driven; colour models still show white only.",
+  "driver_data": {
+    "control_mode": 1
+  }
+}

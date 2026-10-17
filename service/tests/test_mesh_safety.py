@@ -101,12 +101,12 @@ async def _hub(tmp_path) -> Hub:
 async def test_moving_the_link_drops_whatever_was_queued(tmp_path):
     hub = await _hub(tmp_path)
     try:
-        hub.pump.attach(None)  # as if the link had dropped
+        hub.godox.pump.attach(None)  # as if the link had dropped
         key = next(f for f in hub.fixtures.values() if f.light.name == "Key light")
         hub.set_state(key, key.state.model_copy(update={"brightness": 3.0}), "app")
-        assert key.node in hub.pump._desired
+        assert key.node in hub.godox.pump._desired
         await hub._relink(hub.network)
-        assert key.node not in hub.pump._desired
+        assert key.node not in hub.godox.pump._desired
     finally:
         await hub.stop()
 

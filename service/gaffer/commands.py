@@ -214,13 +214,13 @@ async def _stream(hub: Hub, client: Client, m: dict[str, Any]) -> None:
 def _need_controller(hub: Hub, fixture: Fixture | None = None) -> Any:
     if hub.controller is None:
         raise CommandError("the lights are not connected")
-    if fixture is not None and not hub.on_network(fixture):
+    if fixture is not None and not hub.on_mesh(fixture):
         raise CommandError(f"{fixture.light.name} is on another network; select it to connect")
     return hub.controller
 
 
 async def _aux(hub: Hub, job: Callable[[], Awaitable[Any]], timeout: float = 5) -> Any:
-    return await asyncio.wait_for(hub.pump.submit_aux(job), timeout)
+    return await asyncio.wait_for(hub.godox.run_aux(job), timeout)
 
 
 @command("fan")
@@ -420,7 +420,7 @@ async def _settings(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     except ValueError as err:
         raise CommandError(str(err)) from err
     if "max_rate" in patch:
-        hub.pump.max_rate = max(2.0, min(80.0, float(patch["max_rate"])))
+        hub.godox.set_max_rate(max(2.0, min(80.0, float(patch["max_rate"]))))
     if "relay_ttl" in patch and hub.controller is not None and hasattr(hub.controller, "relay_ttl"):
         hub.controller.relay_ttl = max(2, min(127, int(patch["relay_ttl"])))
     hub._broadcast({"type": "settings", "settings": settings})
