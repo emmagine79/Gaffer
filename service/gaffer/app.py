@@ -131,7 +131,7 @@ def create_app(
         # page on another port could send our cookie with a POST. Browsers always send Origin on those;
         # the Mac shell's URLSession sends none, so a missing Origin is let through (as /ws does).
         if request.method not in ("GET", "HEAD", "OPTIONS") and not origin_allowed(
-                request.headers.get("origin"), request.headers.get("host"), allowed):
+                request.headers.get("origin"), request.headers.get("host"), allowed_now()):
             return _error(403, "origin_not_allowed", "That page may not change Gaffer's lights.")
         return await call_next(request)
 

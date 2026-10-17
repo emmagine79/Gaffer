@@ -63,7 +63,8 @@ class Studio:
         return reply.json()["pin"]
 
     def sign_in(self, pin: str) -> httpx.Response:
-        return self.phone.post("/api/session", json={"pin": pin})
+        # A browser always sends Origin on a POST: the page's own address, which is the phone's Host.
+        return self.phone.post("/api/session", json={"pin": pin}, headers={"origin": f"http://{LAN}:{PORT}"})
 
     def brightness(self) -> float:
         light = self.mac.get("/api/lights").json()["lights"][0]

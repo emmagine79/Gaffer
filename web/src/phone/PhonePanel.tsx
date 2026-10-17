@@ -6,7 +6,13 @@ interface PhoneStatus { enabled: boolean; pin: string | null; locked: boolean; c
 
 /** An answer the service gave, so the panel can tell "this is a phone" (403 mac_only) from a failed request. */
 class PhoneError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string | undefined) { super(message) }
+  status: number
+  code: string | undefined
+  constructor(message: string, status: number, code: string | undefined) {
+    super(message)
+    this.status = status
+    this.code = code
+  }
 }
 
 async function call(path: string, body?: unknown, signal?: AbortSignal): Promise<PhoneStatus> {

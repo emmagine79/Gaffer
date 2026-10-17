@@ -124,8 +124,8 @@ test('the Mac window keeps its Phone button when a request fails, and stops sayi
 })
 
 test('a late "are you signed in?" answer does not send a phone that has just signed in back to the PIN screen', async ({ browser }) => {
-  const window = await macWindow(browser)
-  const macPage = await window.newPage()
+  const macCtx = await macWindow(browser)
+  const macPage = await macCtx.newPage()
   await macPage.goto(`${mac()}/?surface=window`)
   await macPage.getByRole('button', { name: 'Phone' }).click()
   await macPage.getByRole('button', { name: 'Turn on phone access' }).click()
@@ -172,5 +172,5 @@ test('a late "are you signed in?" answer does not send a phone that has just sig
   await expect(page.getByRole('group', { name: 'View' })).toBeVisible()
   await expect(page.getByLabel('Enter the PIN shown on the Mac')).toHaveCount(0)
   await phone.close()
-  await window.close()
+  await macCtx.close()
 })
