@@ -46,7 +46,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 DIST="${DIST:-$ROOT/dist}"
 mkdir -p "$DIST"
 DIST="$(cd "$DIST" && pwd -P)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/gaffer-build.XXXXXX")"
+WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/gaffer-build.XXXXXX")" && pwd -P)"   # physical path: compileall records it
 APP="$WORK/Gaffer.app"
 C="$APP/Contents"
 PYDIR="$C/Resources/python"
