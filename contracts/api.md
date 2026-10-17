@@ -85,3 +85,12 @@ The light objects in `hello`, `lights` and `/api/export` gain:
 
 - `channel`: integer or null. The radio channel a light is set to, for brands that need one told to them (Yongnuo). Saved with the light.
 - `caps.driver`, `caps.brand`, `caps.match`, `caps.driver_data`.
+
+### WebSocket command: set.many
+
+One fader over several lights (the lighting desk). `{"type": "set.many", "anchor": "<light id>", "lights": ["<light id>", ...], "brightness": 80}`. Answers `{"type": "ack", "of": "set.many"}`.
+
+- `anchor` is the light being dragged. It must be one of `lights`. `brightness` is its new level, 0 to 100.
+- The service reads each light's current level itself (a fade's destination, not its middle) and moves the others by the same ratio: 40, 25 and 60 with the first dragged to 80 become 80, 50 and 100. If the anchor was at 0 it has no ratio, so the others take the same absolute step. Levels are held between 0 and 100. The rule is `service/gaffer/levels.py`.
+- Only brightness changes. Power, colour and mode stay as they were. Each light's effect stops, as for `set`.
+- `lights` may not hold more ids than the studio has lights. An unknown id, a level that is not a number, or a light that cannot take the level is refused with an `error` reply and no light moves.

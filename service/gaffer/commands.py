@@ -21,6 +21,7 @@ from .effects.base import Frame
 from .fixture import Fixture
 from .frames import mode_frame
 from .hub import Client, Hub, HubError
+from .levels import scale_levels
 from .state import LightState, StateError, apply_patch, merge_patch
 from .store import COLLECTIONS
 from .sync import RECORD_CCT, RECORD_HSI
@@ -114,6 +115,31 @@ def _start(hub: Hub, fixture: Fixture, target: LightState, fade: float, easing: 
 async def _set(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     fixture = _fixture(hub, client, m)
     _start(hub, fixture, _patched(fixture, m.get("patch")), float(m.get("fade") or 0), str(m.get("easing", "inout")))
+
+
+@command("set.many")
+async def _set_many(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    """One fader over several lights: ``anchor`` goes to ``brightness``, the others keep their ratio to it.
+
+    Everything is checked before any light moves, so a refused request changes nothing.
+    """
+    ids = m.get("lights")
+    # A list longer than the studio has lights must repeat or invent ids: refuse it unread.
+    if not isinstance(ids, list) or len(ids) > len(hub.fixtures) or not all(isinstance(i, str) for i in ids):
+        raise CommandError("expected a list of lights")
+    anchor = m.get("anchor")
+    if not isinstance(anchor, str) or anchor not in ids:
+        raise CommandError("the light being moved must be one of the lights")
+    fixtures = {i: _fixture(hub, client, {"light": i}) for i in dict.fromkeys(ids)}
+    try:
+        levels = scale_levels({i: _base(f).brightness for i, f in fixtures.items()}, anchor, m.get("brightness"))
+    except ValueError as err:
+        raise CommandError(str(err)) from err
+    targets = {i: _patched(f, {"brightness": levels[i]}) for i, f in fixtures.items()}
+    for light_id, fixture in fixtures.items():
+        fixture.stream_source = None
+        _start(hub, fixture, targets[light_id], 0)
+    return {"type": "ack", "of": "set.many"}
 
 
 @command("look.apply")
