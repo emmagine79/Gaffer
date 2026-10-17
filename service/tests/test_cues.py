@@ -274,6 +274,25 @@ def test_go_fails_and_stays_put_when_the_next_look_s_lights_cannot_be_reached(sh
     assert refused.status_code == 409 and refused.json()["error"] == "lights_unreachable", refused.text
     assert _light(shell, "Fill")["state"] == fill_before and shell.hub.look is None  # the second look did not run instead
 
+    assert "Key light" in refused.json()["message"]  # the person is told which light
+
+    # The cue is stuck on that step until the person chooses: a page that connects is told (blocked), Go only
+    # retries and fails again, and Skip moves past the step without applying it.
+    with shell.websocket_connect(WS) as ws:
+        told = [ws.receive_json() for _ in range(3)]  # hello, look, cue
+        assert "Key light" in next(m for m in told if m["type"] == "cue")["blocked"]
+        assert shell.post("/api/cues/active/go").status_code == 409
+        ws.send_json({"type": "cue.skip", "rid": 6})
+        while (m := ws.receive_json()).get("rid") != 6:
+            pass
+    assert m["type"] == "ack" and m["cue"]["step"] == 1 and m["cue"]["blocked"] is None
+    assert shell.hub.look is None  # skipping applied nothing
+    second = shell.post("/api/cues/active/go")
+    assert second.status_code == 200 and second.json()["look"]["id"] == on_fill and second.json()["cue"]["step"] == 2
+
+    # Without a skip, a light that comes back lets the same step run.
+    _start(shell, cue)
+    assert shell.post("/api/cues/active/go").status_code == 409
     fixture.light = dataclasses.replace(fixture.light, network=mesh)
     again = shell.post("/api/cues/active/go")
     assert again.status_code == 200 and again.json()["look"]["id"] == on_key and again.json()["cue"]["step"] == 1
@@ -290,7 +309,7 @@ def test_a_go_for_another_cue_that_fails_leaves_the_active_cue_alone(shell):
     refused = shell.post(f"/api/cues/{broken}/go")
     assert refused.status_code == 409 and refused.json()["error"] == "cue_steps_gone"
     next_step = shell.post("/api/cues/active/go")  # still the cue that was running, still at step 1
-    assert next_step.status_code == 200 and next_step.json()["cue"] == {"id": running, "name": "Running", "step": 2, "steps": 2, "next": None}
+    assert next_step.status_code == 200 and next_step.json()["cue"] == {"id": running, "name": "Running", "step": 2, "steps": 2, "next": None, "blocked": None}
 
 
 def test_saving_the_active_cue_keeps_its_place_unless_a_step_that_has_run_changed(shell):
@@ -330,3 +349,28 @@ def test_the_cue_message_names_the_look_the_next_go_runs(shell):
     frames = [m for m in seen if m["type"] == "cue"]
     assert frames and frames[-1]["next"] == {"id": warm, "name": "Warm"} and frames[-1]["step"] == 1
     assert shell.post("/api/cues/active/go").json()["look"]["id"] == warm  # and that is the look Go runs
+
+
+def test_the_cue_message_follows_a_light_that_is_forgotten_and_back_stops_at_the_first_runnable_step(shell):
+    key, fill = _light(shell, "Key light"), _light(shell, "Fill")
+    on_key = shell.post("/api/looks", json={"name": "On key", "fade_seconds": 0, "lights": {key["id"]: {"power": True, "brightness": 30.0}}}).json()["look"]["id"]
+    on_fill = shell.post("/api/looks", json={"name": "On fill", "fade_seconds": 0, "lights": {fill["id"]: {"power": True, "brightness": 70.0}}}).json()["look"]["id"]
+    on_both = shell.post("/api/looks", json={"name": "Both", "fade_seconds": 0, "lights": {
+        key["id"]: {"power": True, "brightness": 10.0}, fill["id"]: {"power": True, "brightness": 10.0}}}).json()["look"]["id"]
+    cue = _cue(shell, [{"look_id": on_key, "fade_seconds": None}, {"look_id": on_fill, "fade_seconds": None},
+                       {"look_id": on_both, "fade_seconds": None}])
+    _start(shell, cue)
+    with shell.websocket_connect(WS) as ws:
+        # The only light of the first step is forgotten: the label must name step 2, which Go will run.
+        ws.send_json({"type": "lights.forget", "light": key["id"]})
+        frames = []
+        while not frames or frames[-1]["next"] != {"id": on_fill, "name": "On fill"}:
+            m = ws.receive_json()
+            if m["type"] == "cue":
+                frames.append(m)
+        assert _go(ws)["look"]["id"] == on_fill
+        assert _go(ws)["look"]["id"] == on_both
+        # Back from step 3 goes to step 2; step 1 is gone, so from step 2 there is nothing earlier.
+        assert _go(ws, "cue.back")["look"]["id"] == on_fill
+        refused = _go(ws, "cue.back")
+        assert refused["type"] == "error" and refused["text"] == "Already at the first step."

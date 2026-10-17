@@ -234,7 +234,15 @@ class Hub:
         self.fixtures[light.id] = fixture
         if self._started:
             self._engine_tasks[light.id] = asyncio.create_task(fixture.engine.run())
+        self._tell_cue()
         return fixture
+
+    def _tell_cue(self) -> None:
+        """A light came or went: the look the active cue's Go runs next may now be another (SPEC-014)."""
+        if getattr(self, "cue", None) is not None:
+            from . import cues  # cues imports this module
+
+            cues.republish(self)
 
     def driver_for(self, caps: Any) -> Driver:
         """The driver a model names. A driver that is not installed gives a stand-in, never another brand's."""
@@ -246,6 +254,7 @@ class Hub:
 
     async def _drop_fixture(self, light_id: str) -> None:
         fixture = self.fixtures.pop(light_id, None)
+        self._tell_cue()
         task = self._engine_tasks.pop(light_id, None)
         if task is not None:
             task.cancel()

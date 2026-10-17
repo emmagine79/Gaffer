@@ -20,31 +20,53 @@ export function backCue() {
   request({ type: 'cue.back' }).catch((err: Error) => toast(err.message, 'error'))
 }
 
+/** Move past the step Go could not run (its lights are out of reach) without applying it. */
+export function skipCue() {
+  const { request, toast } = useStudio.getState()
+  request({ type: 'cue.skip' }).catch((err: Error) => toast(err.message, 'error'))
+}
+
 /** Make a cue the active one, at the top. Nothing is applied until Go. */
 export function startCue(id: string) {
   const { request, toast } = useStudio.getState()
   request({ type: 'cue.start', id }).catch((err: Error) => toast(err.message, 'error'))
 }
 
+/** Anything the person can press, type in or drag: Space belongs to it, not to the cue. */
+const CONTROL = 'input, textarea, select, button, a, summary, [contenteditable], [role=switch], [role=slider]'
+
 /**
- * Space is Go while a cue is active (the Mac's Next cue shortcut works in any app; this is the page's own).
- * Only the Gaffer window listens: the menu-bar panel is a popover people open to glance at, and the card asks
- * for no shortcut on the phone. Ignored while a control has focus, because Space presses a focused button and
- * moves a slider, with a modifier held, so the browser's shortcuts still work, and while a sheet or the command
- * palette is open, because Space there must never fire lights behind it.
+ * Space is Go while a cue is active and has a step left to run (the Mac's Next cue shortcut works in any
+ * app; this is the page's own). Only the Gaffer window listens: the menu-bar panel is a popover people open
+ * to glance at, and the card asks for no shortcut on the phone. Space is ignored
+ *  - while a control has keyboard focus (it presses a focused button and a fader is a control too),
+ *  - after the last pointer press landed on a control, until a pointer press lands outside every control or
+ *    on the cue bar itself: dragging a fader or tapping a switch hands focus back to the page (useTabKey), so
+ *    the focus check alone cannot tell that the person was just using a control,
+ *  - with a modifier held, so the browser's shortcuts still work,
+ *  - while a sheet or the command palette is open, so it never fires lights behind them.
  */
 export function useCueKey(surface: Surface) {
   useEffect(() => {
     if (surface !== 'window') return
+    let onControl = false
+    const onPointer = (e: PointerEvent) => {
+      const target = e.target instanceof Element ? e.target : null
+      onControl = !!target?.closest(CONTROL) && !target.closest('.cue-bar')
+    }
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== ' ' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat) return
-      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, button, a, summary, [contenteditable], [role=switch]')) return
+      if (e.key !== ' ' || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || onControl) return
+      if (e.target instanceof HTMLElement && e.target.closest(CONTROL)) return
       const { cue, addLight, connectionSheet, palette } = useStudio.getState()
-      if (!cue || addLight || connectionSheet || palette) return
+      if (!cue?.next || addLight || connectionSheet || palette) return
       e.preventDefault()
       goCue()
     }
+    window.addEventListener('pointerdown', onPointer, true)
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('pointerdown', onPointer, true)
+      window.removeEventListener('keydown', onKey)
+    }
   }, [surface])
 }

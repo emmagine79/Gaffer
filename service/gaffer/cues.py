@@ -137,7 +137,9 @@ def _pick(hub: Hub, steps: list[dict[str, Any]], index: int, direction: int) -> 
 
 def state(hub: Hub) -> dict[str, Any] | None:
     """The active cue as clients see it: ``{id, name, step, steps, next}``, or None.
-    ``next`` is the look the next Go runs, or None at the end or when no remaining step can run."""
+    ``next`` is the look the next Go runs, or None at the end or when no remaining step can run.
+    ``blocked`` says why the last Go could not run its step (the lights were out of reach), or is None;
+    ``skip`` moves past that step."""
     if hub.cue is None:
         return None
     try:
@@ -149,14 +151,14 @@ def state(hub: Hub) -> dict[str, Any] | None:
     index = _pick(hub, steps, position, +1)
     ahead = looks.runnable(hub, steps[index]["look_id"]) if index is not None else None  # the look Go will run
     return {"id": cue["id"], "name": cue["name"], "step": position, "steps": len(steps),
-            "next": {"id": ahead["id"], "name": ahead["name"]} if ahead else None}
+            "next": {"id": ahead["id"], "name": ahead["name"]} if ahead else None, "blocked": hub.cue.get("blocked")}
 
 
 def frame(hub: Hub) -> dict[str, Any]:
     """The ``cue`` message. Every field is null when no cue is active."""
     now = state(hub)
     if now is None:
-        return {"type": "cue", "id": None, "name": None, "step": None, "steps": None, "next": None}
+        return {"type": "cue", "id": None, "name": None, "step": None, "steps": None, "next": None, "blocked": None}
     return {"type": "cue", **now}
 
 
@@ -197,7 +199,14 @@ def _run(hub: Hub, cue: dict[str, Any], index: int, direction: int) -> tuple[dic
     try:
         return looks.apply(hub, step["look_id"], fade=step.get("fade_seconds")), picked
     except CommandError as err:
-        raise CueError("lights_unreachable", 409, str(err)) from err
+        raise CueError("lights_unreachable", 409, _unreachable(hub, steps[picked]["look_id"])) from err
+
+
+def _unreachable(hub: Hub, look_id: str) -> str:
+    """Which lights of the look stopped it, in words the person can act on."""
+    look = looks.find(hub, look_id)
+    names = sorted(hub.fixtures[i].light.name for i in look["lights"] if i in hub.fixtures)
+    return f"Gaffer cannot reach {', '.join(names)}, so it did not run {look['name']}. Skip this step to go on."
 
 
 def _commit(hub: Hub, cue: dict[str, Any], step: int) -> None:
@@ -225,9 +234,28 @@ def go(hub: Hub, cue_id: str | None = None) -> dict[str, Any]:
         raise CueError("cue_has_no_steps", 409, "This cue has no steps.")
     if position >= total:
         raise CueError("cue_finished", 409, "That was the last step. Start the cue again to go from the top.")
-    done, index = _run(hub, cue, position, +1)
+    try:
+        done, index = _run(hub, cue, position, +1)
+    except CueError as err:
+        if err.code == "lights_unreachable" and hub.cue is not None and hub.cue["id"] == cue["id"]:
+            hub.cue = {**hub.cue, "blocked": str(err)}  # the bar offers Skip; Go and Space only retry
+            _publish(hub)
+        raise
     _commit(hub, cue, index + 1)
     return _answer(hub, done)
+
+
+def skip(hub: Hub) -> dict[str, Any]:
+    """Move past the step Go cannot run (its lights are out of reach) without applying it."""
+    if hub.cue is None or state(hub) is None:
+        raise _no_active()
+    cue = find(hub, hub.cue["id"])
+    steps = _steps(cue)
+    index = _pick(hub, steps, min(hub.cue["step"], len(steps)), +1)
+    if index is None:
+        raise CueError("cue_finished", 409, "That was the last step. Start the cue again to go from the top.")
+    _commit(hub, cue, index + 1)
+    return {"cue": state(hub)}
 
 
 def back(hub: Hub) -> dict[str, Any]:
@@ -238,6 +266,8 @@ def back(hub: Hub) -> dict[str, Any]:
     position = min(hub.cue["step"], len(_steps(cue)))
     if position <= 1:
         raise CueError("cue_at_start", 409, "Already at the first step.")
+    if _pick(hub, _steps(cue), position - 2, -1) is None:
+        raise CueError("cue_at_start", 409, "Already at the first step.")  # every earlier step is gone
     done, index = _run(hub, cue, position - 2, -1)
     _commit(hub, cue, index + 1)
     return _answer(hub, done)
@@ -292,6 +322,11 @@ async def _start_cue(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, A
 @command("cue.go")
 async def _go(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
     return {"type": "ack", "of": "cue.go", **go(hub)}
+
+
+@command("cue.skip")
+async def _skip(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "ack", "of": "cue.skip", **skip(hub)}
 
 
 @command("cue.back")

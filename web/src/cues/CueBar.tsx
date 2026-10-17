@@ -1,5 +1,5 @@
 import { useStudio } from '../state/store'
-import { backCue, goCue, startCue } from './cues'
+import { backCue, goCue, skipCue, startCue } from './cues'
 import './cues.css'
 
 /**
@@ -11,15 +11,22 @@ export function CueBar() {
   const active = useStudio((s) => s.cue)
   if (!active) return null
   const done = active.step >= active.steps
+  const stuck = done || !active.next // nothing left that Go can run: offer to start again instead
   return (
     <section className="cue-bar" aria-label={`Cue ${active.name}`} data-step={active.step}>
       <p className="cue-line">
         <span className="cue-name">{active.name}</span>
         <span className="cue-pos" role="status">{done ? 'Finished' : `Step ${active.step} of ${active.steps}`}</span>
       </p>
+      {active.blocked && (
+        <p className="cue-blocked" role="alert">
+          {active.blocked}
+          <button type="button" className="cue-skip" onClick={skipCue}>Skip this step</button>
+        </p>
+      )}
       <div className="cue-buttons">
         <button type="button" className="cue-back" disabled={active.step <= 1} onClick={backCue}>Back</button>
-        {done ? (
+        {stuck ? (
           <button type="button" className="cue-go" onClick={() => startCue(active.id)}>Start again</button>
         ) : (
           <button type="button" className="cue-go" onClick={goCue}>

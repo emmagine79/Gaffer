@@ -170,3 +170,60 @@ test('Space does not fire Go in the menu-bar panel or behind the Add a light she
   await page.getByRole('button', { name: /^Go Warm/ }).click()
   await expect.poll(() => brightness(page)).toBe(43)
 })
+
+test('Space does not fire Go while a fader is focused or just after it was dragged, and fires again after a press outside the controls', async ({ page }) => {
+  await threeLooks(page)
+  await page.goto(`${base()}/`)
+  await startCueOf(page, ['Wide', 'M'.repeat(80), 'Warm'])
+  await page.setViewportSize({ width: 1280, height: 1000 })
+  await page.goto(`${base()}/?surface=window`)
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+  const fader = page.getByRole('slider', { name: 'Brightness' })
+
+  // A fader with keyboard focus keeps Space.
+  await fader.focus()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400)
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+
+  // Dragging a fader hands focus back to the page; Space still must not fire Go.
+  const box = (await fader.boundingBox())!
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width * 0.7, box.y + box.height / 2, { steps: 5 })
+  await page.mouse.up()
+  await expect(fader).not.toBeFocused()
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400)
+  await expect(page.getByText('Step 0 of 3')).toBeVisible()
+
+  // A press outside every control gives Space back to the cue.
+  await page.mouse.click(3, 3)
+  await page.keyboard.press('Space')
+  await expect(page.getByText('Step 1 of 3')).toBeVisible()
+})
+
+test('when no remaining step can run the bar offers Start again and Space does not fire', async ({ page }) => {
+  await threeLooks(page)
+  await page.goto(`${base()}/`)
+  await startCueOf(page, ['Wide', 'M'.repeat(80), 'Warm'])
+  await page.setViewportSize({ width: 1280, height: 1000 })
+  await page.goto(`${base()}/?surface=window`)
+  await page.getByRole('button', { name: /^Go Wide/ }).click()
+  await expect(page.getByText('Step 1 of 3')).toBeVisible()
+  await page.evaluate(async () => {
+    const ws = new WebSocket(`ws://${location.host}/ws`)
+    const hello = await new Promise<{ store: { looks: { id: string; name: string }[] } }>((open) => {
+      ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.type === 'hello') open(m) }
+    })
+    for (const l of hello.store.looks.filter((x) => x.name !== 'Wide')) ws.send(JSON.stringify({ type: 'looks.delete', id: l.id }))
+    await new Promise((done) => setTimeout(done, 400))
+    ws.close()
+  })
+  await expect(page.getByRole('button', { name: 'Start again' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Go/ })).toHaveCount(0)
+  await page.mouse.click(3, 3)
+  await page.keyboard.press('Space')
+  await page.waitForTimeout(400)
+  await expect(page.getByText('Step 1 of 3')).toBeVisible()
+})
