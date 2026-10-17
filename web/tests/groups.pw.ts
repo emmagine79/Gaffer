@@ -64,7 +64,7 @@ for (const width of [375, 1280]) {
     expect(scroll).toBe(inner)
 
     // AC2: deleting the group stops it.
-    await page.getByRole('button', { name: /^Delete / }).click()
+    await group.getByRole('button', { name: /^Delete / }).click()
     await expect(page.locator('.grp')).toHaveCount(0)
     const next = await drag(page, 0.9, 0.3)
     expect(next).not.toBe(moved)

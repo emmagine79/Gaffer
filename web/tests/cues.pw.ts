@@ -102,7 +102,7 @@ test('Go steps a cue through its looks in Glass, on the desk and with Space, and
   await expect(page.getByRole('button', { name: /^Go/ })).toHaveCount(0)
 
   // Back goes to look 2; Start again returns to the top.
-  await page.getByRole('button', { name: 'Back' }).click()
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
   await expect.poll(() => brightness(page)).toBe(32)
   await expect(page.getByText('Step 2 of 3')).toBeVisible()
 })
@@ -149,7 +149,8 @@ test('Space does not fire Go in the menu-bar panel or behind the Add a light she
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
   await page.keyboard.press('Space')
   await page.waitForTimeout(400)
-  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(page.getByRole('dialog', { name: 'Add a light' })).toHaveCount(0)
   await expect(page.getByText('Step 0 of 3')).toBeVisible()
   await expect(page.getByRole('button', { name: /^Go Wide/ })).toBeVisible()
 
