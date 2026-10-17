@@ -21,7 +21,7 @@ Gaffer is free and has no Apple Developer ID, so it is not notarised. macOS will
 3. Double-click `Gaffer.app`. macOS stops and tells you it can't verify the app. Close the message. Do not move the app to the Bin.
 4. Open System Settings, click Privacy & Security, scroll down to the Security section and click **Open Anyway** next to the message about Gaffer.
 5. The warning comes back. Click **Open**, and enter your password or use Touch ID if macOS asks.
-6. Gaffer opens in the menu bar as a light bulb. From now on a double-click opens it like any other app.
+6. Gaffer opens in the menu bar as a studio-light icon. From now on a double-click opens it like any other app.
 7. The first time Gaffer scans for lights, macOS asks: "Gaffer" would like to use Bluetooth. Click **Allow**. If you click Don't Allow, turn it on later in System Settings, Privacy & Security, Bluetooth.
 
 Source: Apple's [Safely open apps on your Mac](https://support.apple.com/en-us/102445) (page dated 27 May 2026). For an app that is not notarised or is from an unidentified developer, it gives these steps: try to open the app, then open System Settings, click Privacy & Security, click Open Anyway, and click Open in the prompt that comes back. Older guides say to control-click the app and choose Open. Apple's current page does not list that step, so this guide does not rely on it. If it still works on your Mac, it does the same job.
@@ -36,7 +36,7 @@ The trade-off: there is no Developer ID, so Apple has not vouched for who made t
 
 ### Use Gaffer
 
-Gaffer appears in the menu bar as a light bulb and opens a window listing nearby lights. To quit, choose Quit Gaffer from the menu-bar icon. The light service stops with it, so no Python process is left running.
+Gaffer appears in the menu bar as a studio-light icon and opens a window listing nearby lights. To quit, choose Quit Gaffer from the menu-bar icon. The light service stops with it, so no Python process is left running.
 
 ## Build the app
 

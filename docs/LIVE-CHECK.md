@@ -29,7 +29,7 @@ This is SPEC AC9. Use a fresh standard user account on the Mac, because Bluetoot
 | --- | --- | --- |
 | Gatekeeper dialog wording matches the README | | |
 | Open Anyway, then Open, opens Gaffer | | |
-| Menu-bar light bulb shows and the window opens | | |
+| Menu-bar studio-light icon shows and the window opens | | |
 | Bluetooth prompt names Gaffer | | |
 | Control-click Open on macOS 26: works, or only Cancel (shot 11) | | |
 | Quit Gaffer leaves no Python process (`pgrep -f gaffer`) | | |
@@ -79,7 +79,7 @@ If the Tailscale phone gets network_not_allowed, check whether Tailscale runs in
 
 Actions: **On** is turn the light on. **Dim** is move brightness down and see the light get dimmer. **CCT** is change colour temperature and see the colour change.
 
-Surfaces: **Menu bar** is the bulb icon. **Mac window** is the main window. **Phone, Wi-Fi** is the phone on the same Wi-Fi with the PIN. **Phone, Tailscale** is the phone away from the Wi-Fi.
+Surfaces: **Menu bar** is the studio-light icon. **Mac window** is the main window. **Phone, Wi-Fi** is the phone on the same Wi-Fi with the PIN. **Phone, Tailscale** is the phone away from the Wi-Fi.
 
 Every cell must say Pass. Fill the Pass/Fail column and add notes.
 
