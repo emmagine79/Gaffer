@@ -4,7 +4,8 @@ import { clamp, hueName } from '../lib/color'
 import { hueTrack, kelvinTrack, satTrack } from '../lib/tracks'
 import type { LightView } from '../lib/types'
 import { useStudio } from '../state/store'
-import { beamOf, modelLine, readout, sentence } from './describe'
+import { Effects } from '../effects/Effects'
+import { beamOf, heldBy, modelLine, readout, runningEffect, sentence } from './describe'
 import { Lamp } from './Lamp'
 import { LookCards } from './LookCards'
 
@@ -58,7 +59,9 @@ function LightPanel({ light }: { light: LightView }) {
   const f = caps.features
   const showKelvin = f.white && !f.daylight
   const hsi = state.mode === 'hsi' && f.colour
-  const shown = readout(state, caps)
+  const running = runningEffect(light.engine)
+  const shown = readout(state, caps, running)
+  const held = heldBy(state, caps)
   return (
     <div className="g-light" data-light={light.id}>
       <div className="g-row">
@@ -79,7 +82,7 @@ function LightPanel({ light }: { light: LightView }) {
         <span className="g-big">{shown.big}</span>
         {shown.unit && <span className="g-unit">{shown.unit}</span>}
       </div>
-      <p className="g-sub">{sentence(state, caps)}</p>
+      <p className="g-sub">{sentence(state, caps, running)}</p>
       <Lamp level={beamOf(state).level} />
 
       <Control label="Brightness" aside={`${Math.round(state.brightness)}%`}>
@@ -89,7 +92,11 @@ function LightPanel({ light }: { light: LightView }) {
         />
       </Control>
 
-      {showKelvin && (
+      {showKelvin && (held ? (
+        <Control label="Colour temperature" aside="Not in use">
+          <button type="button" className="g-back" onClick={() => apply({ mode: 'cct' })}>Back to white</button>
+        </Control>
+      ) : (
         <Control label="Colour temperature" aside={`${caps.min_kelvin}K to ${caps.max_kelvin}K`}>
           <Stepper
             className="g-knob" label="Colour temperature" value={state.cct.kelvin}
@@ -98,14 +105,14 @@ function LightPanel({ light }: { light: LightView }) {
             onChange={(v) => apply({ mode: 'cct', cct: { kelvin: Math.round(v) } })}
           />
         </Control>
-      )}
+      ))}
       {f.daylight && (
         <Control label="Colour temperature" aside={`Fixed ${caps.min_kelvin}K daylight`} />
       )}
 
       {f.colour && (
         <div className="g-colour" data-control="colour">
-          <Control label="Colour" aside={hsi ? capital(hueName(state.hsi.hue)) : 'White'}>
+          <Control label="Colour" aside={hsi ? capital(hueName(state.hsi.hue)) : held ?? 'White'}>
             <Stepper
               className="g-knob" label="Hue" value={state.hsi.hue} min={0} max={359} step={1} jump={10}
               track={hueTrack()}
@@ -123,6 +130,8 @@ function LightPanel({ light }: { light: LightView }) {
           )}
         </div>
       )}
+
+      <Effects light={light} />
     </div>
   )
 }
