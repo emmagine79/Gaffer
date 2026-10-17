@@ -3,6 +3,7 @@ import { ArrowRight, Check, FileKey2, LifeBuoy, Link2, RefreshCw, X } from 'luci
 import { useEffect, useRef, useState } from 'react'
 import { Key } from '../components/Controls'
 import { ModelPicker } from '../components/ModelPicker'
+import { GodoxImport } from '../add/GodoxImport'
 import type { Nearby } from '../lib/types'
 import { useStudio } from '../state/store'
 import { KIND_SHORT, LightGlyph, formOf } from '../visuals/LightGlyph'
@@ -66,6 +67,7 @@ export function AddLight() {
   const [name, setName] = useState('')
   const [importFor, setImportFor] = useState<string | null>(null)
   const [manualAddress, setManualAddress] = useState('')
+  const [godox, setGodox] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   /** Bumped on every open, close and pairing, so a reply from an earlier one is ignored. */
   const attempt = useRef(0)
@@ -77,7 +79,7 @@ export function AddLight() {
   useEffect(() => {
     attempt.current++
     if (!open) return
-    setTarget(null); setNewLight(null); setName('')
+    setTarget(null); setNewLight(null); setName(''); setGodox(false)
     scan()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -132,7 +134,9 @@ export function AddLight() {
             <input ref={fileRef} type="file" accept=".json,application/json" hidden
               onChange={(e) => importKeys(e.target.files?.[0], importFor ?? manualAddress)} />
 
-            {target ? (
+            {godox ? (
+              <GodoxImport onDone={() => { setGodox(false); setOpen(false) }} />
+            ) : target ? (
               <div className="pairing">
                 <div className={`pairing-visual ${made ? 'is-done' : failed ? 'is-failed' : ''}`}>
                   <div className="conn-rings" aria-hidden="true"><i /><i /><i /></div>
@@ -227,6 +231,9 @@ export function AddLight() {
                         onClick={() => { setImportFor(null); fileRef.current?.click() }}><FileKey2 /> Choose file</Key>
                     </div>
                   </div>
+                  <button type="button" className="addlight-help" onClick={() => setGodox(true)}>
+                    <FileKey2 size={15} /> Import from the Godox app
+                  </button>
                   <button type="button" className="addlight-help" onClick={() => { setTab('guide'); close() }}>
                     <LifeBuoy size={15} /> Light not listed? How to reset and pair
                   </button>

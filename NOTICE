@@ -30,6 +30,10 @@ Each one's licence is kept in THIRD-PARTY/, and travels inside Gaffer.app.
   that library at v0.2.8, as lumen-studio carries it, unchanged.
   https://github.com/binary-person/ha-godox-mesh
 
+* ha-godox-ble-mesh, by SegulaLabs. Its meshimport.py, which reads the Godox
+  app's mesh export, is the base of service/gaffer/godox_import.py.
+  https://github.com/SegulaLabs/ha-godox-ble-mesh (commit 5c90e25)
+
 * HA-Zhiyun-Light, by didim99. Zhiyun light name prefixes used by the scan.
   https://github.com/didim99/HA-Zhiyun-Light
 

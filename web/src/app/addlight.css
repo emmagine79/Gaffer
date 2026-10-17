@@ -63,3 +63,7 @@
 .pairing-visual.is-failed .conn-rings i { animation: none; opacity: 0; }
 .pairing-done { margin: 20px auto 0; max-width: 520px; display: grid; gap: 16px; text-align: left; }
 .pairing-model { display: grid; gap: 8px; }
+
+.godox-import { display: grid; gap: 12px; padding: 4px 0; }
+.godox-steps { margin: 0; padding-left: 20px; display: grid; gap: 8px; overflow-wrap: anywhere; }
+.godox-import textarea { width: 100%; box-sizing: border-box; font-family: ui-monospace, monospace; }
