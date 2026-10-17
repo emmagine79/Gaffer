@@ -133,6 +133,11 @@ def create_app(
                 "drivers": [{"id": d.id} for d in hub.registry.drivers.values()],
                 "drivers_skipped": hub.registry.skipped}
 
+    @app.get("/api/lights")
+    async def lights() -> dict[str, Any]:
+        """Every saved light with its abilities and current state: what the page's hello carries."""
+        return hub.lights_view()
+
     @app.get("/api/bluetooth")
     async def bluetooth() -> dict[str, Any]:
         return {"permission": bluetooth_permission()}

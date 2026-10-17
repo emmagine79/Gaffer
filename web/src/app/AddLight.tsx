@@ -7,8 +7,17 @@ import { GodoxImport } from '../add/GodoxImport'
 import type { Nearby } from '../lib/types'
 import { useStudio } from '../state/store'
 import { KIND_SHORT, LightGlyph, formOf } from '../visuals/LightGlyph'
-import { SignalBars } from './MasterBar'
 import './addlight.css'
+
+/** Signal strength as four bars (moved here from lumen's master bar, which Glass replaces). */
+function SignalBars({ rssi }: { rssi: number | null }) {
+  const bars = rssi === null ? 0 : rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : 1
+  return (
+    <span className="signal" aria-label={rssi === null ? 'No signal' : `Signal ${rssi} dBm`}>
+      {[1, 2, 3, 4].map((b) => <i key={b} className={b <= bars ? 'is-on' : ''} style={{ height: 3 + b * 3 }} />)}
+    </span>
+  )
+}
 
 const KIND_RGB = { rgb: [0.62, 0.45, 1], colour: [0.3, 0.85, 0.9], bicolour: [1, 0.8, 0.55], daylight: [0.95, 0.96, 1], unsupported: [0.5, 0.5, 0.5] } as const
 

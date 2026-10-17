@@ -34,13 +34,19 @@ Each one's licence is kept in THIRD-PARTY/, and travels inside Gaffer.app.
   app's mesh export, is the base of service/gaffer/godox_import.py.
   https://github.com/SegulaLabs/ha-godox-ble-mesh (commit 5c90e25)
 
-* HA-Zhiyun-Light, by didim99. Zhiyun light name prefixes used by the scan.
+* HA-Zhiyun-Light, by didim99. Gaffer's Zhiyun driver is a port of it: the
+  frame layout, commands and encoders, the connect handshake and send pacing
+  (service/gaffer/drivers/zhiyun/), the model names, and the name prefixes
+  used by the scan. Ported from commit 7ca51ea.
   https://github.com/didim99/HA-Zhiyun-Light
 
-* zhiyun-light-control, by aaditagrawal. Zhiyun protocol.
+* zhiyun-light-control, by aaditagrawal. Zhiyun protocol: the 0x33 control op
+  byte that the Zhiyun driver can send instead of 0x01.
   https://github.com/aaditagrawal/zhiyun-light-control
 
-* yongnuo-light-control, by asidjwiaijd. The Yongnuo name rule used by the scan.
+* yongnuo-light-control, by asidjwiaijd. The Yongnuo name rule used by the scan,
+  and the decimal colour-temperature frame encoder (ble_protocol.dart,
+  yn_protocol.h), ported to Python in service/gaffer/drivers/yongnuo/protocol.py.
   https://github.com/asidjwiaijd/yongnuo-light-control
 
 TRADEMARKS

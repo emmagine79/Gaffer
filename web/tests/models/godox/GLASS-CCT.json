@@ -1,0 +1,11 @@
+{
+  "id": "GLASS-CCT",
+  "driver": "godox",
+  "brand": "Example",
+  "name": "Glass CCT test",
+  "min_kelvin": 3000,
+  "max_kelvin": 6000,
+  "modes": ["cct"],
+  "match": {},
+  "driver_data": {}
+}

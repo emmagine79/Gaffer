@@ -1,0 +1,11 @@
+{
+  "id": "GLASS-HSI",
+  "driver": "godox",
+  "brand": "Example",
+  "name": "Glass HSI test",
+  "min_kelvin": 2700,
+  "max_kelvin": 6500,
+  "modes": ["cct", "hsi"],
+  "match": {},
+  "driver_data": {}
+}
