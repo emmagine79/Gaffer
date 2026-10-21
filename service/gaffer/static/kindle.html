@@ -181,8 +181,10 @@
         pinTyped = '';
         return askPin(saved ? 'The PIN changed on the Mac. Enter the new one.' : 'That PIN is not right. Try again.');
       }
-      if (data.error === 'pin_locked') { savePin(''); }
-      blocked(data.message || 'Gaffer is not available.', data.error !== 'pin_locked');
+      // Locked after too many wrong PINs: forget the saved one and offer Try again, which asks for
+      // the PIN once New PIN on the Mac has cleared the lock.
+      if (data.error === 'pin_locked') { savePin(''); pinTyped = ''; }
+      blocked(data.message || 'Gaffer is not available.', true);
     });
   }
 

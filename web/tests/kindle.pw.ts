@@ -112,3 +112,44 @@ test('the Kindle remote signs itself back in after it loses its session, and ask
   await kindle.close()
   await window.close()
 })
+
+test('after too many wrong PINs the Kindle says so, and Try again asks for the new PIN after New PIN', async ({ browser }) => {
+  const window = await macWindow(browser)
+  const pin = await switchOn(window)
+  const kindle = await browser.newContext({ viewport: KINDLE })
+  const page = await kindle.newPage()
+  await page.goto(remote())
+  await expect(page.getByText('Enter the PIN shown on the Mac, under Phone.')).toBeVisible()
+
+  // Wrong guesses sent from the Kindle page itself (its own origin, as the page would send them) until
+  // the service refuses with pin_locked. MAX_WRONG_GUESSES is 100 in service/gaffer/phone.py.
+  const wrong = `${pin[0] === '1' ? '2' : '1'}${pin.slice(1)}`
+  const replies = await page.evaluate(async (guess) => {
+    const out: number[] = []
+    for (let i = 0; i < 101; i++) {
+      const r = await fetch('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pin: guess }) })
+      out.push(r.status)
+    }
+    return out
+  }, wrong)
+  expect(replies.slice(0, 99).every((s) => s === 401)).toBe(true)
+  expect(replies.slice(99)).toEqual([403, 403])
+
+  // The page's next try is refused as locked: the lock message and a Try again button, visible.
+  await typePin(page, wrong)
+  await expect(page.getByText('Too many wrong PINs. Press New PIN on the Mac and try again.')).toBeVisible()
+  const retry = page.getByRole('button', { name: 'Try again', exact: true })
+  await expect(retry).toBeVisible()
+
+  // New PIN on the Mac clears the lock. Try again then asks for the PIN, and the new one signs in.
+  await window.request.post(`${mac()}/api/phone/pin`)
+  await retry.click()
+  await expect(page.getByText('Enter the PIN shown on the Mac, under Phone.')).toBeVisible()
+  const status = (await (await window.request.get(`${mac()}/api/phone`)).json()) as { pin: string; locked: boolean }
+  expect(status.locked).toBe(false)
+  await typePin(page, status.pin)
+  await expect(page.getByRole('status')).toHaveText('Connected')
+
+  await kindle.close()
+  await window.close()
+})
