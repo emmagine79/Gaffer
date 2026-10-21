@@ -85,6 +85,27 @@ test('the Kindle remote asks for the PIN, then switches and dims a light', async
   await window.close()
 })
 
+test('the Kindle remote shows three lights and All on and All off on one screen, without scrolling', async ({ browser }) => {
+  const window = await macWindow(browser)
+  const pin = await switchOn(window)
+  const kindle = await browser.newContext({ viewport: KINDLE })
+  const page = await kindle.newPage()
+  await page.goto(remote())
+  await typePin(page, pin)
+  await expect(page.getByRole('status')).toHaveText('Connected')
+
+  const cards = page.locator('.light')
+  await expect.poll(async () => cards.count()).toBeGreaterThanOrEqual(3)
+  const third = await cards.nth(2).boundingBox()
+  expect(third!.y + third!.height).toBeLessThanOrEqual(KINDLE.height)
+  await expect(page.getByRole('button', { name: 'All off' })).toBeInViewport({ ratio: 1 })
+  // Each control still fits its card: nothing spills sideways.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(KINDLE.width)
+
+  await kindle.close()
+  await window.close()
+})
+
 test('the Kindle remote signs itself back in after it loses its session, and asks again after New PIN', async ({ browser }) => {
   const window = await macWindow(browser)
   const pin = await switchOn(window)
