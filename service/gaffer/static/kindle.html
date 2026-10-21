@@ -11,41 +11,69 @@
   redraws as little as possible. It talks to the same /api/session and /ws as the Glass page.
 -->
 <style>
+  /* E-ink: pure black on pure white is deliberate here. Grey tints dither on a Paperwhite, so grey
+     is used only for things that are off or disabled.
+     Spacing steps: 4, 8, 12, 16. Type steps: 14, 17, 20, 24.
+     Compact: a light is two rows (name, Max and power; then brightness and colour temperature side
+     by side), so three lights and All on/off fit a Paperwhite's 536 x 724 point screen. Touch
+     targets are at least 44 points; the ones used most (+, -, All on/off) are 60, about 10 mm. */
   * { box-sizing: border-box; }
   html, body { margin: 0; background: #fff; color: #000; }
-  /* Compact: a light is two rows (name and power, then brightness and colour temperature side by
-     side), so three lights and the all on/off row fit a Paperwhite's 536 x 724 point screen. Buttons
-     stay at least 60 points, about 10 mm on the Paperwhite, which is still easy to hit. */
-  body { font: 22px/1.25 Helvetica, Arial, sans-serif; padding: 10px 14px 14px; }
-  button { font: inherit; color: #000; background: #fff; border: 3px solid #000; border-radius: 12px;
-           min-height: 60px; padding: 4px 10px; margin: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  button:active { background: #000; color: #fff; }
-  button[aria-pressed="true"] { background: #000; color: #fff; }
-  button:disabled { border-style: dashed; color: #555; }
-  h1 { font-size: 26px; margin: 0; }
-  h2 { font-size: 20px; margin: 12px 0 8px; text-transform: none; border-bottom: 2px solid #000; padding-bottom: 2px; }
-  .top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-  #lookNow { flex: 1 1 auto; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #status { font-size: 18px; }
+  body { font: 20px/1.25 "Helvetica Neue", Helvetica, Arial, sans-serif; padding: 8px 12px 12px;
+         -webkit-user-select: none; user-select: none; }
+  button { font: inherit; font-weight: bold; color: #000; background: #fff; border: 3px solid #000;
+           border-radius: 12px; min-height: 56px; padding: 4px 12px; margin: 0; cursor: pointer;
+           touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  button:active, button[aria-pressed="true"] { background: #000; color: #fff; }
+  button:focus-visible { outline: 3px solid #000; outline-offset: 3px; }
+  button:disabled { border-style: dashed; color: #666; background: #fff; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: 0.02em; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; margin: 16px 0 8px; }
+
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding-bottom: 8px;
+         border-bottom: 2px solid #000; }
+  #lookNow { flex: 1 1 auto; min-width: 0; text-align: center; font-size: 17px;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Connected is a filled dot; anything else is a hollow one, readable at a glance. */
+  #status { font-size: 14px; white-space: nowrap; }
+  #status::before { content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 6px;
+                    border: 2px solid #000; border-radius: 50%; background: #000; vertical-align: -1px; }
   #status.bad { font-weight: bold; }
-  .row { display: flex; gap: 10px; }
-  .row > button { flex: 1 1 0; font-weight: bold; }
-  .looks { display: flex; flex-wrap: wrap; gap: 10px; }
-  .looks > button { flex: 1 1 30%; font-weight: bold; }
-  .light { border: 3px solid #000; border-radius: 14px; padding: 8px 10px; margin: 0 0 10px; }
+  #status.bad::before { background: #fff; }
+  #exit { min-height: 44px; padding: 0 14px; font-size: 17px; margin-left: 4px; }
+
+  .row { display: flex; gap: 8px; }
+  .row > button { flex: 1 1 0; min-height: 60px; }
+  #cue { margin-top: 8px; }
+  #lights, #empty { margin-top: 12px; }
+  #empty { font-size: 17px; }
+
+  .light { border: 3px solid #000; border-radius: 14px; padding: 8px 12px 12px; margin: 0 0 8px; }
   .light.off { border-style: dashed; }
-  .head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-  .head > div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+  .light.off .val { color: #666; }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .head > div { min-width: 0; display: flex; align-items: baseline; gap: 8px; }
   .name { font-size: 24px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .note { font-size: 16px; white-space: nowrap; }
-  .power { min-width: 110px; min-height: 52px; font-weight: bold; }
-  .ctls { display: flex; gap: 10px; }
-  .ctl { flex: 1 1 0; display: flex; align-items: center; gap: 4px; min-width: 0; }
-  .ctl > button { width: 60px; flex: 0 0 60px; padding: 0; font-size: 32px; font-weight: bold; }
-  .val { flex: 1 1 auto; text-align: center; font-size: 22px; font-weight: bold; white-space: nowrap; }
-  .val small { display: block; font-size: 14px; font-weight: normal; }
-  #cue { margin-top: 10px; }
-  #message { min-height: 1.2em; font-size: 18px; margin: 6px 0 0; }
+  .note { font-size: 14px; white-space: nowrap; }
+  .switches { display: flex; gap: 8px; flex: 0 0 auto; }
+  .power { min-width: 96px; min-height: 52px; }
+  .max { min-width: 72px; min-height: 52px; }
+
+  .ctls { display: flex; gap: 12px; }
+  /* Each control takes half the card, even when it is alone (a light with no white has no colour
+     temperature), so brightness lines up from card to card. */
+  .ctl { flex: 0 0 calc(50% - 6px); display: flex; align-items: center; gap: 4px; min-width: 0; }
+  .ctl > button { width: 60px; flex: 0 0 60px; min-height: 60px; padding: 0; font-size: 30px; }
+  .val { flex: 1 1 auto; min-width: 0; text-align: center; white-space: nowrap; }
+  .val span { font-size: 24px; font-weight: bold; font-variant-numeric: tabular-nums; }
+  .val small { display: block; font-size: 14px; }
+  /* A level bar under each value: where the light sits in its range, readable from across the room. */
+  .meter { height: 8px; margin: 4px 4px 0; border: 2px solid #000; border-radius: 4px; overflow: hidden; }
+  .meter > i { display: block; height: 100%; width: 0; background: #000; }
+
+  .looks { display: flex; flex-wrap: wrap; gap: 8px; }
+  .looks > button { flex: 1 1 30%; min-height: 52px; font-size: 17px; }
+  #message { min-height: 1.2em; font-size: 17px; margin: 8px 0 0; }
   /* Sized so the whole pad, title to bottom row, fits a Paperwhite's 536 x 724 point screen. */
   .pin { max-width: 560px; margin: 8px auto 0; text-align: center; }
   .pin p { font-size: 24px; margin: 12px 0; }
@@ -62,6 +90,7 @@
     <h1>Gaffer</h1>
     <span id="lookNow" class="note">No look on</span>
     <span id="status" role="status">Connecting</span>
+    <button type="button" id="exit">Exit</button>
   </div>
   <div class="row">
     <button type="button" id="allOn">All on</button>
@@ -71,8 +100,7 @@
     <button type="button" id="cueBack">Back</button>
     <button type="button" id="cueGo">Go</button>
   </div>
-  <section>
-    <h2>Lights</h2>
+  <section aria-label="Lights">
     <p id="empty">Looking for lights. Lights appear here once the Mac finds them.</p>
     <div id="lights"></div>
   </section>
@@ -103,9 +131,19 @@
   // The PIN is kept on this device so the remote signs itself back in after Gaffer or the Kindle restarts.
   // The service keeps the same PIN across restarts until someone presses New PIN on the Mac.
   var PIN_KEY = 'gaffer.kindle.pin';
-  // Brightness and colour temperature move in the steps the Glass page uses for its keyboard jumps.
-  var LEVEL_STEP = 5;
+  // One tap moves brightness 1% and colour temperature 100 K. Held, a button repeats after
+  // HOLD_DELAY ms, every REPEAT_MS ms, and the step grows the longer it is held (SPEEDS: 1x for the
+  // first 8 repeats, 2x for the next 8, then 5x), so 0 to 100% takes about 3.5 seconds.
+  var LEVEL_STEP = 1;
   var KELVIN_STEP = 100;
+  var HOLD_DELAY = 400;
+  var REPEAT_MS = 100;
+  var SPEEDS = [{ after: 0, times: 1 }, { after: 8, times: 2 }, { after: 16, times: 5 }];
+  // What this remote last asked a light for is shown, and stepped from, until the light's own
+  // state has had PENDING_MS to come back. Otherwise fast taps would all step from the same old value.
+  var PENDING_MS = 1500;
+  var pending = {};     // id -> {brightness?, kelvin?, at}
+  var holds = [];       // stop functions for every held button, run when the page loses focus
 
   var lights = {};      // id -> light object from the service
   var order = [];       // light ids in the service's order
@@ -309,9 +347,12 @@
         for (var id in lights) {
           var reach = m.reachable ? m.reachable[id] : undefined;
           var held = m.held ? m.held[id] : undefined;
-          if ((reach !== undefined && lights[id].reachable !== reach) || (held !== undefined && lights[id].held !== held)) {
+          var max = m.max_mode ? m.max_mode[id] : undefined;
+          if ((reach !== undefined && lights[id].reachable !== reach) || (held !== undefined && lights[id].held !== held) ||
+              (max !== undefined && lights[id].max_mode !== max)) {
             if (reach !== undefined) lights[id].reachable = reach;
             if (held !== undefined) lights[id].held = held;
+            if (max !== undefined) lights[id].max_mode = max;
             drawLight(id);
           }
         }
@@ -397,24 +438,103 @@
     return b;
   }
 
-  function control(label, minus, plus) {
+  // A button that steps once when pressed and keeps stepping, faster and faster, while held.
+  // fire(times) is called with the speed multiplier.
+  function holdable(b, fire) {
+    var delay = null;
+    var timer = null;
+    var ticks = 0;
+    function stop() {
+      if (delay) { clearTimeout(delay); delay = null; }
+      if (timer) { clearInterval(timer); timer = null; }
+    }
+    function start(e) {
+      if (e && e.preventDefault) e.preventDefault();
+      if (b.disabled) return;
+      stop();
+      ticks = 0;
+      fire(1);
+      delay = setTimeout(function () {
+        delay = null;
+        timer = setInterval(function () {
+          ticks += 1;
+          var times = 1;
+          for (var i = 0; i < SPEEDS.length; i++) if (ticks > SPEEDS[i].after) times = SPEEDS[i].times;
+          fire(times);
+        }, REPEAT_MS);
+      }, HOLD_DELAY);
+    }
+    if (window.PointerEvent) {
+      b.addEventListener('pointerdown', start);
+      b.addEventListener('pointerup', stop);
+      b.addEventListener('pointercancel', stop);
+      b.addEventListener('pointerleave', stop);
+    } else {
+      b.addEventListener('touchstart', start);
+      b.addEventListener('touchend', stop);
+      b.addEventListener('touchcancel', stop);
+      b.addEventListener('mousedown', start);
+      b.addEventListener('mouseup', stop);
+      b.addEventListener('mouseleave', stop);
+    }
+    // A long press must not open the browser's menu or select text.
+    b.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    // Enter or Space arrives as a click with no pointer behind it: one step.
+    b.addEventListener('click', function (e) { if (e.detail === 0) fire(1); });
+    holds.push(stop);
+  }
+
+  function control(label, short, step) {
     var row = document.createElement('div');
     row.className = 'ctl';
-    var down = button('\u2212', minus);
+    var down = button('\u2212', null);
     down.setAttribute('aria-label', label + ' down');
-    var up = button('+', plus);
+    holdable(down, function (times) { step(-times); });
+    var up = button('+', null);
     up.setAttribute('aria-label', label + ' up');
+    holdable(up, function (times) { step(times); });
     var val = document.createElement('div');
     val.className = 'val';
     var num = document.createElement('span');
     var small = document.createElement('small');
-    small.textContent = label === 'Colour temperature' ? 'Colour temp' : label;
+    small.textContent = short;
+    var meter = document.createElement('div');
+    meter.className = 'meter';
+    meter.setAttribute('aria-hidden', 'true');
+    var fill = document.createElement('i');
+    meter.appendChild(fill);
     val.appendChild(num);
     val.appendChild(small);
+    val.appendChild(meter);
     row.appendChild(down);
     row.appendChild(val);
     row.appendChild(up);
-    return { row: row, value: num };
+    return { row: row, value: num, fill: fill };
+  }
+
+  function setWidth(node, percent) {
+    var w = Math.max(0, Math.min(100, Math.round(percent))) + '%';
+    if (node.style.width !== w) node.style.width = w;
+  }
+
+  // What to show and step from: this remote's last ask while it is fresh, else the light's state.
+  function wanted(id, key) {
+    var p = pending[id];
+    if (p && p[key] !== undefined && new Date().getTime() - p.at < PENDING_MS) return p[key];
+    var s = (lights[id] && lights[id].state) || {};
+    if (key === 'brightness') return Math.round(s.brightness || 0);
+    return s.cct && s.cct.kelvin;
+  }
+
+  function remember(id, key, value) {
+    var now = new Date().getTime();
+    var p = pending[id];
+    if (!p || now - p.at >= PENDING_MS) p = pending[id] = {};
+    p[key] = value;
+    p.at = now;
+    drawLight(id);
+    // Hand the display back to the light's own state once the ask has had time to land.
+    setTimeout(function () { drawLight(id); }, PENDING_MS + 50);
   }
 
   function buildRow(id) {
@@ -436,20 +556,38 @@
     });
     power.className = 'power';
     head.appendChild(titles);
-    head.appendChild(power);
+    // Max Mode (turbo) sits left of On, only on a light whose model has the switch (the MOLUS G200).
+    var max = null;
+    if (light.caps && light.caps.max_mode) {
+      max = button('Max', function () {
+        var l = lights[id];
+        if (!(l.state && l.state.power)) { flash('Switch the light on first.'); return; }
+        send({ type: 'light.max_mode', light: id, on: !l.max_mode });
+      });
+      max.className = 'max';
+      var switches = document.createElement('span');
+      switches.className = 'switches';
+      switches.appendChild(max);
+      switches.appendChild(power);
+      head.appendChild(switches);
+    } else {
+      head.appendChild(power);
+    }
     root.appendChild(head);
     // Brightness and colour temperature share one row, so each light takes two rows, not three.
     var ctls = document.createElement('div');
     ctls.className = 'ctls';
-    var level = control('Brightness', function () { nudge(id, -LEVEL_STEP, 0); }, function () { nudge(id, LEVEL_STEP, 0); });
+    var level = control('Brightness', 'Brightness', function (times) { nudge(id, LEVEL_STEP * times, 0); });
     ctls.appendChild(level.row);
     var kelvin = null;
     if (hasWhite(light)) {
-      kelvin = control('Colour temperature', function () { nudge(id, 0, -KELVIN_STEP); }, function () { nudge(id, 0, KELVIN_STEP); });
+      kelvin = control('Colour temperature', 'Colour temp', function (times) { nudge(id, 0, KELVIN_STEP * times); });
       ctls.appendChild(kelvin.row);
     }
     root.appendChild(ctls);
-    rows[id] = { root: root, name: name, note: note, power: power, level: level.value, kelvin: kelvin && kelvin.value };
+    rows[id] = { root: root, name: name, note: note, power: power, max: max,
+                 level: level.value, levelFill: level.fill,
+                 kelvin: kelvin && kelvin.value, kelvinFill: kelvin && kelvin.fill };
     return root;
   }
 
@@ -457,14 +595,19 @@
     var l = lights[id];
     if (!l || !l.state) return;
     if (levelStep) {
-      var level = Math.max(0, Math.min(100, Math.round(l.state.brightness) + levelStep));
+      var from = wanted(id, 'brightness');
+      var level = Math.max(0, Math.min(100, from + levelStep));
+      if (level === from && l.state.power) return;  // already at the end of the range
+      remember(id, 'brightness', level);
       send({ type: 'set', light: id, patch: { brightness: level, power: true } });
     }
     if (kelvinStep) {
       var caps = l.caps || {};
-      var k = (l.state.cct && l.state.cct.kelvin) || caps.min_kelvin;
-      k = Math.max(caps.min_kelvin, Math.min(caps.max_kelvin, k + kelvinStep));
-      send({ type: 'set', light: id, patch: { mode: 'cct', cct: { kelvin: k } } });
+      var k = wanted(id, 'kelvin') || caps.min_kelvin;
+      var next = Math.max(caps.min_kelvin, Math.min(caps.max_kelvin, k + kelvinStep));
+      if (next === k && l.state.mode === 'cct') return;
+      remember(id, 'kelvin', next);
+      send({ type: 'set', light: id, patch: { mode: 'cct', cct: { kelvin: next } } });
     }
   }
 
@@ -479,10 +622,25 @@
     setText(r.note, note);
     setText(r.power, on ? 'On' : 'Off');
     if (r.power.getAttribute('aria-pressed') !== String(on)) r.power.setAttribute('aria-pressed', String(on));
+    if (r.max) {
+      var maxOn = l.max_mode === true;
+      if (r.max.getAttribute('aria-pressed') !== String(maxOn)) r.max.setAttribute('aria-pressed', String(maxOn));
+      if (r.max.disabled !== !on) r.max.disabled = !on;
+    }
     var cls = on ? 'light' : 'light off';
     if (r.root.className !== cls) r.root.className = cls;
-    setText(r.level, Math.round(s.brightness || 0) + '%');
-    if (r.kelvin) setText(r.kelvin, s.mode === 'cct' && s.cct ? s.cct.kelvin + ' K' : 'Colour');
+    var level = wanted(id, 'brightness');
+    setText(r.level, level + '%');
+    setWidth(r.levelFill, on ? level : 0);
+    if (r.kelvin) {
+      var caps = l.caps || {};
+      var p = pending[id];
+      var asked = p && p.kelvin !== undefined && new Date().getTime() - p.at < PENDING_MS;
+      var k = asked ? p.kelvin : (s.mode === 'cct' && s.cct ? s.cct.kelvin : null);
+      setText(r.kelvin, k ? k + ' K' : 'Colour');
+      var span = (caps.max_kelvin || 0) - (caps.min_kelvin || 0);
+      setWidth(r.kelvinFill, k && span > 0 ? (k - caps.min_kelvin) / span * 100 : 0);
+    }
   }
 
   $('allOn').onclick = function () { send({ type: 'power.all', on: true }); };
@@ -490,6 +648,23 @@
   $('cueGo').onclick = function () { send({ type: 'cue.go' }); };
   $('cueBack').onclick = function () { send({ type: 'cue.back' }); };
   $('retry').onclick = function () { retry = 0; check(); };
+  // Exit closes the browser. The launcher (kindle/gaffer_remote.sh) sees the browser close and gives
+  // the Kindle its own screens back. A page the browser will not let close says what to do instead.
+  $('exit').onclick = function () {
+    if (socket) {
+      socket.onclose = null;  // leaving: do not reconnect
+      try { socket.close(); } catch (e) { /* closing anyway */ }
+      socket = null;
+    }
+    setStatus('Closing', false);
+    window.close();
+    setTimeout(function () { flash('To leave, press the power button once.'); }, 1500);
+  };
+
+  // A hold never outlives the page being hidden or losing focus.
+  function stopHolds() { for (var i = 0; i < holds.length; i++) holds[i](); }
+  window.addEventListener('blur', stopHolds);
+  document.addEventListener('visibilitychange', stopHolds);
 
   buildKeys();
   check();

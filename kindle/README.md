@@ -7,7 +7,8 @@ The remote has:
 - all on and all off
 - a button for each saved look
 - Go and Back while a cue list is running
-- one card per light, with on and off, brightness and colour temperature
+- one card per light, with on and off, brightness and colour temperature, and Max next to On on a light that has Max Mode (the MOLUS G200)
+- tap + or − to move brightness 1% (colour temperature 100 K); hold it to keep going, faster the longer you hold
 
 It signs itself back in after Gaffer or the Kindle restarts. It asks for the PIN again only after New PIN on the Mac.
 
@@ -25,7 +26,7 @@ It signs itself back in after Gaffer or the Kindle restarts. It asks for the PIN
 4. On the Kindle, open the library. Tap Gaffer remote.
 5. Enter the PIN on the remote's number pad. The lights appear.
 
-To leave the remote, press the power button once. The script finds the power button by itself. If the screen ever stops answering, tap Gaffer remote stop in the library, or hold the power button until the Restart option appears.
+To leave the remote, tap Exit at the top right, or press the power button once. The Kindle stays awake only while the remote is open; once you leave, it sleeps as usual. The script finds the power button by itself. If the screen ever stops answering, tap Gaffer remote stop in the library, or hold the power button until the Restart option appears.
 
 You can also open `/kindle` in the Kindle's own browser without a jailbreak. It works the same, but the address bar stays on screen and the Kindle still goes to sleep.
 
