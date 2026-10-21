@@ -188,7 +188,7 @@ test('Exit closes the remote', async ({ browser }) => {
   await opener.goto(remote())
   const [page] = await Promise.all([
     kindle.waitForEvent('page'),
-    opener.evaluate((url) => { window.open(url, '_blank', 'width=536,height=724') }, remote()),
+    opener.evaluate((url) => { globalThis.open(url, '_blank', 'width=536,height=724') }, remote()),
   ])
   await page.setViewportSize(KINDLE)
   await typePin(page, pin)
