@@ -235,6 +235,13 @@ def create_app(
         """SPEC-001's Bluetooth proof page: lists what a scan hears."""
         return scan_page
 
+    kindle_page = files("gaffer").joinpath("static/kindle.html").read_text(encoding="utf-8")
+
+    @app.get("/kindle", response_class=HTMLResponse)
+    async def kindle_remote() -> str:
+        """The e-ink remote: one plain page (ES5, black on white, big buttons) for a Kindle's browser."""
+        return kindle_page
+
     @app.get("/api/export")
     async def export(request: Request, t: str | None = None) -> JSONResponse:
         if request.scope.get("gaffer_local") is False:  # a phone: the export holds the lights' keys

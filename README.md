@@ -38,6 +38,10 @@ The trade-off: there is no Developer ID, so Apple has not vouched for who made t
 
 Gaffer appears in the menu bar as a light bulb and opens a window listing nearby lights. To quit, choose Quit Gaffer from the menu-bar icon. The light service stops with it, so no Python process is left running.
 
+### Use a Kindle as a remote
+
+A jailbroken Kindle can show a black-and-white remote that stays on. See [kindle/README.md](kindle/README.md).
+
 ## Build the app
 
 You need the Xcode command line tools, [uv](https://docs.astral.sh/uv/) and [Node](https://nodejs.org/) with npm (the build compiles `web/`).
@@ -88,6 +92,7 @@ All routes need the session cookie.
 | `GET /api/scan?seconds=6` | Nearby devices with name, signal, brand family and the advert data that matched. Scans 2 to 20 seconds |
 | `GET /scan` | A plain page that runs the scan and lists what it hears |
 | `GET /` | The web interface |
+| `GET /kindle` | The e-ink remote for a Kindle: all on and off, looks, cues, and power, brightness and colour temperature per light. See [kindle/README.md](kindle/README.md) |
 | `/ws` | The WebSocket the web interface uses to drive lights. Needs the session cookie and the page's own Origin |
 
 `python -m gaffer --demo` runs simulated lights and starts no Bluetooth scan, for development and tests.

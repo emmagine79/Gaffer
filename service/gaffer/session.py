@@ -47,8 +47,9 @@ COOKIE = "gaffer_session"
 LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 
 #: What a phone that has not entered the PIN may fetch: the page itself, which then shows the PIN
-#: screen (the page is open source, so it holds nothing secret), and the two sign-in routes.
-_OPEN_TO_PHONES_GET = frozenset({"/", "/favicon.svg", "/api/session"})
+#: screen (the page is open source, so it holds nothing secret), the Kindle remote page (the same,
+#: with its own PIN pad), and the two sign-in routes.
+_OPEN_TO_PHONES_GET = frozenset({"/", "/kindle", "/favicon.svg", "/api/session"})
 _OPEN_TO_PHONES_POST = frozenset({"/api/session"})
 
 
