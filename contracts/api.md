@@ -229,7 +229,7 @@ Open to a phone without the cookie: `GET /` and `GET /kindle` (each answered wit
 
 ### GET /kindle
 
-The e-ink remote (`service/gaffer/static/kindle.html`): one HTML file with no build step, written in ES5 for the Kindle's browser. It uses only existing routes and messages: `GET` and `POST /api/session`, then `/ws` with `hello`, `lights`, `state`, `stats`, `store`, `look`, `cue`, `error` and `toast` in, and `power`, `set`, `power.all`, `all.off`, `looks.apply`, `cue.go` and `cue.back` out. It keeps the PIN it was given in its own `localStorage` and signs in with it again when the service answers `pin_required`, as after Gaffer restarts. If that PIN is refused, after New PIN on the Mac, it forgets it and asks. It never tries a saved PIN twice.
+The e-ink remote (`service/gaffer/static/kindle.html`): one HTML file with no build step, written in ES5 for the Kindle's browser. It uses only existing routes and messages: `GET` and `POST /api/session`, then `/ws` with `hello`, `lights`, `state`, `stats`, `store`, `look`, `cue`, `error` and `toast` in, and `power`, `set`, `light.max_mode`, `power.all`, `all.off`, `looks.apply`, `cue.go` and `cue.back` out. It keeps the PIN it was given in its own `localStorage` and signs in with it again when the service answers `pin_required`, as after Gaffer restarts. If that PIN is refused, after New PIN on the Mac, it forgets it and asks. It never tries a saved PIN twice.
 
 ### GET /api/session
 
