@@ -28,7 +28,7 @@ from websockets.asyncio.client import connect
 
 from gaffer.app import create_app
 from gaffer.listener import guarded_config
-from gaffer.phone import MAX_WRONG_GUESSES, PHONE_COOKIE, PIN_DIGITS, PhoneAccess, PhoneListener
+from gaffer.phone import KINDLE_NAME, MAX_WRONG_GUESSES, PHONE_COOKIE, PIN_DIGITS, PhoneAccess, PhoneListener
 from gaffer.session import COOKIE, protect
 from phone_peer import as_if_from_phone
 
@@ -128,6 +128,9 @@ def test_a_phone_without_the_pin_controls_nothing_and_with_it_controls_the_light
 
     # Without the cookie: the page is the PIN screen (401), the API and every POST say 401, the socket never opens.
     assert studio.phone.get("/api/session").json()["error"] == "pin_required"
+    # The one answer without the PIN: /api/hello, which a Kindle asks to find Gaffer. It says nothing else.
+    hello = studio.phone.get("/api/hello")
+    assert hello.status_code == 200 and hello.json() == {"app": "gaffer"}
     for path in ("/api/lights", "/api/export", "/api/scan", "/api/models", "/scan"):
         assert studio.phone.get(path).status_code == 401, path
     for path in ("/api/phone", "/api/phone/pin", "/api/lights", "/api/anything/at/all"):
@@ -231,9 +234,12 @@ def test_phone_access_is_off_until_switched_on_and_off_again_cuts_phones_off(stu
 
 
 def test_host_and_origin_checks_still_apply_to_the_wifi_and_tailscale_names(studio):
+    # The Kindle launcher's name for the Mac (KINDLE_NAME) is refused while phone access is off.
+    assert studio.phone.get("/api/session", headers={"host": f"{KINDLE_NAME}:{PORT}"}).status_code == 403
     pin = studio.switch_on()
-    # The Wi-Fi address, the Tailscale name and the Tailscale address reach the PIN screen. Anything else is 400.
-    for host in (f"{LAN}:{PORT}", f"{TAILNET_NAME}:{PORT}", TAILNET_NAME, f"{TAILNET_IP}:{PORT}", f"[fd7a:115c:a1e0::9]:{PORT}"):
+    # The Wi-Fi address, the Tailscale name and address, and the Kindle's name reach the PIN screen. Anything else is 400.
+    for host in (f"{LAN}:{PORT}", f"{TAILNET_NAME}:{PORT}", TAILNET_NAME, f"{TAILNET_IP}:{PORT}", f"[fd7a:115c:a1e0::9]:{PORT}",
+                 f"{KINDLE_NAME}:{PORT}"):
         assert studio.phone.get("/api/session", headers={"host": host}).status_code == 401, host
     for host in ("evil.example", "100.64.0.99", "192.168.1.99", "127.0.0.1", "localhost"):
         assert studio.phone.get("/api/session", headers={"host": host}).status_code == 400, host

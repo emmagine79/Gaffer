@@ -225,11 +225,17 @@ A phone's request is refused when:
 | `Host` is not an address phone access listed (the Wi-Fi address, the Tailscale addresses and MagicDNS name) | `400 Invalid host header` (socket 4403) |
 | No valid PIN cookie, and the route is not one of the open ones below | `401 pin_required` (socket closed with code 4401 before it opens) |
 
-Open to a phone without the cookie: `GET /` and `GET /kindle` (each answered with status 401, so the page can show its PIN screen), `GET /assets/*`, `GET /favicon.svg`, `GET /api/session` and `POST /api/session`. A signed-in phone reaches everything except the Mac-only routes.
+Open to a phone without the cookie: `GET /` and `GET /kindle` (each answered with status 401, so the page can show its PIN screen), `GET /assets/*`, `GET /favicon.svg`, `GET /api/hello`, `GET /api/session` and `POST /api/session`. A signed-in phone reaches everything except the Mac-only routes.
 
 ### GET /kindle
 
 The e-ink remote (`service/gaffer/static/kindle.html`): one HTML file with no build step, written in ES5 for the Kindle's browser. It uses only existing routes and messages: `GET` and `POST /api/session`, then `/ws` with `hello`, `lights`, `state`, `stats`, `store`, `look`, `cue`, `error` and `toast` in, and `power`, `set`, `light.max_mode`, `power.all`, `all.off`, `looks.apply`, `cue.go` and `cue.back` out. It keeps the PIN it was given in its own `localStorage` and signs in with it again when the service answers `pin_required`, as after Gaffer restarts. If that PIN is refused, after New PIN on the Mac, it forgets it and asks. It never tries a saved PIN twice.
+
+### GET /api/hello
+
+Answers `{"app": "gaffer"}` and nothing else, to any phone while phone access is on, with no PIN. The Kindle launcher (`kindle/gaffer_remote.sh`) asks each address on its Wi-Fi network for it to find the Mac.
+
+While phone access is on, a phone may also use the name `gaffer.invalid` (`KINDLE_NAME` in `service/gaffer/phone.py`) as its Host. The Kindle launcher maps that name to the Mac's address, so the page's origin, and the PIN it saved, survive a new Wi-Fi address.
 
 ### GET /api/session
 

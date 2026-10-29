@@ -46,6 +46,12 @@ logger = logging.getLogger(__name__)
 #: Cookie a phone gets after the right PIN. A random token, not the Mac window's secret.
 PHONE_COOKIE = "gaffer_phone"
 
+#: The name the Kindle launcher (kindle/gaffer_remote.sh) gives this Mac, whatever its Wi-Fi address:
+#: it tells the Kindle's browser to send this name to the address it found. The page's origin then stays
+#: the same when the Mac gets a new address, so the PIN the Kindle saved is still there. ``.invalid``
+#: never resolves in real DNS (RFC 6761 section 6.4), so no web page can use it for DNS rebinding.
+KINDLE_NAME = "gaffer.invalid"
+
 #: Digits in the PIN. Conductor default recorded on the card (SPEC-015) for Captain to change.
 PIN_DIGITS = 6
 
@@ -302,7 +308,7 @@ class PhoneAccess:
     # what the checks in front of the app read
     def hosts(self) -> frozenset[str]:
         """The names and addresses a phone may use in its Host header. Empty while access is off."""
-        return self._hosts if self.enabled else frozenset()
+        return self._hosts | {KINDLE_NAME} if self.enabled else frozenset()
 
     @property
     def locked(self) -> bool:
@@ -584,6 +590,11 @@ def phone_routes(phone: PhoneAccess, allowed_hosts: Callable[[], frozenset[str]]
         if not origin_allowed(request.headers.get("origin"), request.headers.get("host"), allowed_hosts()):
             return _error(403, "wrong_origin", "That request did not come from the Gaffer window.")
         return None
+
+    @router.get("/api/hello")
+    async def hello() -> JSONResponse:
+        """What a Kindle searching the Wi-Fi asks (kindle/gaffer_remote.sh): is this Gaffer. Nothing else."""
+        return JSONResponse({"app": "gaffer"})
 
     @router.get("/api/session")
     async def session_state(request: Request) -> JSONResponse:

@@ -48,8 +48,9 @@ LOCAL_HOSTS = ["127.0.0.1", "localhost"]
 
 #: What a phone that has not entered the PIN may fetch: the page itself, which then shows the PIN
 #: screen (the page is open source, so it holds nothing secret), the Kindle remote page (the same,
-#: with its own PIN pad), and the two sign-in routes.
-_OPEN_TO_PHONES_GET = frozenset({"/", "/kindle", "/favicon.svg", "/api/session"})
+#: with its own PIN pad), the two sign-in routes, and /api/hello, which a Kindle asks to find Gaffer
+#: on the Wi-Fi (it says only that this is Gaffer).
+_OPEN_TO_PHONES_GET = frozenset({"/", "/kindle", "/favicon.svg", "/api/session", "/api/hello"})
 _OPEN_TO_PHONES_POST = frozenset({"/api/session"})
 
 
