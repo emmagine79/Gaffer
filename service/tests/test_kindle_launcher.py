@@ -6,7 +6,11 @@ to it is a press. The browser is a stand-in that stays open until killed, or clo
 
 Its promises: one power press gives the Kindle's screens back and lets it sleep; a browser that
 closes by itself does the same with no press; with no power button to read it never stops the
-Kindle's screens; the stop scriptlet closes a running remote.
+Kindle's screens; the stop scriptlet closes a running remote. It finds the Mac on the Wi-Fi by
+itself, follows it to a new address while open, and forgets it when told to.
+
+The Wi-Fi is stand-ins too: ifconfig gives the Kindle 192.168.1.27, and wget answers as Gaffer for
+each address in the file `macs`, so moving the Mac is rewriting that file.
 """
 
 from __future__ import annotations
@@ -19,6 +23,7 @@ import time
 from pathlib import Path
 
 KINDLE = Path(__file__).resolve().parents[2] / "kindle"
+OPEN_AT_20 = "browser http://gaffer.invalid:54342/kindle --host-resolver-rules=MAP gaffer.invalid 192.168.1.20"
 SHELL = shutil.which("dash") or "/bin/sh"  # dash is close to the Kindle's BusyBox sh; no bash-isms
 
 TOOLS = ["eips", "lipc-set-prop", "stop", "start", "killall"]
@@ -47,9 +52,19 @@ class Kindle:
         for tool in TOOLS:
             (bin_dir / tool).write_text(f'#!/bin/sh\necho "{tool} $*" >> "{self.log}"\n')
         (bin_dir / "usleep").write_text("#!/bin/sh\nexit 0\n")
+        # The Wi-Fi: the Kindle is 192.168.1.27, and Gaffer answers at each address listed in `macs`.
+        self.macs = root / "macs"
+        self.macs.write_text("192.168.1.20\n")
+        (bin_dir / "ifconfig").write_text(
+            '#!/bin/sh\necho "wlan0     Link encap:Ethernet"\n'
+            'echo "          inet addr:192.168.1.27  Bcast:192.168.1.255  Mask:255.255.255.0"\n')
+        (bin_dir / "wget").write_text(
+            '#!/bin/sh\nfor a in "$@"; do case "$a" in http://*) url=$a;; esac; done\n'
+            'addr=${url#http://}; addr=${addr%%:*}\n'
+            f'grep -qx "$addr" "{self.macs}" && echo \'{{"app":"gaffer"}}\' && exit 0\nexit 1\n')
         life = "exec sleep 600" if browser_seconds is None else f"sleep {browser_seconds}"
         browser = root / "kindle_browser"
-        browser.write_text(f'#!/bin/sh\necho "browser $1" >> "{self.log}"\n{life}\n')
+        browser.write_text(f'#!/bin/sh\necho "browser $1 $2" >> "{self.log}"\n{life}\n')
         for f in [*bin_dir.iterdir(), browser]:
             f.chmod(0o755)
         (root / "upstart").mkdir()
@@ -65,6 +80,7 @@ class Kindle:
             "GAFFER_INPUT_DIR": str(root / "input"),
             "GAFFER_UPSTART_DIR": str(root / "upstart"),
             "GAFFER_STATE_DIR": str(root / "state"),
+            "GAFFER_SAVE_FILE": str(root / "saved_mac"),
         }
         self.proc: subprocess.Popen[bytes] | None = None
 
@@ -103,7 +119,7 @@ def test_one_power_press_gives_the_kindle_back(tmp_path: Path) -> None:
     k = _new(tmp_path)
     try:
         proc = k.launch()
-        k.wait_for("browser http://192.168.1.20:54342/kindle")
+        k.wait_for(OPEN_AT_20)
         assert "lipc-set-prop com.lab126.powerd preventScreenSaver 1" in k.lines()
         assert "stop lab126_gui" in k.lines()
         assert "start lab126_gui" not in k.lines()
@@ -144,10 +160,57 @@ def test_the_stop_scriptlet_closes_a_running_remote(tmp_path: Path) -> None:
     k = _new(tmp_path)
     try:
         proc = k.launch()
-        k.wait_for("browser http://192.168.1.20:54342/kindle")
+        k.wait_for(OPEN_AT_20)
         subprocess.run([SHELL, str(KINDLE / "gaffer_remote_stop.sh")], env=k.env, check=True, timeout=15)
         assert proc.wait(timeout=15) == 0
         assert k.lines().count("start lab126_gui") == 1
         assert "lipc-set-prop com.lab126.powerd preventScreenSaver 0" in k.lines()
     finally:
         k.close()
+
+
+def test_with_nothing_saved_it_finds_the_mac_on_the_wifi_and_remembers_it(tmp_path: Path) -> None:
+    k = _new(tmp_path)
+    k.macs.write_text("192.168.1.147\n")
+    try:
+        k.launch()
+        k.wait_for("browser http://gaffer.invalid:54342/kindle --host-resolver-rules=MAP gaffer.invalid 192.168.1.147")
+        assert (k.root / "saved_mac").read_text().strip() == "192.168.1.147"
+    finally:
+        k.close()
+
+
+def test_a_mac_that_moves_to_a_new_address_is_followed_and_the_page_keeps_its_name(tmp_path: Path) -> None:
+    k = _new(tmp_path)
+    k.env["GAFFER_RECHECK"] = "1"
+    (k.root / "saved_mac").write_text("192.168.1.20\n")
+    try:
+        k.launch()
+        k.wait_for(OPEN_AT_20)
+        k.macs.write_text("192.168.1.30\n")  # the Mac restarts and the router gives it a new address
+        k.wait_for("browser http://gaffer.invalid:54342/kindle --host-resolver-rules=MAP gaffer.invalid 192.168.1.30")
+        assert (k.root / "saved_mac").read_text().strip() == "192.168.1.30"
+    finally:
+        k.close()
+
+
+def test_with_no_gaffer_on_the_wifi_it_keeps_looking_and_the_power_button_still_leaves(tmp_path: Path) -> None:
+    k = _new(tmp_path)
+    k.macs.write_text("")
+    try:
+        proc = k.launch()
+        k.wait_for("eips 1 1 Gaffer not found on this Wi-Fi.", seconds=60)
+        k.macs.write_text("192.168.1.20\n")  # Gaffer starts on the Mac
+        k.wait_for(OPEN_AT_20, seconds=60)
+        k.press_power()
+        assert proc.wait(timeout=15) == 0
+        assert "start lab126_gui" in k.lines()
+    finally:
+        k.close()
+
+
+def test_forget_mac_makes_the_next_remote_look_again(tmp_path: Path) -> None:
+    k = _new(tmp_path)
+    (k.root / "saved_mac").write_text("192.168.1.20\n")
+    subprocess.run([SHELL, str(KINDLE / "gaffer_remote_forget.sh")], env=k.env, check=True, timeout=15)
+    assert not (k.root / "saved_mac").exists()
