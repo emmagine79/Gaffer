@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 COLLECTIONS: tuple[str, ...] = ("scenes", "presets", "timelines", "schedules", "swatches", "looks", "cues")
 
@@ -100,9 +103,16 @@ class Store:
         return self.root / f"{name}.json"
 
     def _read(self, name: str, default: Any) -> Any:
+        path = self._path(name)
         try:
-            return json.loads(self._path(name).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            return json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return default
+        except (OSError, ValueError) as err:
+            # Set aside, as lights.py does: read as empty, the next save would overwrite everything in it.
+            aside = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+            os.replace(path, aside)
+            logger.error("%s unreadable (%s); moved it to %s and started empty", path.name, err, aside.name)
             return default
 
     # -- settings ------------------------------------------------------------------

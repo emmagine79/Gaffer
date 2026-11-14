@@ -30,7 +30,7 @@ class MissingDriver(Driver):
         return None
 
     async def identify(self, light: SavedLight) -> None:
-        return None
+        raise ConnectionError(f"the {self.id} driver is not installed")
 
     def status(self, light: SavedLight) -> LightStatus:
         return {"reachable": False, "held": False}

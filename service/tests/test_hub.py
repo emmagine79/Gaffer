@@ -173,3 +173,102 @@ def test_keys_from_the_command_line_are_saved(tmp_path):
     state = MeshState(**KEYS)
     light = LightLibrary(tmp_path).import_keys(state, address="AA:00:00:00:00:0A", name="CLI", radio_id="008F")
     assert LightLibrary(tmp_path).active == light
+
+
+async def test_a_paired_light_that_cannot_be_saved_fails_the_pairing_and_brings_the_link_back(tmp_path):
+    hub = await _hub(tmp_path)
+    try:
+        await _connected(hub)
+        await hub.scan(1)
+
+        def disk_full(**_fields):
+            raise OSError(28, "No space left on device")
+
+        hub.library.add_paired = disk_full
+        with pytest.raises(HubError, match="pairing failed"):
+            await hub.pair(Client(), "DE:MO:00:00:00:10")
+        assert hub.pairing["step"] == "failed"
+        await _connected(hub)
+    finally:
+        await hub.stop()
+
+
+def test_an_unreadable_keys_file_does_not_stop_the_service_starting(tmp_path):
+    light = LightLibrary(tmp_path).import_keys(MeshState(**KEYS), address="AA:00:00:00:00:0A", name="Key", radio_id="008F")
+    LightLibrary(tmp_path).network_path(light.network).write_text("{ not json")  # cut short by a crash
+    hub = Hub(Store(tmp_path), LightLibrary(tmp_path), demo=False, scanner=object())
+    assert isinstance(hub.link, NoLink) and "keys" in hub.link.snapshot()["detail"]
+
+
+async def test_a_keys_file_that_cannot_be_opened_is_reported_without_its_path(tmp_path):
+    library = LightLibrary(tmp_path)
+    gone = library.import_keys(MeshState(**KEYS), address="AA:00:00:00:00:0A", name="Gone", radio_id="008F")
+    library.import_keys(MeshState(**{**KEYS, "network_key": "12" * 16}), address="AA:00:00:00:00:0B", name="Here",
+                        radio_id="008F")
+    hub = Hub(Store(tmp_path), library, demo=False, scanner=object())
+    library.network_path(gone.network).unlink()
+    try:
+        await hub.select(Client(), gone.id, connect=True)
+        detail = hub.link.snapshot()["detail"]
+        assert isinstance(hub.link, NoLink) and detail and "networks" not in detail and str(tmp_path) not in detail
+    finally:
+        await hub.stop()
+
+
+async def _adopted(fixture) -> None:
+    for _ in range(300):
+        if not fixture.adopting:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("never adopted")
+
+
+async def test_a_lost_reply_never_adopts_a_reading_from_an_earlier_connection(tmp_path, monkeypatch):
+    from gaffer.transport import DemoController
+
+    hub = await _hub(tmp_path)
+    try:
+        await _connected(hub)
+        key = hub.fixtures[_id(hub, "Key light")]
+        await _adopted(key)
+        hub.set_state(key, key.state.model_copy(update={"mode": "cct", "brightness": 80.0}), "app")
+        await asyncio.sleep(0.1)
+        monkeypatch.setattr(DemoController, "_reply", lambda *_args: None)  # the light's answer is lost
+        await hub.forget(_id(hub, "Fill"))  # forgetting a light on this network reconnects it
+        await _connected(hub)
+        await _adopted(key)
+        assert key.state.brightness == 80.0
+    finally:
+        await hub.stop()
+
+
+async def test_identifying_a_mesh_light_while_the_link_is_down_is_refused(tmp_path):
+    hub = await _hub(tmp_path)
+    try:
+        await _connected(hub)
+        hub.godox.detach_controller()  # what the link does when it drops
+        with pytest.raises(HubError, match="not connected"):
+            await hub.identify(_id(hub, "Key light"))
+    finally:
+        await hub.stop()
+
+
+async def test_switching_everything_off_or_matching_a_light_ends_its_music_stream(tmp_path):
+    from gaffer.commands import dispatch
+
+    hub = await _hub(tmp_path)
+    try:
+        client = Client()
+        key, fill = _id(hub, "Key light"), _id(hub, "Fill")
+        hub.set_state(hub.fixtures[fill], hub.fixtures[fill].state.model_copy(update={"power": False}), "app")
+        frame = {"type": "stream", "light": key, "source": "audio",
+                 "frame": {"mode": "hsi", "hue": 200, "sat": 100, "brightness": 60}}
+        for off in ({"type": "power.all", "on": False},
+                    {"type": "group.match", "light": fill, "targets": [key], "props": ["power", "brightness"]}):
+            await dispatch(hub, client, {"type": "stream.begin", "light": key, "source": "audio"})
+            await dispatch(hub, client, frame)
+            await dispatch(hub, client, off)
+            await dispatch(hub, client, frame)  # the next music frame, already on its way
+            assert hub.fixtures[key].state.power is False, off["type"]
+    finally:
+        await hub.stop()

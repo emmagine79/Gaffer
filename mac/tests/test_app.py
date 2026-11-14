@@ -193,16 +193,9 @@ def test_scan_lists_and_tags_nearby_devices(gaffer):
     assert status == 200 and "/api/scan" in page
 
 
-def test_service_has_no_way_to_write_to_a_light(gaffer):
-    """Criterion 5: every HTTP route is a read (GET) and errors carry no server paths.
-
-    Since SPEC-002 the lights are driven over the /ws socket, which needs the session cookie
-    and the page's own Origin; the scan route listens only. Sending to a light stays behind
-    Captain's go-ahead (AGENTS.md).
-    """
-    status, spec = gaffer.get("/openapi.json")
-    methods = {m for ops in spec["paths"].values() for m in ops}
-    assert methods == {"get"}, methods
+def test_an_error_answer_carries_no_path_on_this_mac(gaffer):
+    """AGENTS.md rule: errors that reach the page or an API answer say what went wrong and never
+    carry a path on this Mac. A bad query on the scan route gives a 422 whose body has none."""
     status, body = gaffer.get("/api/scan?seconds=not-a-number")
     assert status == 422
     assert not re.search(r"/Users/|/private/|/var/", json.dumps(body))

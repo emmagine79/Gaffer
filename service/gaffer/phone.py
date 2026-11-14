@@ -296,7 +296,6 @@ class PhoneAccess:
         self._sessions: dict[str, asyncio.Event] = {}
         self._hosts: frozenset[str] = frozenset()
         self._targets: list[dict[str, str]] = []
-        self._lan: str | None = None
         self._tailscale: TailscaleInfo | None = None
         self._tailscale_known = False  # False until the first `tailscale status` has ended
         self._check: asyncio.Task[None] | None = None
@@ -331,7 +330,10 @@ class PhoneAccess:
         if hmac.compare_digest(candidate.encode(), self.pin.encode()):
             return "ok"
         self.wrong += 1
-        return "locked" if self.wrong >= MAX_WRONG_GUESSES else "wrong"
+        if self.wrong < MAX_WRONG_GUESSES:
+            return "wrong"
+        self._persist("lock")  # a restart must not unlock it: refused until New PIN (contracts/api.md)
+        return "locked"
 
     def sign_in(self) -> str:
         token = secrets.token_urlsafe(32)
@@ -360,7 +362,7 @@ class PhoneAccess:
 
     def _refresh_addresses(self) -> None:
         """Work out the Wi-Fi address (a local lookup, no process) and the names and addresses a phone may use."""
-        self._lan = lan = self._lan_ip()
+        lan = self._lan_ip()
         found = self._tailscale
         hosts: set[str] = set()
         targets: list[dict[str, str]] = []
@@ -428,7 +430,8 @@ class PhoneAccess:
         """Write whether access is on and its PIN, readable by this user only."""
         if self._saved is None:
             return
-        data = json.dumps({"enabled": self.enabled, "pin": self.pin if self.enabled else None, "port": self.port})
+        data = json.dumps({"enabled": self.enabled, "pin": self.pin if self.enabled else None, "port": self.port,
+                           "locked": self.locked})
         tmp = self._saved.with_name(self._saved.name + ".tmp")
         try:
             fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -460,7 +463,7 @@ class PhoneAccess:
             return False
 
     def _persist(self, change: str, *, restoring: bool = False) -> None:
-        """Save the setting. ``change`` is "on", "off" or "pin". When the save fails, fail closed: the
+        """Save the setting. ``change`` is "on", "off", "pin" or "lock". When the save fails, fail closed: the
         file must not keep an older setting (an old PIN, or "on" after switching off), so it is removed
         or overwritten instead. Either way the Mac window is told what a restart will do. A restore is the
         one exception: the file already holds that PIN, so a failed save there loses nothing and is left alone."""
@@ -496,7 +499,7 @@ class PhoneAccess:
         pin = saved.get("pin") if isinstance(saved, dict) and saved.get("enabled") is True else None
         if isinstance(pin, str) and len(pin) == PIN_DIGITS and pin.isascii() and pin.isdigit():
             try:
-                await self.enable(pin=pin, restoring=True)
+                await self.enable(pin=pin, locked=saved.get("locked") is True, restoring=True)
             except (PhoneUnavailable, OSError):
                 # The lights matter more than the phone: Gaffer starts, with phone access off for now.
                 logger.warning("phone access could not be switched back on at start; it stays off", exc_info=True)
@@ -506,7 +509,7 @@ class PhoneAccess:
                                "Turn it on again to get a new PIN.",
                 }
 
-    async def enable(self, *, pin: str | None = None, restoring: bool = False) -> None:
+    async def enable(self, *, pin: str | None = None, locked: bool = False, restoring: bool = False) -> None:
         async with self._guard():
             if self.enabled:
                 return
@@ -518,7 +521,7 @@ class PhoneAccess:
             if pin is None:
                 self._new_pin()
             else:
-                self.pin, self.wrong = pin, 0
+                self.pin, self.wrong = pin, MAX_WRONG_GUESSES if locked else 0
             self.enabled = True
             self.notice = None
             self._persist("on", restoring=restoring)

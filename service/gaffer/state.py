@@ -12,12 +12,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .catalog import ModelCaps
 
 Mode = Literal["cct", "hsi", "rgbw", "gel", "fx"]
-MODES: tuple[str, ...] = ("cct", "hsi", "rgbw", "gel", "fx")
 
 
 class _Frozen(BaseModel):
@@ -81,6 +80,14 @@ def _merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def plain_error(err: ValidationError) -> str:
+    """Pydantic's report as one sentence that names the field, without its dump and its link."""
+    first = err.errors()[0]
+    field = ".".join(str(part) for part in first["loc"]) or "the light's state"
+    message = first["msg"]
+    return f"{field} is not right: {message[:1].lower()}{message[1:]}."
+
+
 def merge_patch(state: LightState, patch: dict[str, Any]) -> dict[str, Any]:
     """``state`` as a plain dict with ``patch`` deep-merged in; not yet validated."""
     return _merge(state.model_dump(), patch)
@@ -96,8 +103,8 @@ def apply_patch(state: LightState, patch: dict[str, Any], caps: ModelCaps) -> Li
     """
     try:
         candidate = LightState.model_validate(_merge(state.model_dump(), patch))
-    except ValueError as err:
-        raise StateError(str(err)) from err
+    except ValidationError as err:
+        raise StateError(plain_error(err)) from err
     validate(candidate, caps)
     return candidate
 

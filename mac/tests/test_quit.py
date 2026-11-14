@@ -31,26 +31,30 @@ CHECK = Path(__file__).with_name("service_process_check.swift")
 EXIT_WITHIN_SECONDS = BACKSTOP_SECONDS + 10.0
 START_WITHIN_SECONDS = 60.0  # the driver's own limit for the service to announce its port
 
-pytestmark = pytest.mark.skipif(not BUILT_APP.exists(), reason="build dist/Gaffer.app first")
-
 
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory):
-    base = tmp_path_factory.mktemp("quit")
-    real = base / "path with space" / "real"
-    real.mkdir(parents=True)
-    subprocess.run(["ditto", str(BUILT_APP), str(real / "Gaffer.app")], check=True)
-    (base / "link").symlink_to(real)
-    build = base / "driver"
-    build.mkdir()
+def driver_binary(tmp_path_factory):
+    build = tmp_path_factory.mktemp("driver")
     (build / "main.swift").write_text(CHECK.read_text())
     subprocess.run(
         ["swiftc", "-swift-version", "5", "-target", "arm64-apple-macos14.0",
          str(SOURCES / "ServiceProcess.swift"), str(SOURCES / "ServiceLog.swift"), str(build / "main.swift"),
          "-o", str(build / "service_process_check")],
         check=True, capture_output=True, text=True)
+    return build / "service_process_check"
+
+
+@pytest.fixture(scope="module")
+def rig(tmp_path_factory, driver_binary):
+    if not BUILT_APP.exists():
+        pytest.skip("build dist/Gaffer.app first")
+    base = tmp_path_factory.mktemp("quit")
+    real = base / "path with space" / "real"
+    real.mkdir(parents=True)
+    subprocess.run(["ditto", str(BUILT_APP), str(real / "Gaffer.app")], check=True)
+    (base / "link").symlink_to(real)
     return {"resources": base / "link" / "Gaffer.app" / "Contents" / "Resources",
-            "driver": build / "service_process_check", "base": base}
+            "driver": driver_binary, "base": base}
 
 
 def alive(pid: int) -> bool:
@@ -164,3 +168,19 @@ def test_a_log_that_cannot_be_opened_is_reported_not_silent(rig):
     finally:
         run.cleanup()
     assert "could not open service.log" in run.stderr.read_text()
+
+
+def test_a_service_that_has_already_gone_does_not_crash_gaffer_when_given_its_secret(driver_binary, tmp_path):
+    """The shell writes the session secret to the service's stdin. If the service has already exited,
+    the old FileHandle.write(_:) raised an Objective-C exception Swift can't catch and Gaffer crashed.
+    The stand-in python exits at once; the driver (SIGPIPE ignored, as in the app) writes to it after it
+    has gone and must survive. Needs no built app, no Bluetooth and no real service."""
+    python = tmp_path / "resources" / "python" / "bin" / "python3.14"
+    python.parent.mkdir(parents=True)
+    python.write_text("#!/bin/sh\nexit 0\n")
+    python.chmod(0o755)
+    done = subprocess.run(
+        [str(driver_binary), str(tmp_path / "resources"), str(tmp_path / "data"), str(tmp_path / "logs"), "gone"],
+        capture_output=True, text=True, timeout=60, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert done.returncode == 0 and "SURVIVED" in done.stdout, (done.returncode, done.stdout, done.stderr[-500:])
+    assert "could not give the light service its session secret" in done.stderr  # reported, not silent

@@ -18,7 +18,7 @@
     <a class="btn" href="https://github.com/emmagine79/Gaffer/releases/latest">Download Gaffer</a>
     <a class="btn alt" href="https://github.com/emmagine79/Gaffer">See the code on GitHub</a>
   </div>
-  <p class="note">Gaffer is still being built. Today it finds nearby lights and shows them by brand. Light control is coming.</p>
+  <p class="note">Gaffer is still being built. It controls Godox, Zhiyun and Yongnuo lights. It has been tried on real lights for three models: the Godox LA150Bi, the Zhiyun MOLUS G200 and the Yongnuo YN150. Every other model is untried.</p>
 </header>
 <main>
   <section id="what">
@@ -60,7 +60,7 @@
       <li>Unzip it.</li>
       <li>Open <strong>Gaffer.app</strong>.</li>
     </ol>
-    <p>Gaffer is unsigned. The first time you open it, macOS asks you to confirm. The first time it scans, macOS also asks for Bluetooth. Click Allow.</p>
+    <p>Gaffer is signed with a self-signed certificate and is not notarised. The first time you open it, macOS asks you to confirm. The first time it scans, macOS also asks for Bluetooth. Click Allow.</p>
     <p>The <a href="https://github.com/emmagine79/Gaffer#readme">README</a> will have the step-by-step guide with screenshots.</p>
     <div class="shot" aria-hidden="true">Placeholder. Install screenshots go here.</div>
   </section>
@@ -68,7 +68,7 @@
   <section id="credits">
     <h2>Licence and credits</h2>
     <p>Gaffer is free software under the <a href="https://github.com/emmagine79/Gaffer/blob/main/LICENSE">MIT licence</a>.</p>
-    <p>It builds on these MIT-licensed projects:</p>
+    <p>It builds on these open-source projects. All are MIT-licensed except segno, which is BSD-3-Clause:</p>
     <ul>
       <li><a href="https://github.com/Rkcr7/lumen-studio">lumen-studio</a> (MIT): Godox driver, model table, effects, scenes, schedules and cues.</li>
       <li><a href="https://github.com/mattharrison/godox-ul60bi-bt">godox-ul60bi-bt</a> (MIT): the Godox protocol that lumen-studio builds on.</li>
@@ -76,6 +76,8 @@
       <li><a href="https://github.com/didim99/HA-Zhiyun-Light">HA-Zhiyun-Light</a> (MIT): Zhiyun protocol and light names.</li>
       <li><a href="https://github.com/aaditagrawal/zhiyun-light-control">zhiyun-light-control</a> (MIT): Zhiyun protocol.</li>
       <li><a href="https://github.com/asidjwiaijd/yongnuo-light-control">yongnuo-light-control</a> (MIT): Yongnuo protocol and naming.</li>
+      <li><a href="https://github.com/SegulaLabs/ha-godox-ble-mesh">ha-godox-ble-mesh</a> (MIT): the reader for the Godox app's mesh export.</li>
+      <li><a href="https://github.com/heuer/segno">segno</a> (BSD-3-Clause): draws the QR code that phones scan.</li>
     </ul>
   </section>
 </main>

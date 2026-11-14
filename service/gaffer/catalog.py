@@ -330,7 +330,7 @@ def _read_model_file(path: Path, folder: str) -> tuple[str, dict[str, Any]]:
     model_id, row = _check_row(raw, folder)
     if path.stem.upper() != model_id:
         raise ModelFileError("file name does not match its id")
-    _caps_from_row(model_id, row)  # builds the real thing, so a bad effects list is caught here
+    _caps_from_row(model_id, row).to_dict()  # everything /api/models works out, so a bad value is caught here
     return model_id, row
 
 

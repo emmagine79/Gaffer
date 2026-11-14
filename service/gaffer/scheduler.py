@@ -1,10 +1,9 @@
-"""Timed actions: sunrise alarms, scenes at a time, lights out.
+"""Timed actions: a look, or all off, at a time.
 
-Schedules live in the store's ``schedules`` collection:
+Schedules live in the store's ``schedules`` collection (schedules.py checks them):
 
     {"name", "enabled", "at": "HH:MM", "days": [0-6, Monday = 0],
-     "action": "scene" | "effect" | "sunrise" | "off" | "on",
-     "target": scene id or effect id, "minutes": sunrise length}
+     "action": "look" | "off", "target": look id (the look action only)}
 
 A schedule fires once in the minute it names, local time. Runs while the
 studio is running; there is no service that wakes the computer.

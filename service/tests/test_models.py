@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import random
 
 import pytest
@@ -221,3 +222,21 @@ def test_effect_profiles_tell_colour_from_white_and_motion_from_still():
     assert effect_profile("candle")["brightness_moves"] is True
     assert effect_profile("strobe")["brightness_moves"] is True
     assert effect_profile("sunrise")["brightness_moves"] is True
+
+
+def test_a_model_file_with_a_tint_range_that_is_not_a_number_is_skipped(tmp_path):
+    """It used to load, and then every GET /api/models answered 500."""
+    from fastapi.testclient import TestClient
+
+    from gaffer.app import create_app
+
+    folder = tmp_path / "models" / "zhiyun"
+    folder.mkdir(parents=True)
+    (folder / "BADTINT.json").write_text(json.dumps({
+        "id": "BADTINT", "driver": "zhiyun", "brand": "Zhiyun", "name": "Bad tint", "min_kelvin": 2700,
+        "max_kelvin": 6500, "modes": ["cct"], "gm_min": "x"}), encoding="utf-8")
+    with TestClient(create_app(demo=True, data_dir=tmp_path)) as c:
+        reply = c.get("/api/models")
+    assert reply.status_code == 200
+    assert [s["file"] for s in reply.json()["skipped"]] == ["zhiyun/BADTINT.json"]
+    assert "BADTINT" not in {m["id"] for m in reply.json()["models"]}

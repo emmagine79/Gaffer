@@ -11,6 +11,7 @@ Pure.
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from .colormath import hex_to_rgb, rgb_to_hsv
@@ -71,17 +72,24 @@ def _is_white(rgb: tuple[float, float, float]) -> bool:
     return abs(duv) <= WHITE_DUV and sat < 75
 
 
+@lru_cache(maxsize=None)
+def _gel_point(hex_colour: str) -> tuple[bool, float, float]:
+    """Whether a gel's colour is a white, with its temperature and Duv. Cached, and immutable: every
+    lights view and hello works the gel tables out again, from the same catalogue colours."""
+    rgb = hex_to_rgb(hex_colour)
+    return (_is_white(rgb), *cct_duv(rgb))
+
+
 def emulation_kind(hex_colour: str) -> str:
     """``"white"`` for a correction gel a white light can match, else ``"colour"``."""
-    return "white" if _is_white(hex_to_rgb(hex_colour)) else "colour"
+    return "white" if _gel_point(hex_colour)[0] else "colour"
 
 
 def fits_white_light(hex_colour: str, caps: ModelCaps) -> bool:
     """Whether a white-only light can make a fair copy of this gel."""
-    rgb = hex_to_rgb(hex_colour)
-    if not _is_white(rgb):
+    white, kelvin, duv = _gel_point(hex_colour)
+    if not white:
         return False
-    kelvin, duv = cct_duv(rgb)
     if abs(duv) > (WHITE_DUV if caps.has_tint else NO_TINT_DUV):
         return False
     return caps.min_kelvin * (1 - RANGE_SLACK) <= kelvin <= caps.max_kelvin * (1 + RANGE_SLACK)

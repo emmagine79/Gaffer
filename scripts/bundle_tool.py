@@ -2,9 +2,10 @@
 
   prune     <python-dir> <discard-dir>              make the installed packages identical on every build
   licences  <resources-dir> <python-dir> <repo-dir> ship every bundled package's licence and list them in NOTICE
+  web-licences <resources-dir> <web-dir>            the same for the production npm packages of the web page
   manifest  <app-dir>                               print one line per file: type, mode, sha256, path
 
-Standard library only. Nothing is deleted: files taken out go to <discard-dir>.
+Standard library only (web-licences also runs `npm ls`). Nothing is deleted: files taken out go to <discard-dir>.
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ import csv
 import hashlib
 import os
 import platform
+import json
 import shutil
+import subprocess
 import sys
 from email.parser import Parser
 from pathlib import Path
@@ -96,9 +99,9 @@ def licence_files(folder: Path, declared: set[str] = frozenset(), skip: str = ""
 
     Returns nothing unless at least one file is a licence text (named LICENSE, LICENCE or COPYING,
     or listed in the package's License-File metadata). NOTICE and AUTHORS files alone don't count.
-    A path part named `skip` leaves the file out.
+    A folder named `skip` below `folder` leaves the files in it out.
     """
-    everything = sorted(p for p in folder.rglob("*") if p.is_file() and skip not in p.parts)
+    everything = sorted(p for p in folder.rglob("*") if p.is_file() and skip not in p.relative_to(folder).parts)
     texts = [p for p in everything if p.name.lower().startswith(LICENCE_TEXT_NAMES) or p.name in declared]
     if not texts:
         return []
@@ -175,6 +178,63 @@ def licences(resources: Path, python_dir: Path, repo: Path) -> None:
     notice.write_text(notice.read_text().rstrip("\n") + "\n" + "\n".join(lines) + "\n")
 
 
+def production_npm_packages(web: Path) -> list[Path]:
+    """The folder of every package npm would install for production: web's own dependencies and theirs.
+
+    Asked of npm itself (`npm ls --omit=dev --all`) so the list follows web/package.json and
+    package-lock.json and never a hand-kept list.
+    """
+    try:
+        done = subprocess.run(["npm", "ls", "--omit=dev", "--all", "--parseable"], cwd=web,
+                              capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.exit("bundle_tool: npm is needed to list the web page's packages: https://nodejs.org/")
+    if done.returncode != 0:
+        sys.exit(f"bundle_tool: npm could not list the web page's packages (run npm ci in web/):\n{done.stderr.strip()}")
+    folders = [Path(line) for line in done.stdout.splitlines() if line.strip()]
+    return [f for f in folders if f.resolve() != web.resolve()]  # the first line is web/ itself
+
+
+def web_licences(resources: Path, web: Path) -> None:
+    """Ship the licence text of every production npm package the built web page can contain.
+
+    The page in the app is bundled from these packages (react, motion and the rest), so MIT and
+    ISC require their licence text to travel with it. A package with no licence file stops the build.
+    """
+    out = resources / "LICENSES" / "npm"
+    out.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "",
+        "THE WEB PAGE'S LIBRARIES INSIDE THIS APP",
+        "----------------------------------------",
+        "",
+        "The page Gaffer shows is built from these npm packages. Each licence text is in",
+        "Contents/Resources/LICENSES/npm/<name>-<version>/, in the folder named below.",
+        "",
+    ]
+    seen: set[str] = set()
+    for folder in sorted(production_npm_packages(web)):
+        meta = json.loads((folder / "package.json").read_text())
+        name, ver = meta["name"], meta["version"]
+        if f"{name}-{ver}" in seen:
+            continue  # the same version installed in two places
+        seen.add(f"{name}-{ver}")
+        files = licence_files(folder, skip="node_modules")
+        if not files:
+            sys.exit(f"bundle_tool: the npm package {name} {ver} has no licence file, "
+                     "so a person has to decide where its licence text comes from")
+        target_dir = out / f"{name.replace('/', '__')}-{ver}"  # @scope/name is one folder
+        for f in files:
+            target = target_dir / f.relative_to(folder)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f, target)
+        licence = meta.get("license")
+        lines.append(f"* {name} {ver}: {licence if isinstance(licence, str) and licence else 'not declared'}")
+        lines.append(f"  LICENSES/npm/{target_dir.name}/")
+    notice = resources / "NOTICE"
+    notice.write_text(notice.read_text().rstrip("\n") + "\n" + "\n".join(lines) + "\n")
+
+
 def manifest(app: Path) -> None:
     """One sorted line per entry: kind, mode (executable or not), sha256 or link target, path."""
     for dirpath, dirnames, filenames in os.walk(app):
@@ -199,6 +259,8 @@ def main() -> None:
         prune(Path(args[0]), Path(args[1]))
     elif cmd == "licences" and len(args) == 3:
         licences(Path(args[0]), Path(args[1]), Path(args[2]))
+    elif cmd == "web-licences" and len(args) == 2:
+        web_licences(Path(args[0]), Path(args[1]))
     elif cmd == "manifest" and len(args) == 1:
         manifest(Path(args[0]))
     else:

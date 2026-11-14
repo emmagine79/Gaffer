@@ -194,6 +194,20 @@ def test_a_hundred_wrong_pins_lock_the_pin_until_new_pin(studio):
     assert studio.sign_in(fresh["pin"]).status_code == 200
 
 
+def test_a_locked_pin_stays_locked_after_gaffer_restarts(tmp_path):
+    # contracts/api.md: the right PIN is refused "until New PIN". A restart used to reset the count.
+    cli, saved = fake_tailscale(tmp_path, RUNNING), tmp_path / "data" / "phone.json"
+    with studio_with(tmp_path, cli, saved) as first:
+        pin = first.switch_on()
+        for _ in range(MAX_WRONG_GUESSES):
+            first.sign_in(wrong_pin(pin))
+
+    with studio_with(tmp_path, cli, saved) as second:  # Gaffer started again
+        refused = second.sign_in(pin)
+        assert refused.status_code == 403 and refused.json()["error"] == "pin_locked"
+        assert second.mac.get("/api/phone").json()["locked"] is True
+
+
 def test_new_pin_signs_every_phone_out_and_closes_its_socket(studio):
     pin = studio.switch_on()
     assert studio.sign_in(pin).status_code == 200

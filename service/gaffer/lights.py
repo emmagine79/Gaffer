@@ -112,14 +112,15 @@ class LightLibrary:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             lights = [SavedLight(**item) for item in raw.get("lights", [])]
-        except (ValueError, TypeError) as err:
+            retired = raw.get("retired") or {}
+            retired = {str(k): [[int(a), int(b)] for a, b in v] for k, v in retired.items()} if isinstance(retired, dict) else {}
+        except (ValueError, TypeError, AttributeError) as err:
             aside = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
             os.replace(path, aside)
             logger.error("lights file unreadable (%s); moved it to %s and started empty", err, aside.name)
             return
         self._lights = {light.id: light for light in lights}
-        retired = raw.get("retired") or {}
-        self._retired = {str(k): [[int(a), int(b)] for a, b in v] for k, v in retired.items()} if isinstance(retired, dict) else {}
+        self._retired = retired
         active = raw.get("active")
         self._active = active if active in self._lights else None
 

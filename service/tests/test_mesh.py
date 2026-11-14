@@ -147,3 +147,63 @@ def test_mirroring_always_yields_a_state_the_follower_accepts(radio_id):
     ]
     for leader in leaders:
         validate(mirror(leader, LightState(cct=Cct(kelvin=caps.min_kelvin or 5600)), ALL_PROPS, caps, leader_caps=RGB), caps)
+
+
+async def test_a_link_retrying_after_a_drop_does_not_still_say_how_fast_it_connected(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from godox_mesh_bt.state import MeshState
+
+    from gaffer.discovery import MESH_PROXY
+    from gaffer.lights import LightLibrary
+    from gaffer.link import LinkManager, Member, SequenceVault
+
+    keys = {"network_key": "ab" * 16, "app_key": "cd" * 16, "provisioner_address": 1, "node_address": 2,
+            "sequence_number": 10, "iv_index": 0, "device_key": "ef" * 16}
+    library = LightLibrary(tmp_path)
+    light = library.import_keys(MeshState(**keys), address="AA:00:00:00:00:0A", name="Key", radio_id="008F")
+
+    class Radio:
+        def __init__(self, detection_callback):
+            detection_callback(SimpleNamespace(address=light.address),
+                               SimpleNamespace(manufacturer_data={}, service_data={}, service_uuids=[MESH_PROXY], rssi=-50))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    class Light:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def connect(self):
+            pass
+
+        async def disconnect(self):
+            pass
+
+        def ble_device(self):
+            return None
+
+    monkeypatch.setattr("bleak.BleakScanner", Radio)
+    monkeypatch.setattr("gaffer.link.StudioController", Light)
+    seen: list[dict] = []
+    link = LinkManager(
+        SequenceVault(library.network_path(light.network)),
+        members=lambda: [Member(light.id, light.address, light.node_address)], public_id="00" * 8,
+        preferred=lambda: light.address, on_disconnected=lambda: None, serial=None, prefer_wait=0,
+        on_connected=lambda _controller: link.report_trouble(ConnectionError("dropped")),  # it drops at once
+        listener=seen.append,
+    )
+    task = asyncio.create_task(link.run())
+    for _ in range(200):
+        if any(s["status"] == "backoff" for s in seen):
+            break
+        await asyncio.sleep(0.01)
+    link.stop()
+    await task
+    assert any(s["status"] == "connected" for s in seen)
+    backoff = [s["detail"] for s in seen if s["status"] == "backoff"]
+    assert backoff and not any("connected in" in detail for detail in backoff)
