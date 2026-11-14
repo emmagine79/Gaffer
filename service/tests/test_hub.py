@@ -242,12 +242,25 @@ async def test_a_lost_reply_never_adopts_a_reading_from_an_earlier_connection(tm
         await hub.stop()
 
 
-async def test_identifying_a_mesh_light_while_the_link_is_down_is_refused(tmp_path):
+async def test_identifying_a_mesh_light_waits_for_the_link_to_come_back(tmp_path, monkeypatch):
+    import gaffer.drivers.godox.driver as godox_driver
+    import gaffer.hub as hub_module
+
+    monkeypatch.setattr(godox_driver, "PULSE_SECONDS", 0.01)
     hub = await _hub(tmp_path)
     try:
         await _connected(hub)
-        hub.godox.detach_controller()  # what the link does when it drops
-        with pytest.raises(HubError, match="not connected"):
+        controller = hub.controller
+        hub.godox.detach_controller()  # the link dropped, or is reconnecting after pairing
+        flash = asyncio.create_task(hub.identify(_id(hub, "Key light")))
+        await asyncio.sleep(0.1)
+        assert not flash.done(), "a pulse with no link would be lost"
+        hub._on_connected(controller)
+        assert await flash == "godox"
+
+        hub.godox.detach_controller()
+        monkeypatch.setattr(hub_module, "IDENTIFY_SECONDS", 0.05)
+        with pytest.raises(HubError, match="did not answer"):
             await hub.identify(_id(hub, "Key light"))
     finally:
         await hub.stop()

@@ -985,7 +985,7 @@ class Hub:
         driver = fixture.driver
         if not self.on_network(fixture):
             raise HubError(f"{fixture.light.name} is on another network. Switch to it first.")
-        if driver is self.godox and self.controller is None:
+        if driver is self.godox and isinstance(self.link, NoLink):
             raise HubError(f"Could not flash {fixture.light.name}: it is not connected. Check it is on and close by.")
         if light_id in self._identifying:
             return driver.id
@@ -996,7 +996,7 @@ class Hub:
             fixture.engine.stop()
             if driver is not self.godox or not fixture.adopting:  # a mesh light not read yet has no state of ours to trust
                 driver.apply(fixture.light, fixture.state)
-            await asyncio.wait_for(driver.identify(fixture.light), timeout=IDENTIFY_SECONDS)
+            await asyncio.wait_for(self._flash(driver, fixture), timeout=IDENTIFY_SECONDS)
         except TimeoutError:
             raise HubError(f"{fixture.light.name} did not answer. Check it is on and close by.") from None
         except Exception:  # noqa: BLE001 - the page gets plain words, the log gets the detail
@@ -1005,6 +1005,13 @@ class Hub:
         finally:
             self._identifying.discard(light_id)
         return driver.id
+
+    async def _flash(self, driver: Driver, fixture: Fixture) -> None:
+        if driver is self.godox:
+            # Pulses sent with no link would be lost. Just after pairing, or after a drop, the link is
+            # reconnecting: IDENTIFY_SECONDS allows for that connect.
+            await self.godox.linked.wait()
+        await driver.identify(fixture.light)
 
     async def set_max_mode(self, light_id: str, on: bool) -> None:
         """Switch a light's Max Mode (turbo) on or off, and tell every client.

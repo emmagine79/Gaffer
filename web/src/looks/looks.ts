@@ -43,7 +43,7 @@ function typing(target: EventTarget | null): boolean {
 /**
  * Keys 1 to 9 apply the looks in order and 0 turns every light off, or back on when all are off (the lighting desk's
  * numbered buttons, a-desk mockup). Ignored while typing, with a modifier held (so
- * the browser's and the Mac's own shortcuts still work) and while a sheet or the command palette is open.
+ * the browser's and the Mac's own shortcuts still work) and while a sheet, a dialog or the command palette is open.
  */
 export function useLookKeys() {
   useEffect(() => {
@@ -51,7 +51,7 @@ export function useLookKeys() {
       if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey || e.repeat || typing(e.target)) return
       if (!/^[0-9]$/.test(e.key)) return
       const { addLight, connectionSheet, palette } = useStudio.getState()
-      if (addLight || connectionSheet || palette) return
+      if (addLight || connectionSheet || palette || document.querySelector('dialog[open]')) return
       if (e.key === '0') {
         const { lights } = useStudio.getState()
         if (lights.length > 0 && lights.every((l) => !l.state.power)) allOn()  // 0 is the All off / All on button

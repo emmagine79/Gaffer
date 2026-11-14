@@ -62,3 +62,19 @@ it.each(['addLight', 'connectionSheet', 'palette'] as const)('keys 0 to 9 do not
   expect(request).toHaveBeenCalledWith({ type: 'all.off' })
   await act(async () => root.unmount())
 })
+
+it('keys 0 to 9 do nothing while a dialog such as Phone access is open', async () => {
+  const lights = [{ id: 'a1', name: 'Backlight', state: { power: true } }] as LightView[]
+  useStudio.setState({ lights, store: { looks: [{ id: 'night' }] } as never })
+  const dialog = document.body.appendChild(document.createElement('dialog'))
+  dialog.setAttribute('open', '')
+  const root = createRoot(document.createElement('div'))
+  await act(async () => root.render(createElement(Keys)))
+  for (const key of ['0', '1']) window.dispatchEvent(new KeyboardEvent('keydown', { key, cancelable: true }))
+  expect(request).not.toHaveBeenCalled()
+  dialog.removeAttribute('open')
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: '0', cancelable: true }))
+  expect(request).toHaveBeenCalledWith({ type: 'all.off' })
+  await act(async () => root.unmount())
+  dialog.remove()
+})
