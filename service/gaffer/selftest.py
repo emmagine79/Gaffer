@@ -54,7 +54,7 @@ def run_self_test(report: Report = print, *, require_web: bool = True) -> bool:
 
     from .catalog import models_index
 
-    check("model table", len(models_index()) >= 180, f"{len(models_index())} Godox models")
+    check("model table", len(models_index()) >= 180, f"{len(models_index())} models")
 
     from . import app as app_module
 

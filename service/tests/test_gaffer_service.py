@@ -128,3 +128,14 @@ def test_quitting_gaffer_saves_the_last_light_state(tmp_path):
         if service.poll() is None:
             os.killpg(service.pid, signal.SIGKILL)
             service.wait()
+
+
+def test_only_the_expected_beacon_warning_is_hidden():
+    import logging
+
+    from gaffer.__main__ import _QuietExpectedNoise
+
+    quiet = _QuietExpectedNoise()
+    record = lambda msg: logging.LogRecord("godox_mesh_bt.controller", logging.WARNING, __file__, 1, msg, None, None)
+    assert not quiet.filter(record("no beacon received from device; proceeding without beacon echo"))
+    assert quiet.filter(record("beacon network ID %s does not match our key (ours: %s) — wrong provisioning key!"))

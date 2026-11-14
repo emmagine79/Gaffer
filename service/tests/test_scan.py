@@ -68,3 +68,28 @@ def test_tags_brand_families_and_skips_a_malformed_advert():
     godox = next(d for d in result["devices"] if d["id"] == "godox")
     assert godox["godox"] == {"state": "mesh", "radio_id": "0022", "network_id": "a531416af34b7917"}
     assert result["skipped"] == [{"id": "broken", "reason": "malformed advertisement"}]
+
+
+async def test_a_light_advertising_again_is_listed_once_with_its_latest_strength(monkeypatch):
+    from types import SimpleNamespace
+
+    from gaffer import discovery
+
+    class Radio:
+        def __init__(self, detection_callback):
+            device = SimpleNamespace(address="AA:BB:CC:DD:EE:01", name="GD_LED")
+            for rssi in (-50, -50, -51, -48):
+                detection_callback(device, advert(
+                    "GD_LED", [MESH_PROXY], {MESH_PROXY: bytes.fromhex("0011223344556677aa")},
+                    {40644: bytes.fromhex("0938c1a4220002000000ffff00000000000000")}, rssi=rssi))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc):
+            return False
+
+    monkeypatch.setattr("bleak.BleakScanner", Radio)
+    listed = []
+    found = await discovery.Scanner().scan(0, on_found=listed.append)
+    assert len(listed) == 1 and [n.rssi for n in found] == [-48]

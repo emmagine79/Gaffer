@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { allOn } from '../looks/looks'
+import { allOff, allOn, applyLook, useLooks } from '../looks/looks'
 import { Slider } from '../components/Slider'
 import type { LightView } from '../lib/types'
 import { beamOf, modelLine, readout } from '../glass/describe'
 import { useStudio } from '../state/store'
 import { scaleLevels } from './levels'
-import { useDeskLooks } from './looks'
 import './desk.css'
 
 /** How long a finger rests on a strip before it counts as a selection (phone). */
@@ -212,21 +211,21 @@ function Strip({ light, picked, picking, group, onToggle, onOpen }: StripProps) 
 }
 
 function Looks() {
-  const { looks, apply, allOff } = useDeskLooks()
+  const looks = useLooks()
   const lights = useStudio((s) => s.lights)
-  const [last, setLast] = useState<string | null>(null)
+  const current = useStudio((s) => s.look)
   const off = lights.length > 0 && lights.every((l) => !l.state.power)
   return (
     <div className="d-looks">
       {looks.map((look, i) => (
         <button
-          key={look.id} type="button" className={`d-look ${last === look.id && !off ? 'on' : ''}`}
-          title={look.name} onClick={() => { setLast(look.id); apply(look.id) }}
+          key={look.id} type="button" className={`d-look ${current?.id === look.id && !off ? 'on' : ''}`}
+          title={look.name} onClick={() => applyLook(look.id)}
         >
           <b>{i + 1}</b><span>{look.name}</span>
         </button>
       ))}
-      <button type="button" className="d-look" onClick={() => { setLast(null); if (off) allOn(); else allOff() }}>
+      <button type="button" className="d-look" onClick={off ? allOn : () => void allOff()}>
         <b>0</b><span>{off ? 'All on' : 'All off'}</span>
       </button>
     </div>

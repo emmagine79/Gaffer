@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import json
 import os
 import plistlib
 import re
@@ -168,6 +169,7 @@ def test_ad_hoc_is_a_developer_flag_that_never_makes_a_release_zip_and_never_ins
     assert not (home / "Applications" / "Gaffer.app").exists()
     assert sorted(p.name for p in dist.iterdir()) == ["Gaffer-0.1.0.manifest.txt", "Gaffer.app"]  # no zip
     assert "Signature=adhoc" in sh("codesign", "-dvvv", dist / "Gaffer.app").stderr
+    assert list((tmp_path / "adhoc" / "tmp").iterdir()) == []  # a good build leaves no work folder in TMPDIR either
     assert not (tmp_path / "unused home").exists()  # no identity was made either
 
 
@@ -294,3 +296,53 @@ def test_a_licence_file_named_in_the_metadata_counts(tmp_path):
     done, resources = licences_run(tmp_path, {"COPYRIGHT.txt": "Terms\n"}, metadata_extra="License-File: COPYRIGHT.txt\n")
     assert done.returncode == 0, done.stderr
     assert (resources / "LICENSES" / "toy-1.0" / "COPYRIGHT.txt").is_file()
+
+
+def web_licences_run(tmp_path: Path, package_files: dict[str, str], dev_only_files: dict[str, str] | None = None):
+    """Run `bundle_tool.py web-licences` on a fake web/ whose one production package holds the given files.
+
+    `dev_only_files` makes a second, development-only package with no licence: it must not matter.
+    """
+    web = tmp_path / "web"
+    modules = web / "node_modules"
+    packages = {"toy": ("dependencies", package_files)}
+    if dev_only_files is not None:
+        packages["devtool"] = ("devDependencies", dev_only_files)
+    manifest = {"name": "web", "version": "0.0.0", **{kind: {} for kind in ("dependencies", "devDependencies")}}
+    for name, (kind, files) in packages.items():
+        (modules / name).mkdir(parents=True)
+        (modules / name / "package.json").write_text(f'{{"name": "{name}", "version": "1.0.0", "license": "MIT"}}')
+        for file, text in files.items():
+            (modules / name / file).write_text(text)
+        manifest[kind][name] = "1.0.0"
+    (web / "package.json").write_text(json.dumps(manifest))
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "NOTICE").write_text("Gaffer notice\n")
+    done = sh(sys.executable, "-I", ROOT / "scripts" / "bundle_tool.py", "web-licences", resources, web, check=False)
+    return done, resources
+
+
+def test_a_production_npm_package_ships_its_licence_and_a_dev_only_one_is_not_asked_for(tmp_path):
+    done, resources = web_licences_run(tmp_path, {"LICENSE.md": "MIT text\n"}, dev_only_files={})
+    assert done.returncode == 0, done.stderr
+    assert (resources / "LICENSES" / "npm" / "toy-1.0.0" / "LICENSE.md").read_text() == "MIT text\n"
+    assert "* toy 1.0.0: MIT" in (resources / "NOTICE").read_text()
+    assert not (resources / "LICENSES" / "npm" / "devtool-1.0.0").exists()
+
+
+def test_a_production_npm_package_with_no_licence_file_stops_the_build(tmp_path):
+    done, resources = web_licences_run(tmp_path, {"README.md": "no licence here\n"})
+    assert done.returncode != 0 and "the npm package toy 1.0.0 has no licence file" in done.stderr
+
+
+@pytest.mark.skipif(not (ROOT / "web" / "node_modules").exists(), reason="run npm ci in web/ first")
+def test_every_production_package_of_the_real_web_page_has_its_licence_shipped(tmp_path):
+    """The real web/ tree: whatever package.json lists today (react, motion, ...), none lacks a licence."""
+    resources = tmp_path / "resources"
+    resources.mkdir()
+    (resources / "NOTICE").write_text("Gaffer notice\n")
+    sh(sys.executable, "-I", ROOT / "scripts" / "bundle_tool.py", "web-licences", resources, ROOT / "web")
+    shipped = {p.name for p in (resources / "LICENSES" / "npm").iterdir() if any(p.iterdir())}
+    for library in ("react", "react-dom", "zustand"):  # named in web/package.json
+        assert any(name.startswith(f"{library}-") for name in shipped), sorted(shipped)

@@ -58,35 +58,3 @@ def hold_data_folder(root: Path) -> object:
         handle.close()
         raise AlreadyRunning(f"another Gaffer is already using {root}") from err
     return handle
-
-
-RUNTIME_FILE = "studio.json"
-
-
-def write_runtime(root: Path, *, port: int, url: str) -> None:
-    """Say where this studio is running, so launchers can find, open or replace it."""
-    import json
-    import time
-
-    root.mkdir(parents=True, exist_ok=True)
-    tmp = root / (RUNTIME_FILE + ".tmp")
-    tmp.write_text(json.dumps({"pid": os.getpid(), "port": port, "url": url, "started": time.time()}), encoding="utf-8")
-    os.replace(tmp, root / RUNTIME_FILE)
-
-
-def read_runtime(root: Path) -> dict | None:
-    """Where a studio said it was running, or None. It may have died since: callers check its health."""
-    import json
-
-    try:
-        data = json.loads((root / RUNTIME_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) and isinstance(data.get("port"), int) else None
-
-
-def clear_runtime(root: Path) -> None:
-    try:
-        (root / RUNTIME_FILE).unlink()
-    except OSError:
-        pass

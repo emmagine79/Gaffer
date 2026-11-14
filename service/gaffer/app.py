@@ -307,7 +307,7 @@ def create_app(
                 reply = await dispatch(hub, client, message)
             except (CommandError, TimeoutError) as err:
                 reply = {"type": "error", "of": message.get("type") if isinstance(message, dict) else None,
-                         "text": str(err) or type(err).__name__}
+                         "text": "The light did not answer in time." if isinstance(err, TimeoutError) else str(err)}
             except Exception as err:
                 # The page gets the error's kind, never its message: that can carry a path on this Mac.
                 logger.exception("command failed")

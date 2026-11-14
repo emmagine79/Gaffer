@@ -9,8 +9,8 @@ device it controls. Two checks close that:
   studio's own page is accepted. A program with no Origin header is not a web
   page; it already runs on this computer and can read the keys directly.
 * **Host.** A page on a domain that resolves to 127.0.0.1 (DNS rebinding) still
-  sends its own name as the Host header, so only this machine's names, and the
-  LAN address when ``--lan`` is on, are served.
+  sends its own name as the Host header, so only this machine's names, and its
+  network addresses while phone access is on (phone.py), are served.
 """
 
 from __future__ import annotations

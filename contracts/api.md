@@ -2,6 +2,8 @@
 
 The HTTP and WebSocket contract between the Gaffer service and its clients (the web UI, the Mac shell).
 
+This file covers the routes and WebSocket messages Gaffer added or changed, and the ones the Mac shell and the Kindle page call. The studio page also uses lumen-studio's own WebSocket commands, which are in `service/gaffer/commands.py` and are not listed here.
+
 ## Service
 
 Everything in this section is served by the Python service in `service/`. It listens on `127.0.0.1`, and also on the network while phone access is on (see Phone access). Every route and `/ws` need a cookie: the Mac window's session cookie, or a phone's PIN cookie. Errors are `{"error": "<code>", "message": "<plain words>"}` and never carry a path.
@@ -17,7 +19,7 @@ Every model Gaffer knows, whatever the brand. Godox models come from lumen's tab
       "id": "003A", "radio_id": "003A", "name": "SL60IIBi",
       "kind": "bicolour", "kind_label": "Bi-colour",
       "driver": "godox", "brand": "Godox",
-      "match": {"name_prefix": "PL1", "service": "0000fee9-0000-1000-8000-00805f9b34fb"},
+      "match": {},
       "features": {"white": true, "daylight": false, "colour": false, "channels": false, "tint": false,
                    "gels": "white", "builtin_effects": 0, "fan": false, "battery": false,
                    "smoothness": false, "control_modes": false}
@@ -33,7 +35,7 @@ Every model Gaffer knows, whatever the brand. Godox models come from lumen's tab
 - `id` is the model id. `radio_id` is the same value, kept for older clients.
 - `match` is `{}` for Godox table rows.
 - `skipped` lists model files that could not be used, with a reason in plain words. `file` is `<driver>/<name>.json` and never an absolute path.
-- The WebSocket `hello` message keeps its `models` list (id, name, kind, driver, brand) for the model picker. It leaves out demo stand-ins.
+- The WebSocket `hello` message keeps its `models` list (`radio_id`, `name`, `kind`, `kind_label`, `driver`, `brand`, `reset_steps`) for the model picker. It leaves out demo stand-ins.
 
 ### GET /api/lights
 
@@ -48,7 +50,7 @@ Every saved light with its abilities and its current state: the same `lights`, `
 ```
 
 - Each light is the object `hello` gives, with `online` (reachable or on the mesh) and `held` (true while another controller, such as the brand's own phone app, holds the light's one connection; from the light's driver `status`). The Glass footer reads `held` and `caps.brand` to say, for example, "Wand is held by the Yongnuo app". Only a driver that can tell reports it: Yongnuo does (a refused connection), the demo stand-in does on `demo.held`, and Zhiyun always reports `false` until a live check shows how a held Zhiyun light behaves. The WebSocket `stats` message carries a `held` map (light id to boolean) beside `reachable`, so the page learns of a change within a second. `state` has `power`, `brightness`, `mode` (`cct`, `hsi`, `rgbw`, `gel` or `fx`) and one object per mode. `caps.features` does not change its keys. Beside `held`, each light has `max_mode`: `true` or `false` for a model whose `caps.max_mode` is `true` (the switch exists), and `null` for every other model. The WebSocket `stats` message carries a `max_mode` map (light id to `true`, `false` or `null`) beside `held`, so a reset at power-off reaches the page within a second.
-- `gel_tables` is keyed by the gel table a light uses (its `gel_key`). `network` is the mesh network name, a string, or `null` when no light is saved or the link is dropped.
+- `gel_tables` is keyed by the gel table a light uses (its `gel_key`). `network` is the mesh network name, a string, or `null` when no light is saved. A dropped link does not clear it; each light's `online` shows whether it can be reached.
 
 ### Model files
 
@@ -64,6 +66,8 @@ A model file is one row of lumen's `models.json` plus these keys:
 | `name` | string | Required. Non-empty text. |
 | `min_kelvin`, `max_kelvin` | integer | Required. Whole numbers from 0 up, `min_kelvin` not above `max_kelvin`. |
 | `modes` | list of strings | `cct`, `hsi`, `rgb`, `color_chip`, `effects` and so on. Default empty. |
+| `max_mode` | boolean | Optional. `true` when the light has a Max Mode (turbo) switch the driver can set. Default `false`. |
+| `max_mode_kelvin` | integer | Optional. The colour temperature, in kelvin, the light switches itself to when Max Mode comes on. A whole number above 0. |
 | `match` | object | Optional. `name_prefix` (non-empty text) and `service` (a Bluetooth UUID, 16, 32 or 128 bit). No other keys. |
 | `driver_data` | object | Optional. Whatever the driver needs for this model. Opaque to everything else. |
 | `reset_steps` | list of strings | Optional. How to reset the light's Bluetooth so another app can pair it: a non-empty list, one plain sentence per step, each non-empty. Copy it from the maker's manual or support page and name that page in `reset_source`. Leave it out when no source is known: the add sheet then shows one generic line, never invented steps. |
@@ -160,7 +164,7 @@ Same rules as `service/gaffer/session.py` (SPEC-001):
 
 ### Errors
 
-Every refusal is JSON: `{"error": "<code>", "message": "<plain words>"}`. The message
+Every refusal is JSON: `{"error": "<code>", "message": "<plain words>"}`, except a wrong `Host`, which gets `400` with the plain text `Invalid host header`. The message
 never holds a path, a stack or a raw exception.
 
 ### Routes
@@ -190,14 +194,14 @@ under the menu-bar icon. `window` is the Mac window. `bare` is a phone or browse
 Service to shell:
 
 ```json
-{"type":"look","name":"Talking head"}
+{"type":"look","id":"talking-head","name":"Talking head"}
 ```
 
-- `name` is the current look's name, or `null` when no look is active (for example
+- `id` and `name` are the current look's id and name, or `null` when no look is active (for example
   after All off).
 - The service sends this once as soon as the socket opens, then again every time
-  the current look changes. SPEC-010 builds it. The current `hello` frame does not carry
-  it, and the shell ignores `hello`, so SPEC-010 must send a separate `look` frame.
+  the current look changes. SPEC-010 builds it. The shell ignores `hello`, so it
+  reads this separate `look` frame.
 - The shell ignores any other `type`, so the service may add messages.
 
 The shell sends nothing. If the socket closes, the shell shows no look name and
@@ -229,7 +233,7 @@ Open to a phone without the cookie: `GET /` and `GET /kindle` (each answered wit
 
 ### GET /kindle
 
-The e-ink remote (`service/gaffer/static/kindle.html`): one HTML file with no build step, written in ES5 for the Kindle's browser. It uses only existing routes and messages: `GET` and `POST /api/session`, then `/ws` with `hello`, `lights`, `state`, `stats`, `store`, `look`, `cue`, `error` and `toast` in, and `power`, `set`, `light.max_mode`, `power.all`, `all.off`, `looks.apply`, `cue.go` and `cue.back` out. It keeps the PIN it was given in its own `localStorage` and signs in with it again when the service answers `pin_required`, as after Gaffer restarts. If that PIN is refused, after New PIN on the Mac, it forgets it and asks. It never tries a saved PIN twice.
+The e-ink remote (`service/gaffer/static/kindle.html`): one HTML file with no build step, written in ES5 for the Kindle's browser. It uses only existing routes and messages: `GET` and `POST /api/session`, then `/ws` with `hello`, `lights`, `state`, `stats`, `store`, `look`, `cue`, `error` and `toast` in, and `power`, `set`, `light.max_mode`, `power.all`, `all.off`, `looks.apply`, `cue.go`, `cue.start` and `cue.back` out. It keeps the PIN it was given in its own `localStorage` and signs in with it again when the service answers `pin_required`, as after Gaffer restarts. If that PIN is refused, after New PIN on the Mac, it forgets it and asks. It never tries a saved PIN twice.
 
 ### GET /api/hello
 
@@ -248,11 +252,11 @@ Body `{"pin": "123456"}`, at most 64 bytes. Answers:
 - `200 {"ok": true}` and `Set-Cookie: gaffer_phone=<random token>; HttpOnly; SameSite=Strict; Path=/` (a session cookie, as the Mac window's).
 - `401 wrong_pin`. `403 pin_locked` after 100 wrong PINs on one PIN (NIST SP 800-63B section 5.2.2 allows at most 100 consecutive failures); the right PIN is refused too until New PIN. `403 phone_access_off`. `400 bad_pin` for a body that is not six ASCII digits (not counted as a guess).
 
-The PIN is six digits from a CSPRNG, kept in memory only, compared in constant time.
+The PIN is six digits from a CSPRNG, saved in `phone.json` while phone access is on (see Phone access), compared in constant time.
 
 ### GET /api/phone, POST /api/phone, POST /api/phone/pin
 
-Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request whose `Origin` is another site is `403 wrong_origin`.
+Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A `GET` whose `Origin` is another site is `403 wrong_origin`. A `POST` with another site's `Origin` never gets that far: the check for every request that is not a `GET` (see Looks) answers `403 origin_not_allowed` first.
 
 ```json
 {
@@ -269,7 +273,7 @@ Mac window only: a phone, even one with the PIN, gets `403 mac_only`. A request 
 - `notice` is `null`, or `{"code": "restore_failed" | "not_saved", "message": "<plain words>"}`, for the Mac window to show. `restore_failed`: phone access was on when Gaffer last closed and could not be switched back on at start (it is off now; the message says to turn it on again). `not_saved`: the last switch on, switch off or New PIN could not be saved. The old file is removed or overwritten so an older setting does not come back, and the message says what a restart will do: for a switch on, that it will not last through a restart; for a switch off or New PIN, that phone access will be off after a restart. If the old file could not be cleared either, the message says phone access and the old PIN may come back after a restart. The next switch on, switch off or New PIN clears it. It never carries a path.
 - When off, `pin` is `null`, `targets` is empty and `tailscale` is `null`. `tailscale` is `false` when the `tailscale` tool is missing or not running; then there is no second target.
 - Nothing waits for the `tailscale` tool. Switching on answers at once with `checking: true`, `tailscale: null` and the Wi-Fi target only; the Tailscale target joins when the tool answers. Switching off, or the service stopping, ends the check and kills the tool. `GET /api/phone` also starts a new check (so opening the panel looks again), ending one that is still running. The last good Tailscale answer, and its names in the allowed Host set, stay in use when a check fails, hangs or is replaced, and also across switching access off and on. Only an answer from the tool that Tailscale is not running (or no tool at all) replaces it. `GET /api/phone?wait=1` does not start one; it answers when no check is running, however long that takes.
-- `GET /api/export` is Mac window only (it holds the lights' keys): a phone gets `403 mac_only`. `GET /api/health` carries no folder path.
+- `GET /api/export` is Mac window only: a phone gets `403 mac_only`. `GET /api/health` carries no folder path.
 - A phone that is signed out (New PIN, or access switched off) has its socket closed with code 4401. The page then asks `GET /api/session` again and shows the PIN screen (or "Phone access is off").
 - The network listener takes IPv6 and IPv4 together (`::`, dual-stack), and falls back to IPv4 alone on a Mac with no IPv6.
 - Tailscale addresses come from `tailscale status --json` (`Self.TailscaleIPs`, `Self.DNSName`), found on `PATH` or in `/Applications/Tailscale.app`.
@@ -317,13 +321,13 @@ The service holds one active cue and how many of its steps have run (`step`: 0 i
 
 | Method and path | Answer |
 | --- | --- |
-| `POST /api/cues/{id}/go` | Runs the next step. `200 {"ok":true,"look":{"id","name"},"skipped":[<light ids>],"cue":{"id","name","step","steps","next"}}`. An id other than the active cue starts that cue first, then runs its first step. The id `active` is the running cue (the Mac shell's Next cue shortcut). No cue running: `409 {"error":"no_active_cue"}`. Last step already run: `409 {"error":"cue_finished"}` and nothing changes. Unknown id: `404 {"error":"cue_not_found"}`. No look in the cue can be applied: `409 {"error":"cue_steps_gone"}`. Lights of the next look not reachable: `409 {"error":"lights_unreachable"}`. |
+| `POST /api/cues/{id}/go` | Runs the next step. `200 {"ok":true,"look":{"id","name"},"skipped":[<light ids>],"cue":{"id","name","step","steps","next"}}`. An id other than the active cue starts that cue first, then runs its first step. The id `active` is the running cue (the Mac shell's Next cue shortcut). No cue running: `409 {"error":"no_active_cue"}`. Last step already run: `409 {"error":"cue_finished"}` and nothing changes. A cue with no steps: `409 {"error":"cue_has_no_steps"}`. Unknown id: `404 {"error":"cue_not_found"}`. No look in the cue can be applied: `409 {"error":"cue_steps_gone"}`. Lights of the next look not reachable: `409 {"error":"lights_unreachable"}`. |
 
 WebSocket messages from the page:
 
-- `{"type":"cue.start","id"}`: make the cue active at the top. Answers `{"type":"ack","of":"cue.start","cue":{...}}`.
+- `{"type":"cue.start","id"}`: make the cue active at the top. A cue with no steps is refused with `cue_has_no_steps`. Answers `{"type":"ack","of":"cue.start","cue":{...}}`.
 - `{"type":"cue.go"}`: the same as the route with `active`. Answers `{"type":"ack","of":"cue.go","look","skipped","cue"}`.
-- `{"type":"cue.back"}`: apply the step before the one that ran last. At the first runnable step (every earlier step is gone, or there is none): an `error` message, "Already at the first step."
+- `{"type":"cue.back"}`: apply the step before the one that ran last. At the first runnable step (every earlier step is gone, or there is none): an `error` message, "Already at the first step." (code `cue_at_start`, `409` as a route answer).
 - `{"type":"cue.skip"}`: move past the next runnable step without applying it, for a step whose lights are out of reach. Answers `{"type":"ack","of":"cue.skip","cue":{...}}`. At the end: `cue_finished`. Go and Space never skip by themselves: they retry the step and fail again while its lights are out of reach, and only Skip (the button the bar shows with `blocked`) moves past it. The message names the lights.
 - `{"type":"cues.save","cue":{...}}` and `{"type":"cues.delete","id"}`: save (the `id` may be left out for a new cue, and cannot be `active`) and delete. Deleting the active cue makes no cue active. `store.upsert` and `store.delete` refuse the `cues` collection.
 
@@ -337,7 +341,7 @@ A schedule is `{"id", "name", "enabled", "at": "HH:MM", "days": [0-6], "action":
 
 WebSocket messages from the page:
 
-- `{"type":"schedules.save","schedule":{...}}`: add one, or replace the one with the same `id`. Answers `{"type":"ack","of":"schedules.save","schedule":{...}}`. Refused with `{"type":"error","text":...}` and nothing stored: no name, a name over 80 characters or with control characters, a time that is not `HH:MM`, no days or a day outside 0 to 6, an action other than `look` or `off`, a `look` with no target or a look that does not exist.
+- `{"type":"schedules.save","schedule":{...}}`: add one, or replace the one with the same `id`. Answers `{"type":"ack","of":"schedules.save","schedule":{...}}`. Refused with `{"type":"error","text":...}` and nothing stored: no name, a name over 80 characters or with control characters, a time that is not `HH:MM`, no days or a day outside 0 to 6, an action other than `look` or `off`, a `look` with no target, or an enabled `look` schedule whose look does not exist. A paused schedule (`enabled` false) may name a look that is gone, so it can be saved after the look is deleted; turning it on again needs the look.
 - `{"type":"schedules.delete","id"}`: delete.
 - `store.upsert`, `store.delete` refuse the `schedules` collection; use the messages above.
 - `{"type":"store","collection":"schedules","items":[...]}` goes to every client after a save or delete.

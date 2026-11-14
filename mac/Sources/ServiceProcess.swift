@@ -84,7 +84,22 @@ final class ServiceProcess {
             DispatchQueue.main.async { self?.onEvent(.stopped(status: status)) }
         }
         try process.run()
-        stdinPipe.fileHandleForWriting.write(Data((secret + "\n").utf8))
+        sendSecret()
+    }
+
+    /// Give the service this launch's session secret on its stdin. If the service has already
+    /// gone the pipe is closed and the write fails. The throwing write reports that as an error
+    /// (the old `write(_:)` raises an Objective-C exception Swift cannot catch, and Gaffer
+    /// crashes). The termination handler has already reported the stop, so this only logs.
+    /// It needs SIGPIPE ignored, as main.swift does; otherwise the write ends the process.
+    /// Not private so the check in mac/tests can call it again once the service has exited.
+    func sendSecret() {
+        do {
+            try stdinPipe.fileHandleForWriting.write(contentsOf: Data((secret + "\n").utf8))
+        } catch {
+            NSLog("Gaffer: could not give the light service its session secret (it has already stopped): %@",
+                  String(describing: error))
+        }
     }
 
     /// Stop the service and wait until it has gone.

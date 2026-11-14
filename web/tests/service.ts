@@ -92,5 +92,6 @@ export default async function startService() {
     const timer = setTimeout(killGroup, STOP_MS)
     await exited
     clearTimeout(timer)
+    rmSync(data, { recursive: true, force: true })
   }
 }

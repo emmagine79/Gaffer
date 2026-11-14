@@ -232,6 +232,34 @@ async def test_a_write_from_a_dead_link_cannot_detach_the_new_one(caps):
     assert pump.attached and failures == []
 
 
+async def test_a_job_for_a_dead_link_cannot_detach_the_new_one(caps):
+    release = asyncio.Event()
+    old_link_up = True
+
+    async def in_flight() -> None:
+        await release.wait()
+        raise ConnectionError("Not connected")
+
+    async def queued() -> None:
+        if not old_link_up:
+            raise ConnectionError("Not connected")  # bleak on a closed client
+
+    failures: list[Exception] = []
+    pump = CommandPump(caps, max_rate=1000, sleep=lambda _s: asyncio.sleep(0), on_send_failure=failures.append)
+    task = asyncio.create_task(pump.run())
+    pump.attach(FakeSender())
+    pump.submit_aux(in_flight)
+    await _drain(pump, 2)
+    stale = pump.submit_aux(queued)
+    pump.attach(None)  # the old link drops
+    old_link_up = False
+    pump.attach(FakeSender())  # and a new one comes up while its jobs are still pending
+    release.set()
+    await _drain(pump)
+    task.cancel()
+    assert stale.done() and pump.attached and failures == []
+
+
 async def test_a_godox_light_gets_time_to_switch_on_before_its_level_frame(caps):
     # Captain, 18 Oct 2026: the LA150Bi often needed several presses of On. Its level frame followed the
     # power-on 33 ms later; ha-godox-mesh (MIT) gives a light 0.1 s to finish switching on first.

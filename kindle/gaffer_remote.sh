@@ -7,11 +7,13 @@
 # it is open. Needs firmware 5.16.4 to 5.18.3, which ships the Chromium browser at /usr/bin/chromium
 # and can be jailbroken with Sanctuary. Copy this file, gaffer_remote_stop.sh and
 # gaffer_remote_forget.sh into the Kindle's documents/ folder. They then show in the library as
-# scriptlets. Nothing needs setting: the script finds the Mac on the Wi-Fi by itself.
+# scriptlets. PORT below must match the port Gaffer shows under Phone on the Mac. The script finds the
+# Mac's address by itself.
 #
 # Finding the Mac: it asks the last Mac it used (saved in SAVE_FILE). If that does not answer, it
-# asks every address on the Kindle's own Wi-Fi network for Gaffer's /api/hello, 32 at a time, and
-# keeps the first that answers. While the remote is open it asks again every 30 seconds, so a Mac
+# asks addresses .1 to .254 that share the Kindle's own first three numbers (192.168.100.1 to
+# 192.168.100.254 for a Kindle at 192.168.100.27) for Gaffer's /api/hello, 32 at a time, and keeps
+# the first that answers. If the Mac is on a different network layout, set MAC below. While the remote is open it asks again every 30 seconds, so a Mac
 # that comes back at a new address (after a restart, say) is found and the remote reopens there.
 # The browser always opens http://gaffer.invalid:PORT/kindle, with that name mapped to the address
 # found, so the page's origin, and the PIN it saved, stay the same whatever the Mac's address.
@@ -71,7 +73,7 @@ wifi_network() {
     ifconfig "$WIFI" 2>/dev/null | sed -n 's/.*inet addr:\([0-9]*\.[0-9]*\.[0-9]*\)\.[0-9]*.*/\1/p' | head -n 1
 }
 
-# Ask every address on the Wi-Fi network (.1 to .254), 32 at a time, and print the first that is
+# Ask every address from .1 to .254 on the Kindle's own first three numbers, 32 at a time, and print the first that is
 # Gaffer. Stops early on a power press, so leaving never waits for a whole search.
 search() {
     base=$(wifi_network)
@@ -281,6 +283,7 @@ until mac=$(find_mac); do
     eips 1 1 "Gaffer not found on this Wi-Fi." >/dev/null 2>&1
     eips 1 3 "Is the Mac on, with Phone switched on" >/dev/null 2>&1
     eips 1 4 "in Gaffer? Still looking." >/dev/null 2>&1
+    eips 1 5 "Trying port $PORT." >/dev/null 2>&1
     eips 1 6 "Press the power button to stop." >/dev/null 2>&1
     pause 5
 done

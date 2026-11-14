@@ -7,6 +7,7 @@ Glass lists a light's built-in effects from ``caps.effects`` and starts Gaffer's
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 import pytest
@@ -69,3 +70,13 @@ def test_breathe_moves_a_cct_only_lights_brightness_and_colour_cycle_plays_as_wa
         cycling = states("rainbow", {"period": 1})
         assert {s["mode"] for s in cycling} == {"cct"}
         assert len({s["cct"]["kelvin"] for s in cycling}) > 3
+
+
+def test_a_choice_that_is_not_one_of_its_options_falls_back_to_its_default():
+    # engine.start acknowledged {"style": "nope"}, and then the effect's first frame raised.
+    from gaffer.effects import REGISTRY
+
+    police = REGISTRY["police"]
+    params = police.resolve({"style": "nope"})
+    police.factory(random.Random(0))(0.0, params)
+    assert params["style"] == "us"

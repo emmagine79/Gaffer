@@ -67,15 +67,15 @@ to_trash() {  # move a path to the Trash with a unique name
     mv "$path" "$HOME/.Trash/$(basename "$path")-$(date +%Y%m%d-%H%M%S)-$$"
 }
 
-# The work folder holds a full copy of Python. If the build stops, move it to the Trash (the
-# exit status is kept). A good build has already moved the app and zip out; the few small
-# leftovers stay in TMPDIR, which macOS clears.
-cleanup_after_failure() {
+# The work folder holds a full copy of Python. However the build ends, move it to the Trash
+# (the exit status is kept). A good build has already moved the app, zip and manifest out, so
+# only the throwaway files (the icon, the discarded files) are left in it.
+cleanup_work_folder() {
     local status=$?
-    [[ "$status" == 0 ]] || to_trash "$WORK" || true
+    to_trash "$WORK" || true
     return "$status"
 }
-trap cleanup_after_failure EXIT
+trap cleanup_work_folder EXIT
 
 command -v uv >/dev/null || { echo "uv is needed: https://docs.astral.sh/uv/" >&2; exit 1; }
 command -v npm >/dev/null || { echo "node and npm are needed to build web/: https://nodejs.org/" >&2; exit 1; }
@@ -138,11 +138,14 @@ ditto --noextattr --noqtn "$ROOT/web/dist" "$SITE/gaffer/web"
 
 say "Licences"
 # MIT requires the licence to travel with the code: lumen-studio's NOTICE and the others'
-# LICENSE files, then Python's and each Python package's, all listed in NOTICE.
+# LICENSE files, then Python's, each Python package's and each production npm package's,
+# all listed in NOTICE.
 cp "$ROOT/NOTICE" "$C/Resources/NOTICE"
 ditto --noextattr --noqtn "$ROOT/THIRD-PARTY" "$C/Resources/THIRD-PARTY"
 cp "$ROOT/LICENSE" "$C/Resources/LICENSE"
 "$BUNDLED_PY" -I -B "$ROOT/scripts/bundle_tool.py" licences "$C/Resources" "$PYDIR" "$ROOT"
+# The web page was built above from web/'s production npm packages; their licences go the same way.
+"$BUNDLED_PY" -I -B "$ROOT/scripts/bundle_tool.py" web-licences "$C/Resources" "$ROOT/web"
 
 # Compile once now; the app runs Python with -B so it never writes into the signed bundle.
 # checked-hash .pyc files carry no date, and -s/-p give every file the same recorded path,

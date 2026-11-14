@@ -79,6 +79,31 @@ def test_invalid_command_returns_a_readable_error(client):
         assert _until(ws, lambda m: m["type"] == "error")
 
 
+def test_errors_reach_the_page_in_plain_words(client, monkeypatch):
+    """No validation dump, no link, no path on this Mac, and a timeout is a sentence, not a class name."""
+    from gaffer import app as app_module
+
+    hub = client.app.state.hub
+    with client.websocket_connect("/ws") as ws:
+        _hello(ws)
+        ws.send_json({"type": "set", "patch": {"brightness": 200}})
+        text = _until(ws, lambda m: m["type"] == "error")["text"]
+        assert "brightness" in text and "validation error" not in text and "http" not in text
+
+        async def scan_fails(_seconds):
+            raise OSError("/Users/someone/Library/Application Support/Gaffer/radio is unreadable")
+        monkeypatch.setattr(hub, "scan", scan_fails)
+        ws.send_json({"type": "lights.scan"})
+        text = _until(ws, lambda m: m["type"] == "error")["text"]
+        assert "/Users/" not in text and "unreadable" not in text
+
+        async def times_out(*_args):
+            raise TimeoutError
+        monkeypatch.setattr(app_module, "dispatch", times_out)
+        ws.send_json({"type": "fan", "mode": 1})
+        assert _until(ws, lambda m: m["type"] == "error")["text"] == "The light did not answer in time."
+
+
 def test_effect_runs_and_streams_state(client):
     with client.websocket_connect("/ws") as ws:
         key = _hello(ws)["selected"]
@@ -115,6 +140,17 @@ def test_stream_socket_drives_the_light_without_broadcasts(client):
         stream.send_json({"type": "stream", "frame": {"mode": "hsi", "hue": 270, "sat": 90, "brightness": 64}, "source": "audio"})
         seen = _until(watcher, _state_of(key, lambda s: s["mode"] == "hsi"))
         assert seen["state"]["hsi"]["hue"] == 270 and seen["state"]["brightness"] == 64
+
+
+def test_a_stream_frame_that_is_not_an_object_is_dropped_and_the_stream_goes_on(client):
+    with client.websocket_connect("/ws") as watcher, client.websocket_connect("/ws?role=stream") as stream:
+        key = _hello(watcher)["selected"]
+        stream.send_json({"type": "stream.begin", "source": "audio"})
+        stream.send_json({"type": "stream", "source": "audio", "frame": "x"})
+        stream.send_json({"type": "stream", "source": "audio", "frame": [1]})
+        stream.send_json(_frame(270, 64))
+        seen = _until(watcher, _state_of(key, lambda s: s["mode"] == "hsi"))
+        assert seen["state"]["hsi"]["hue"] == 270
 
 
 def _frame(hue, brightness=50, source="audio", light=None):

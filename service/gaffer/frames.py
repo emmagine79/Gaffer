@@ -93,10 +93,3 @@ def mode_frame(state: LightState, caps: ModelCaps) -> bytes:
         effect_version=caps.effect_version,
         **params,
     )
-
-
-def frames_for(state: LightState, caps: ModelCaps) -> tuple[bytes, ...]:
-    """Frames that take a light from anything to ``state``."""
-    if not state.power:
-        return (POWER_OFF,)
-    return (POWER_ON, mode_frame(state, caps))

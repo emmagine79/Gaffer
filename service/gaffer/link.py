@@ -266,6 +266,7 @@ class LinkManager:
             try:
                 await self._session()
                 self._failures = 0
+                self.detail = ""  # "connected in 1.4s" belongs to the session that just ended
             except Exception as err:  # noqa: BLE001 - any failure means retry with backoff
                 self._failures += 1
                 logger.warning("link attempt failed: %s", err)

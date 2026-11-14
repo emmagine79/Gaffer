@@ -1,18 +1,18 @@
 """Who may use the light service.
 
 The service listens on 127.0.0.1, which keeps other machines out but not web
-pages open in a browser on this Mac. Two checks close that:
+pages open in a browser on this Mac. Three checks close that:
 
 * Host. A page on a domain that resolves to 127.0.0.1 (DNS rebinding) still sends
   its own name as the Host header, so only 127.0.0.1 and localhost are served
-  (Starlette's TrustedHostMiddleware, which ignores the port).
+  (SessionGate checks the Host itself, ignoring the port).
 * Session secret. Gaffer makes a random secret at each launch and hands it to the
   service on stdin. Its window opens /session?key=<secret> once; that sets the
   secret as an HttpOnly, SameSite=Strict cookie and the link stops working. Every
   other route, and the /ws socket that drives the lights, needs the cookie, so another
   site's page can't use the API even through 127.0.0.1.
-* Origin. On top of the cookie, lumen-studio's guard.py (kept as is) makes /ws accept
-  only the studio's own page.
+* Origin. On top of the cookie, guard.py (which also holds the checks for phones) makes /ws
+  accept only the studio's own page.
 
 Phone access (SPEC-015, phone.py) adds a second kind of caller. A request is the Mac window's
 own only when it comes from this Mac AND names this Mac (127.0.0.1 or localhost) in its Host
@@ -192,7 +192,7 @@ def _page_is_401(path: str, send: Send) -> Send:
 
 
 def protect(app: ASGIApp, secret: str, phone: PhoneAccess | None = None) -> ASGIApp:
-    """Wrap the app: the Host check runs first, then the session check."""
+    """Wrap the app in one SessionGate, which checks the Host and then the session."""
     return SessionGate(app, secret, phone)
 
 

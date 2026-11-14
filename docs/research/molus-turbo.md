@@ -1,6 +1,8 @@
 # MOLUS G200 turbo mode
 
-Research only, 18 Oct 2026. Nothing is built yet. Captain asked for this in [FRICTION.md](../FRICTION.md) item 8.
+Research only, 18 Oct 2026. Captain asked for this in [FRICTION.md](../FRICTION.md) item 8.
+
+Status: built since this note was written. PR #28 added the Max switch, and PRs #29 to #32 followed. Captain confirmed on the real G200 on 18 Oct that Max works and that the op byte is `01` (FRICTION.md item 8). The note below is the research as it stood before the build, and is kept as it was except where marked.
 
 ## What it does
 
@@ -23,7 +25,7 @@ The command id is most likely **`0x1009`**:
 
 - `PackMaxModeSet` loads `0x1009` and writes one byte: 1 for on, 0 for off. A read uses the same command.
 - The MIT repo `aaditagrawal/zhiyun-light-control` also names `0x1009` `MAX_MODE`, but has no code that sets it.
-- Gaffer's `drivers/zhiyun/protocol.py` currently calls `0x1009` `QUERY_BRIGHTNESS`. That name looks wrong.
+- Gaffer's `drivers/zhiyun/protocol.py` called `0x1009` `QUERY_BRIGHTNESS` when this was written. That name was wrong, and the constant is now `MAX_MODE`.
 
 ## What Gaffer would need
 

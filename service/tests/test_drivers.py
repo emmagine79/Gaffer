@@ -341,6 +341,15 @@ async def test_a_light_whose_model_is_gone_is_never_sent_godox_bytes(tmp_path, d
         await hub.stop()
 
 
+async def test_identifying_a_light_whose_driver_is_not_installed_fails(tmp_path, demo_models):
+    hub = await _studio(tmp_path, orphan_model="GONE-MODEL")
+    try:
+        with pytest.raises(hub_module.HubError, match="Could not flash Orphan"):
+            await hub.identify(_light(hub, "Orphan").id)
+    finally:
+        await hub.stop()
+
+
 async def test_a_light_given_another_brands_model_is_let_go_by_the_godox_pump(tmp_path, demo_models):
     hub = await _studio(tmp_path)
     try:
@@ -445,7 +454,7 @@ async def test_the_old_driver_lets_go_before_the_new_one_connects_and_the_light_
             log.append("demo.release-done")
 
         hub.registry.get("demo").forget_light = slow_release
-        zhiyun, tasks_before = _light(hub, "Zhiyun panel"), len(hub._tasks)
+        zhiyun, tasks_before = _light(hub, "Zhiyun panel"), set(hub._tasks)
         hub.set_model(zhiyun.id, "REC-1")
         for _ in range(400):
             if "rec.apply" in log:
@@ -453,7 +462,7 @@ async def test_the_old_driver_lets_go_before_the_new_one_connects_and_the_light_
             await asyncio.sleep(0.01)
         await asyncio.sleep(0.1)  # time for any second write to show itself
         assert log == ["demo.release-start", "demo.release-done", "rec.connect-start", "rec.connect-done", "rec.apply"]
-        assert len(hub._tasks) == tasks_before  # the hand-over task is not kept after it ends
+        assert set(hub._tasks) <= tasks_before  # the hand-over task is not kept after it ends
     finally:
         hub.registry.drivers.pop("rec", None)
         await hub.stop()

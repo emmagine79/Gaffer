@@ -149,7 +149,9 @@ def test_the_routes_the_mac_shell_calls(shell):
     ids = [x["id"] for x in shell.get("/api/looks").json()["looks"]]
     for body in ({"name": " "}, {"name": "x" * 81}, {"name": "a\nb"}, {"name": "ok", "fade_seconds": 61}, {"name": "ok", "fade_seconds": True},
                  {"name": "ok", "id": "constructor"}, {"name": "ok", "id": "../x"}, {"name": "ok", "lights": {"nope": {}}},
-                 {"name": "ok", "lights": {next(iter(_lights(shell).values()))["id"]: {"mode": "nonsense"}}}):
+                 {"name": "ok", "lights": {next(iter(_lights(shell).values()))["id"]: {"mode": "nonsense"}}},
+                 # readable, but no frame can carry it: it used to be stored and then dropped by the pump
+                 {"name": "ok", "lights": {_lights(shell)["Key light"]["id"]: {"mode": "gel", "gel": {"version": 2, "brand": 1, "number": 1, "hex": "zz"}}}}):
         refused = shell.post("/api/looks", json=body)
         assert refused.status_code == 400 and refused.json()["error"] == "look_not_valid", body
         assert not any(p in refused.text for p in ("/Users/", "/private/", "/var/", "Traceback")), refused.text
@@ -203,6 +205,15 @@ def test_an_unreadable_entry_in_looks_json_is_neither_overwritten_nor_fatal(hand
         while ws.receive_json()["type"] != "store":
             pass
     assert json.loads(hand_edited.file.read_text(encoding="utf-8")) == HAND_EDITED  # the hand-made entries are as they were
+
+
+def test_saving_a_look_beside_an_unreadable_looks_json_keeps_the_old_file(tmp_path):
+    # It used to be read as empty, and the first save overwrote every look in it.
+    (tmp_path / "looks.json").write_text('[{"id": "night", "name": "Night"', encoding="utf-8")
+    app = create_app(demo=True, data_dir=tmp_path)
+    with TestClient(protect(app, SECRET), base_url="http://127.0.0.1", cookies={COOKIE: SECRET}) as client:
+        assert client.post("/api/looks", json={"name": "Day"}).status_code == 200
+    assert [p.read_text(encoding="utf-8") for p in tmp_path.glob("looks.json.corrupt-*")] == ['[{"id": "night", "name": "Night"']
 
 
 def test_a_light_whose_values_cannot_be_worked_out_is_skipped_and_the_others_still_move(shell):

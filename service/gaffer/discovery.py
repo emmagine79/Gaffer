@@ -22,7 +22,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,6 @@ class Scanner:
 
     def __init__(self) -> None:
         self.devices: dict[str, Any] = {}
-        self.busy = False
 
     async def scan(self, seconds: float, on_found: Callable[[Nearby], None] | None = None,
                    on_other: Callable[[Any, Any], None] | None = None) -> list[Nearby]:
@@ -136,15 +135,12 @@ class Scanner:
             if previous is not None and seen.radio_id is None:
                 seen = Nearby(seen.address, seen.name or previous.name, seen.rssi, seen.state,
                               previous.radio_id, seen.network_id or previous.network_id, seen.seen_at)
-            changed = previous != seen
+            # A light advertises several times a second; only a change other than its strength is news.
+            changed = previous is None or replace(previous, rssi=seen.rssi, seen_at=seen.seen_at) != seen
             found[seen.address] = seen
             if changed and on_found is not None:
                 on_found(seen)
 
-        self.busy = True
-        try:
-            async with BleakScanner(detection_callback=callback):
-                await asyncio.sleep(seconds)
-        finally:
-            self.busy = False
+        async with BleakScanner(detection_callback=callback):
+            await asyncio.sleep(seconds)
         return sorted(found.values(), key=lambda n: -(n.rssi or -999))

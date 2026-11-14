@@ -149,6 +149,7 @@
   var order = [];       // light ids in the service's order
   var rows = {};        // id -> {root, power, level, kelvin, ...}
   var looksList = [];
+  var cueNow = null;    // the active cue, as the service last sent it
   var socket = null;
   var retry = 0;
   var rid = 0;
@@ -381,6 +382,7 @@
 
   function setCue(m) {
     var active = !!m.id;
+    cueNow = active ? m : null;
     $('cue').hidden = !active;
     if (!active) return;
     setText($('cueGo'), m.next ? 'Go: ' + m.next.name : 'Start again');
@@ -645,7 +647,10 @@
 
   $('allOn').onclick = function () { send({ type: 'power.all', on: true }); };
   $('allOff').onclick = function () { send({ type: 'all.off' }); };
-  $('cueGo').onclick = function () { send({ type: 'cue.go' }); };
+  $('cueGo').onclick = function () {
+    if (cueNow && !cueNow.next) send({ type: 'cue.start', id: cueNow.id });
+    else send({ type: 'cue.go' });
+  };
   $('cueBack').onclick = function () { send({ type: 'cue.back' }); };
   $('retry').onclick = function () { retry = 0; check(); };
   // Exit closes the browser. The launcher (kindle/gaffer_remote.sh) sees the browser close and gives

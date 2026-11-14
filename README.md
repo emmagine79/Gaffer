@@ -8,7 +8,7 @@ Version 1 supports:
 - Zhiyun ZY Vega lights (including the MOLUS G200)
 - Yongnuo Bluetooth lights (including the YN150Li)
 
-Gaffer is being built. Today it scans for nearby lights and shows them by brand, and it carries the Godox studio from lumen-studio (colour, white, effects, scenes, schedules). That control has been tested in demo mode and with the library's own tests, not yet on real lights, and Zhiyun and Yongnuo control is not built yet.
+Gaffer is still being built. It controls Godox, Zhiyun and Yongnuo lights: on and off, brightness and colour temperature, plus looks, groups, cues, schedules, effects, phone access and a Max switch for the MOLUS G200. It has been tried on real lights for three models: the Godox LA150Bi, the Zhiyun MOLUS G200 and the Yongnuo YN150. Every other model is untried on a real light.
 
 ## Install Gaffer
 
@@ -72,6 +72,10 @@ The service writes `~/Library/Logs/Gaffer/service.log`. Each time Gaffer starts,
 | `mac/` | Swift shell: menu-bar item and a window with a web view (`mac/Sources`), `Info.plist`, icon drawing (`mac/Icon`), app tests (`mac/tests`) |
 | `service/` | Python light service (FastAPI and bleak), the `gaffer` package: Bluetooth scan and brand tagging, the lights engine (from lumen-studio), HTTP API and WebSocket. `service/packages/godox-mesh-bt` is the Godox mesh library |
 | `web/` | The web interface (React and Vite, from lumen-studio). The build puts `web/dist` inside the app and the service serves it |
+| `contracts/` | The HTTP and WebSocket contract between the service and its clients (`api.md`) |
+| `docs/` | Install screenshots (`docs/install`), the friction log (`docs/FRICTION.md`), the live-check sheet (`docs/LIVE-CHECK.md`) and research notes (`docs/research`) |
+| `kindle/` | The launcher for using a jailbroken Kindle as a remote |
+| `site/` | The project website |
 | `THIRD-PARTY/` | Licences and notices for code taken from other projects |
 | `scripts/build_app.sh` | Builds `dist/Gaffer.app` |
 
@@ -79,16 +83,18 @@ The Swift shell starts the bundled Python service as its child process on `127.0
 
 ### Who can use the service
 
-The service listens on `127.0.0.1` only and refuses any Host header other than `127.0.0.1` or `localhost`, so a web page can't reach it by DNS rebinding. Gaffer makes a random secret at each launch and passes it to the service on stdin. Gaffer's window signs in once with `/session?key=<secret>`, which sets an HttpOnly, SameSite=Strict cookie; every other route answers 401 without it. Local tools can find the port and secret in `~/Library/Application Support/Gaffer/run/service-<pid>.json` (readable only by you, removed when the service stops). Phone access with a PIN comes later.
+The service listens on `127.0.0.1` only until you switch phone access on (see below). It refuses any Host header other than `127.0.0.1` or `localhost` on that address, so a web page can't reach it by DNS rebinding. Gaffer makes a random secret at each launch and passes it to the service on stdin. Gaffer's window signs in once with `/session?key=<secret>`, which sets an HttpOnly, SameSite=Strict cookie; every other route answers 401 without it. Local tools can find the port and secret in `~/Library/Application Support/Gaffer/run/service-<pid>.json` (readable only by you, removed when the service stops).
+
+Phone access is off until you switch it on in the Mac window. While it is on, the service also listens on the network, and a phone gets in with a six-digit PIN (`service/gaffer/phone.py`). It stays on with the same PIN after a restart, until you switch it off. The rules are in [contracts/api.md](contracts/api.md).
 
 ### Service API
 
-All routes need the session cookie.
+Nearly every route needs a cookie: the Mac window's session cookie, or a phone's PIN cookie. The few open to a phone without one are listed in [contracts/api.md](contracts/api.md).
 
 | Route | What it returns |
 | --- | --- |
 | `GET /api/health` | `{"ok": true, "service": "gaffer", "demo": false, ...}` when the service is running |
-| `GET /api/bluetooth` | Bluetooth permission: `not_determined`, `allowed`, `denied` or `restricted` |
+| `GET /api/bluetooth` | Bluetooth permission: `not_determined`, `allowed`, `denied`, `restricted` or `unknown` |
 | `GET /api/scan?seconds=6` | Nearby devices with name, signal, brand family and the advert data that matched. Scans 2 to 20 seconds |
 | `GET /scan` | A plain page that runs the scan and lists what it hears |
 | `GET /` | The web interface |
@@ -100,7 +106,7 @@ All routes need the session cookie.
 ## Tests
 
 ```sh
-cd service && uv run --frozen pytest                         # the service: lumen-studio's suite and the scan tagging
+cd service && uv run --frozen pytest                         # the service: lumen-studio's suite plus Gaffer's own tests (drivers, scan tagging, phone access, looks, cues, schedules, Kindle)
 scripts/build_app.sh --no-install
 uv run --project service --frozen pytest mac/tests           # launches the built app
 uv run --project service --frozen pytest mac/tests/test_build.py mac/tests/test_quit.py   # build, quit and log checks: no app is opened
@@ -110,12 +116,14 @@ The app tests launch Gaffer from a folder with a space in its path, and need Blu
 
 ## Credits
 
-Gaffer builds on these MIT-licensed projects:
+Gaffer builds on these open-source projects. All are MIT-licensed except segno, which is BSD-3-Clause:
 
 - [Rkcr7/lumen-studio](https://github.com/Rkcr7/lumen-studio): Godox driver, model table, effects, scenes, schedules and cues. The service and web interface start from a copy of it (see [NOTICE](NOTICE))
 - [didim99/HA-Zhiyun-Light](https://github.com/didim99/HA-Zhiyun-Light): Zhiyun protocol, and the Zhiyun light name prefixes used by the scan
 - [aaditagrawal/zhiyun-light-control](https://github.com/aaditagrawal/zhiyun-light-control): Zhiyun protocol
 - [asidjwiaijd/yongnuo-light-control](https://github.com/asidjwiaijd/yongnuo-light-control): Yongnuo protocol, and the Yongnuo name rule used by the scan
+- [SegulaLabs/ha-godox-ble-mesh](https://github.com/SegulaLabs/ha-godox-ble-mesh): the reader for the Godox app's mesh export
+- [heuer/segno](https://github.com/heuer/segno) (BSD-3-Clause): draws the QR code that phones scan, used as a library
 
 Each one's licence is kept with the code taken from it, in `THIRD-PARTY/`. [NOTICE](NOTICE) lists the credits, including godox-ul60bi-bt and ha-godox-mesh, which lumen-studio is built on.
 

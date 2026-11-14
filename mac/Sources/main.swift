@@ -252,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let controller = NSViewController()
         controller.view = panel
         popover.contentViewController = controller
-        popover.contentSize = NSSize(width: 400, height: 560)  // 400 pt wide as in design/ROUND4.md
+        popover.contentSize = NSSize(width: 400, height: 560)
         popover.behavior = .transient
 
         let win = NSWindow(
@@ -338,7 +338,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
     }
 }
 
-// A write to the service's stdin after it has gone must not end Gaffer.
+// With SIGPIPE ignored, a write to the service's stdin after it has gone fails with an error
+// that ServiceProcess.sendSecret handles, instead of the signal ending Gaffer.
 signal(SIGPIPE, SIG_IGN)
 let app = NSApplication.shared
 let delegate = AppDelegate()

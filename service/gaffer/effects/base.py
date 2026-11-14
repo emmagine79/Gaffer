@@ -101,7 +101,7 @@ class Effect:
         return {p.key: (list(p.default) if p.kind == "palette" else p.default) for p in self.params}
 
     def resolve(self, params: dict[str, Any] | None) -> dict[str, Any]:
-        """Defaults overlaid with ``params``, numbers clamped to their ranges."""
+        """Defaults overlaid with ``params``, numbers clamped to their ranges, a choice that is not an option dropped."""
         merged = self.defaults()
         for p in self.params:
             if params is None or p.key not in params:
@@ -123,6 +123,8 @@ class Effect:
                 value = [str(c) for c in value if _is_hex(c)][: int(p.max or 12)] or merged[p.key]
             elif p.kind == "text":
                 value = str(value)[:80]
+            elif p.kind == "choice":
+                value = value if any(o["value"] == value for o in p.options) else merged[p.key]
             merged[p.key] = value
         return merged
 

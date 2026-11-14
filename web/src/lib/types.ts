@@ -201,7 +201,8 @@ export interface LightView {
   online: boolean
 }
 
-export interface ModelRow { radio_id: string; name: string; kind: LightKind; kind_label: string }
+/** `reset_steps` is empty when no manufacturer source for the reset is known. */
+export interface ModelRow { radio_id: string; name: string; kind: LightKind; kind_label: string; driver: string; brand: string; reset_steps: string[] }
 
 /** `new` is a light of a brand with nothing to pair (Zhiyun, Yongnuo) that is not saved yet. */
 export type Relation = 'saved' | 'unpaired' | 'your-network' | 'elsewhere' | 'new'

@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'motion/react'
 import { ArrowRight, Check, FileKey2, Link2, Plus, RefreshCw, RotateCcw, X, Zap } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { ModelPicker } from '../components/ModelPicker'
-import type { ModelRow, Nearby } from '../lib/types'
+import type { Nearby } from '../lib/types'
 import { useStudio } from '../state/store'
 import { KIND_SHORT, LightGlyph, formOf } from '../visuals/LightGlyph'
 import { GodoxImport } from './GodoxImport'
@@ -42,9 +42,6 @@ function readKeys(file: File): Promise<Record<string, unknown>> {
 /** Shown when no manufacturer source is known for a model: never invented steps. */
 const GENERIC_RESET = "Reset the light's Bluetooth as its manual describes, then press Pair."
 
-/** A model row as the service sends it: `reset_steps` is empty when no source is known. */
-type ModelWithReset = ModelRow & { reset_steps?: string[] }
-
 type Flash = 'idle' | 'flashing' | 'done' | 'failed'
 /** `added` is true for a light saved with `lights.add` (Zhiyun, Yongnuo): only that can be undone with "Not this one". */
 type Stage = { at: 'list' } | { at: 'godox' } | { at: 'reset'; n: Nearby; check: 'idle' | 'checking' | 'still' } | { at: 'pick'; n: Nearby } | { at: 'pair'; n: Nearby } | { at: 'made'; id: string; added: boolean }
@@ -80,7 +77,7 @@ export function AddLight() {
   const scanning = useStudio((s) => s.scanning)
   const pairing = useStudio((s) => s.pairing)
   const lights = useStudio((s) => s.lights)
-  const models = useStudio((s) => s.models) as ModelWithReset[]
+  const models = useStudio((s) => s.models)
   const request = useStudio((s) => s.request)
   const send = useStudio((s) => s.send)
   const toast = useStudio((s) => s.toast)

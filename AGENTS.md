@@ -9,8 +9,11 @@ Gaffer is an open-source (MIT) Mac app that controls studio lights from differen
 | `service/` | Python light service, package `gaffer` (`service/gaffer/`), built on lumen-studio. `service/packages/godox-mesh-bt` is the Godox mesh library, kept unchanged. Tests in `service/tests/` |
 | `web/` | Web interface (React and Vite). `npm run build` writes `web/dist`, which the service serves |
 | `mac/` | Swift menu-bar shell with a WKWebView, `Info.plist`, icon, and the tests that launch the built app (`mac/tests/`) |
-| `contracts/` | The HTTP and WebSocket contract between the service and its clients (`api.md`). Not created yet; a later card adds it |
+| `contracts/` | The HTTP and WebSocket contract between the service and its clients (`api.md`) |
 | `scripts/` | `build_app.sh` builds `dist/Gaffer.app` and the release zip; `sign_app.sh` signs it; `bundle_tool.py` prepares the bundled Python and its licences |
+| `kindle/` | `gaffer_remote.sh`, the launcher for a jailbroken Kindle that shows the e-ink remote the service serves at `/kindle`. Its test is `service/tests/test_kindle_launcher.py` |
+| `docs/` | Install screenshots, the live-check sheet, the friction log (`FRICTION.md`) and research notes |
+| `site/` | The project website (`index.html`, `style.css`) |
 | `backlog/` | Cards for the work. The conductor owns it; builders do not edit it |
 | `THIRD-PARTY/`, `NOTICE` | Licences and credits for code taken from other projects |
 

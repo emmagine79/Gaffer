@@ -41,6 +41,7 @@ class GodoxDriver(Driver):
         super().__init__(context)
         self.pump = CommandPump(model_caps(""), max_rate=max_rate, on_send_failure=on_send_failure)
         self.controller: Any = None
+        self.linked = asyncio.Event()  # set while the mesh link is up
         self._task: asyncio.Task[Any] | None = None
         self._heard: dict[str, float] = {}
         self._applied: dict[str, LightState] = {}
@@ -111,6 +112,7 @@ class GodoxDriver(Driver):
     def attach_controller(self, controller: Any, after_send: Callable[[bytes, int | None], None]) -> None:
         """The link came up: send queued frames through ``controller``; call ``after_send`` per frame."""
         self.controller = controller
+        self.linked.set()
 
         async def send(frame: bytes, node: int | None) -> None:
             await controller.send_payload(frame, dst=node)
@@ -123,6 +125,7 @@ class GodoxDriver(Driver):
 
     def detach_controller(self) -> None:
         self.controller = None
+        self.linked.clear()
         self.pump.attach(None)
 
     def run_aux(self, job: AuxJob) -> asyncio.Future[Any]:

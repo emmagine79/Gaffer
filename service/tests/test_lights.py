@@ -110,6 +110,14 @@ def test_a_corrupt_library_file_is_set_aside_not_lost(tmp_path):
     assert list(tmp_path.glob("lights.json.corrupt-*"))
 
 
+@pytest.mark.parametrize("text", ['[{"id": "x"}]', '{"lights": [], "retired": {"net": [["x", 1]]}}'])
+def test_a_lights_file_of_the_wrong_shape_is_set_aside_and_gaffer_still_starts(tmp_path, text):
+    (tmp_path / "lights.json").write_text(text, encoding="utf-8")
+    library = LightLibrary(tmp_path)
+    assert library.lights == ()
+    assert [p.read_text(encoding="utf-8") for p in tmp_path.glob("lights.json.corrupt-*")] == [text]
+
+
 def test_keys_never_appear_in_the_public_view(library):
     light = library.import_keys(_keys(), address="AA:00", name="A", radio_id="008F")
     text = json.dumps(library.public())

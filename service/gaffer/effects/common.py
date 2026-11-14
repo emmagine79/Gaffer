@@ -6,7 +6,7 @@ import math
 import random
 from typing import Any
 
-from ..colormath import ValueNoise, hex_to_hs, kelvin_to_hs, lerp, lerp_hue
+from ..colormath import ValueNoise, hex_to_hs, lerp, lerp_hue
 from .base import Frame, Param, cct, choice, color, hsi, kelvin
 
 
@@ -51,12 +51,6 @@ def pingpong(t: float, period: float) -> float:
         return 0.0
     phase = (t / period) % 1.0
     return 1.0 - abs(2.0 * phase - 1.0)
-
-
-def kelvin_hsi(k: float, brightness: float) -> Frame:
-    """A white expressed as colour, for blending a white into a colour."""
-    hue, sat = kelvin_to_hs(k)
-    return hsi(hue, sat, brightness)
 
 
 class Poisson:

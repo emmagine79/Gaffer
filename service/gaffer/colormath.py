@@ -28,10 +28,6 @@ def hex_to_rgb(value: str) -> tuple[float, float, float]:
     return tuple(int(text[i : i + 2], 16) / 255.0 for i in (0, 2, 4))  # type: ignore[return-value]
 
 
-def rgb_to_hex(rgb: tuple[float, float, float]) -> str:
-    return "#" + "".join(f"{round(clamp(c, 0, 1) * 255):02x}" for c in rgb)
-
-
 def rgb_to_hsv(rgb: tuple[float, float, float]) -> tuple[float, float, float]:
     """Return hue 0-360, saturation 0-100, value 0-100."""
     r, g, b = rgb

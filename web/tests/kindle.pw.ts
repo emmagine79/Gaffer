@@ -271,3 +271,41 @@ test('after too many wrong PINs the Kindle says so, and Try again asks for the n
   await kindle.close()
   await window.close()
 })
+
+test('at the end of a cue the Kindle button reads Start again and starts the cue over', async ({ browser }) => {
+  const window = await macWindow(browser)
+  const pin = await switchOn(window)
+  const light = await firstLight(window)
+  const saved = await window.request.post(`${mac()}/api/looks`, { data: { name: 'Only look', fade_seconds: 0, lights: { [light.id]: { power: true, brightness: 40 } } } })
+  expect(saved.ok()).toBe(true)
+  const mine = await window.newPage()
+  await mine.goto(`${mac()}/`)
+  await mine.evaluate(async () => {
+    const ws = new WebSocket(`ws://${location.host}/ws`)
+    const hello = await new Promise<{ store: { looks: { id: string; name: string }[] } }>((open) => {
+      ws.onmessage = (e) => { const m = JSON.parse(e.data); if (m.type === 'hello') open(m) }
+    })
+    const steps = hello.store.looks.filter((l) => l.name === 'Only look').map((l) => ({ look_id: l.id, fade_seconds: null }))
+    ws.send(JSON.stringify({ type: 'cues.save', cue: { id: 'kindle-cue', name: 'Kindle cue', steps } }))
+    await new Promise((done) => setTimeout(done, 300))
+    ws.send(JSON.stringify({ type: 'cue.start', id: 'kindle-cue' }))
+    await new Promise((done) => setTimeout(done, 300))
+    ws.close()
+  })
+
+  const kindle = await browser.newContext({ viewport: KINDLE })
+  const page = await kindle.newPage()
+  await page.goto(remote())
+  await typePin(page, pin)
+  await expect(page.getByRole('status')).toHaveText('Connected')
+
+  await page.getByRole('button', { name: 'Go: Only look' }).click()
+  const again = page.getByRole('button', { name: 'Start again' })
+  await expect(again).toBeVisible()
+  await again.click()
+  await expect(page.getByRole('button', { name: 'Go: Only look' })).toBeVisible()
+  await expect(page.getByText('That was the last step')).toHaveCount(0)
+
+  await kindle.close()
+  await window.close()
+})

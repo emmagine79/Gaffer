@@ -13,8 +13,6 @@
 
 :root {
   /* Base palette */
-  --seamless: 230 227 220;   /* lit paper, before the light tints it */
-  --room: #2b2c30;           /* the unlit studio */
   --anodized: #1e1f23;       /* gear: panels and bars */
   --anodized-2: #26272c;     /* raised controls on gear */
   --anodized-3: #303137;     /* hover, wells */
@@ -31,27 +29,20 @@
   --live-soft: rgb(var(--lr) var(--lg) var(--lb) / 0.16);
   --live-glow: rgb(var(--lr) var(--lg) var(--lb) / calc(0.25 + var(--ll) * 0.45));
 
-  /* Type: Archivo across its width axis */
-  --font: 'Archivo Variable', 'Archivo', system-ui, sans-serif;
+  /* Type */
   --fs-xs: 0.75rem;
   --fs-sm: 0.84rem;
   --fs-md: 0.95rem;
   --fs-lg: 1.17rem;
   --fs-xl: 1.46rem;
-  --fs-2xl: 1.83rem;
   --fs-3xl: 2.6rem;
-  --fs-4xl: 3.6rem;
-  --wide: 125%;
   --semi-wide: 112%;
-  --narrow: 82%;
 
   /* Shape: radius follows hierarchy, not one value everywhere */
   --r-panel: 18px;
   --r-control: 10px;
   --r-chip: 5px;
 
-  --rail-w: 212px;
-  --master-h: 84px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
   --t-light: 180ms;
 

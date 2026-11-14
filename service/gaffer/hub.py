@@ -74,6 +74,8 @@ LINK_STOP_SECONDS = 8.0
 #: disconnect (DISCONNECT_TIMEOUT_S, 5 s), plus the pulse itself, which every driver ends in under 5 s
 #: (Godox 4 x 0.45 s, Zhiyun 4 x 0.35 s, Yongnuo 3 x 0.3 s, each with its write).
 IDENTIFY_SECONDS = 20.0 + 5.0 + 5.0
+#: Shown when a network's keys file cannot be read; the error itself may name a path on this Mac, so it is only logged.
+KEYS_UNREADABLE = "Could not open this network's keys."
 #: A light's changed state is saved this long after the change (and at once when the hub stops).
 SAVE_AFTER_SECONDS = 2.0
 #: Engine kinds that animate a light; a group mirrors them only when "effects" is synced.
@@ -225,7 +227,11 @@ class Hub:
             self._add_fixture(light)
         active = library.active or (library.lights[0] if library.lights else None)
         self.network: str | None = active.network if active else None
-        self.link: Any = self._make_link()
+        try:
+            self.link: Any = self._make_link()
+        except Exception:
+            logger.exception("could not open network %s", self.network)
+            self.link = NoLink(self._link_changed, KEYS_UNREADABLE)
 
     # -- fixtures --------------------------------------------------------------------
 
@@ -363,10 +369,6 @@ class Hub:
             relay_ttl=lambda: int(self.store.settings.get("relay_ttl", 5)),
         )
 
-    def _start_link(self) -> None:
-        self.link = self._make_link()
-        self._link_task = asyncio.create_task(self.link.run())
-
     async def _stop_link(self) -> None:
         self.link.stop()
         task, self._link_task = self._link_task, None
@@ -395,9 +397,9 @@ class Hub:
                 fixture.adopting = True  # read each light again before writing it
             try:
                 self.link = self._make_link()
-            except Exception as err:
+            except Exception:
                 logger.exception("could not open network %s", network)
-                self.link = NoLink(self._link_changed, f"Could not open this network's keys: {err}")
+                self.link = NoLink(self._link_changed, KEYS_UNREADABLE)
             self._link_task = asyncio.create_task(self.link.run())
 
     async def _move_to_network(self, network: str | None) -> None:
@@ -469,11 +471,11 @@ class Hub:
         for fixture in by_node.values():
             fixture.sync.reset()
             if fixture.adopting:
-                asyncio.create_task(self._adopt(fixture))
+                self._spawn(self._adopt(fixture))
             else:
                 # Reconnect: the light may have lost power; re-assert its look.
                 self.godox.apply(fixture.light, fixture.state)
-        asyncio.create_task(self._read_firmware())
+        self._spawn(self._read_firmware())
         self._log("link", "connected")
 
     def _on_disconnected(self) -> None:
@@ -514,13 +516,16 @@ class Hub:
         """First contact: take the light's real state instead of overwriting it."""
         started = time.monotonic()
         controller = self.controller
+        earlier_cct, earlier_hsi = fixture.readback["cct"], fixture.readback["hsi"]
         records = (RECORD_CCT, RECORD_HSI) if fixture.caps.has_colour else (RECORD_CCT,)
         for record in records:
             await self._request(fixture, record)
         await asyncio.sleep(0.8)
         if self.controller is not controller or not self.on_mesh(fixture) or fixture.id not in self.fixtures:
             return  # the link moved on while we were reading; this answer belongs to no one now
-        cct, hsi = fixture.readback["cct"], fixture.readback["hsi"]
+        # Each reply stores a new dict, so a reading still the same object came before this adopt: not an answer.
+        cct = fixture.readback["cct"] if fixture.readback["cct"] is not earlier_cct else None
+        hsi = fixture.readback["hsi"] if fixture.readback["hsi"] is not earlier_hsi else None
         patch: dict[str, Any] | None = None
         # Only CCT and HSI have a live record; for RGBW, gel and effects the
         # saved state stays the best knowledge there is.
@@ -862,6 +867,7 @@ class Hub:
             follower = self.fixtures.get(light_id)
             if follower is None or follower is leader:
                 continue
+            follower.stream_source = None
             follower.engine.stop(restore=False)
             self.set_state(follower, mirror(leader.state, follower.state, chosen, follower.caps,
                                             leader_caps=leader.caps), "group", mirror=False)
@@ -922,7 +928,10 @@ class Hub:
             found(Nearby(address, advert.name, advert.rssi, "new", match[1], None, time.time()))
 
         try:
-            await self.scanner.scan(seconds, found, heard_other)
+            for seen in await self.scanner.scan(seconds, found, heard_other):
+                # The scanner re-lists a light only when more than its strength changed; the last list has its latest.
+                if (entry := self.nearby.get(seen.address)) is not None:
+                    entry["rssi"], entry["seen_at"] = seen.rssi, seen.seen_at
         finally:
             self.scanning = False
             self._broadcast({"type": "nearby", "nearby": list(self.nearby.values()), "scanning": False})
@@ -976,6 +985,8 @@ class Hub:
         driver = fixture.driver
         if not self.on_network(fixture):
             raise HubError(f"{fixture.light.name} is on another network. Switch to it first.")
+        if driver is self.godox and isinstance(self.link, NoLink):
+            raise HubError(f"Could not flash {fixture.light.name}: it is not connected. Check it is on and close by.")
         if light_id in self._identifying:
             return driver.id
         self._identifying.add(light_id)
@@ -985,7 +996,7 @@ class Hub:
             fixture.engine.stop()
             if driver is not self.godox or not fixture.adopting:  # a mesh light not read yet has no state of ours to trust
                 driver.apply(fixture.light, fixture.state)
-            await asyncio.wait_for(driver.identify(fixture.light), timeout=IDENTIFY_SECONDS)
+            await asyncio.wait_for(self._flash(driver, fixture), timeout=IDENTIFY_SECONDS)
         except TimeoutError:
             raise HubError(f"{fixture.light.name} did not answer. Check it is on and close by.") from None
         except Exception:  # noqa: BLE001 - the page gets plain words, the log gets the detail
@@ -994,6 +1005,13 @@ class Hub:
         finally:
             self._identifying.discard(light_id)
         return driver.id
+
+    async def _flash(self, driver: Driver, fixture: Fixture) -> None:
+        if driver is self.godox:
+            # Pulses sent with no link would be lost. Just after pairing, or after a drop, the link is
+            # reconnecting: IDENTIFY_SECONDS allows for that connect.
+            await self.godox.linked.wait()
+        await driver.identify(fixture.light)
 
     async def set_max_mode(self, light_id: str, on: bool) -> None:
         """Switch a light's Max Mode (turbo) on or off, and tell every client.
@@ -1087,15 +1105,21 @@ class Hub:
                 self._pairing_step(address, "failed", str(err) or type(err).__name__)
                 await self._relink(self.network)  # back to the lights we had
                 raise HubError(f"pairing failed: {err}") from err
-            light = self.library.add_paired(
-                network_id=network, address=address, radio_id=radio, node_address=node,
-                num_elements=paired.num_elements, device_key=paired.device_key, name=name,
-            )
-            if light.id in self.fixtures:
-                await self._drop_fixture(light.id)  # a saved light that was reset and paired again
-            fixture = self._add_fixture(light)
-            client.selected = light.id
-            await self._relink(network)
+            try:
+                light = self.library.add_paired(
+                    network_id=network, address=address, radio_id=radio, node_address=node,
+                    num_elements=paired.num_elements, device_key=paired.device_key, name=name,
+                )
+                if light.id in self.fixtures:
+                    await self._drop_fixture(light.id)  # a saved light that was reset and paired again
+                fixture = self._add_fixture(light)
+                client.selected = light.id
+                await self._relink(network)
+            except Exception as err:
+                logger.exception("could not save the light paired at %s", address)
+                self._pairing_step(address, "failed", "the light paired but could not be saved")
+                await self._relink(self.network)
+                raise HubError("pairing failed: the light paired but could not be saved") from err
             fixture.adopting = False  # fresh from the factory: our state is the truth
         self._pairing_step(address, "done")
         self.nearby.pop(address, None)
@@ -1278,6 +1302,7 @@ class Hub:
         for fixture in self.fixtures.values():
             if not self.on_network(fixture):
                 continue
+            fixture.stream_source = None
             fixture.engine.stop(restore=False)
             target = fixture.state.model_copy(update={"power": on})
             if fade > 0:

@@ -137,11 +137,13 @@ class CommandPump:
 
         Attaching forgets what was last sent: after a reconnect the light's
         state is unknown, so the next control send re-asserts power and mode.
+        Queued jobs are failed: each holds the old link's controller.
         """
         self._sender = sender
         self._generation += 1
         self._last_power.clear()
         self._last_mode_frame.clear()
+        self._fail_jobs(ConnectionResetError("the link dropped"))
         if sender is not None:
             self._wake.set()
 
@@ -162,10 +164,13 @@ class CommandPump:
         """
         self._desired.clear()
         self.forget(everything=True)
+        self._fail_jobs(ConnectionResetError("the link moved to another network"))
+
+    def _fail_jobs(self, err: Exception) -> None:
         while self._aux:
             _job, future = self._aux.popleft()
             if not future.done():
-                future.set_exception(ConnectionResetError("the link moved to another network"))
+                future.set_exception(err)
 
     def drop(self, node: int | None) -> None:
         """Forget a light entirely: nothing pending, nothing remembered."""
@@ -198,6 +203,7 @@ class CommandPump:
         job, future = self._aux.popleft()
         if future.done():
             return  # its caller gave up (timed out); running it late would surprise them
+        generation = self._generation
         try:
             result = await job()
         except Exception as err:  # noqa: BLE001 - reported to whoever queued it
@@ -205,8 +211,9 @@ class CommandPump:
             if not future.done():
                 future.set_exception(err)
             # A light that did not answer is normal; a write that failed is link trouble,
-            # and after it the sequence number may already be spent.
-            if not isinstance(err, TimeoutError) and self._on_send_failure is not None:
+            # and after it the sequence number may already be spent. A failure on a link
+            # already replaced says nothing about the new one.
+            if generation == self._generation and not isinstance(err, TimeoutError) and self._on_send_failure is not None:
                 self._on_send_failure(err)
         else:
             if not future.done():

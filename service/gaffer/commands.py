@@ -10,11 +10,13 @@ light this browser is editing when there is none.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from godox_mesh_bt.protocol import build_status_request, build_v2_command, parse_v2_payload
+from pydantic import ValidationError
 
 from .adapt import adapt_state
 from .effects.base import Frame
@@ -22,9 +24,12 @@ from .fixture import Fixture
 from .frames import mode_frame
 from .hub import Client, Hub, HubError
 from .levels import scale_levels
-from .state import LightState, StateError, apply_patch, merge_patch
+from .state import LightState, StateError, apply_patch, merge_patch, plain_error
 from .store import COLLECTIONS
 from .sync import RECORD_CCT, RECORD_HSI
+
+
+logger = logging.getLogger(__name__)
 
 
 class CommandError(ValueError):
@@ -76,9 +81,16 @@ def _fitted(fixture: Fixture, patch: Any) -> LightState:
     if not isinstance(patch, dict):
         raise CommandError("expected an object")
     try:
-        return adapt_state(LightState.model_validate(merge_patch(_base(fixture), patch)), fixture.caps)
+        fitted = adapt_state(LightState.model_validate(merge_patch(_base(fixture), patch)), fixture.caps)
+    except ValidationError as err:
+        raise CommandError(f"that look is not readable: {plain_error(err)}") from err
     except ValueError as err:
         raise CommandError(f"that look is not readable: {err}") from err
+    try:
+        mode_frame(fitted, fixture.caps)  # as in _patched: what no frame can carry is refused here, not dropped by the pump
+    except (ValueError, OverflowError, TypeError) as err:
+        raise CommandError(f"the light cannot take that look: {err}") from err
+    return fitted
 
 
 #: Commands that take a light over. Each closes the light's open stream session
@@ -247,6 +259,8 @@ async def _stream(hub: Hub, client: Client, m: dict[str, Any]) -> None:
     if fixture.stream_source is None or str(m.get("source", "stream")) != fixture.stream_source:
         return  # no open session for this source: a late frame after a takeover or an end
     f = m.get("frame") or {}
+    if not isinstance(f, dict):
+        raise CommandError("stream frames are objects")
     mode = f.get("mode", "hsi")
     if mode not in ("hsi", "cct", "rgbw"):
         raise CommandError("stream frames are hsi, cct or rgbw")
@@ -399,8 +413,11 @@ async def _scan(hub: Hub, client: Client, m: dict[str, Any]) -> dict[str, Any]:
     seconds = max(2.0, min(20.0, float(m.get("seconds") or 6)))
     try:
         nearby = await hub.scan(seconds)
+    except HubError:
+        raise
     except Exception as err:
-        raise CommandError(f"could not scan: {err}") from err
+        logger.exception("scan failed")  # the message can carry a path on this Mac: it stays in the log
+        raise CommandError("Gaffer could not scan for lights. Try again.") from err
     return {"type": "ack", "of": "lights.scan", "nearby": nearby}
 
 
