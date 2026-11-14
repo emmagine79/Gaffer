@@ -1,4 +1,4 @@
-import { useCallback, useRef, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
+import { useCallback, useRef, type KeyboardEvent, type PointerEvent } from 'react'
 import { clamp } from '../lib/color'
 import './controls.css'
 
@@ -11,20 +11,14 @@ interface Props {
   label: string
   /** CSS background for the track; when given, no fill is drawn. */
   track?: string
-  format?: (value: number) => ReactNode
   vertical?: boolean
   showValue?: boolean
-  disabled?: boolean
-  className?: string
-  /** Snap points drawn as ticks under the track. */
-  ticks?: number[]
 }
 
 const snap = (v: number, step: number, min: number) => Math.round((v - min) / step) * step + min
 
 export function Slider({
-  value, min, max, step = 1, onChange, label, track, format, vertical = false,
-  showValue = true, disabled = false, className = '', ticks,
+  value, min, max, step = 1, onChange, label, track, vertical = false, showValue = true,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const span = max - min || 1
@@ -55,12 +49,12 @@ export function Slider({
 
   const pos = `${fraction * 100}%`
   return (
-    <div className={`slider ${vertical ? 'slider--v' : ''} ${disabled ? 'is-disabled' : ''} ${className}`}>
+    <div className={`slider ${vertical ? 'slider--v' : ''}`}>
       <div
         ref={ref}
         className="slider-body"
         role="slider"
-        tabIndex={disabled ? -1 : 0}
+        tabIndex={0}
         aria-label={label}
         aria-valuemin={min}
         aria-valuemax={max}
@@ -68,7 +62,6 @@ export function Slider({
         aria-orientation={vertical ? 'vertical' : 'horizontal'}
         onKeyDown={onKey}
         onPointerDown={(e) => {
-          if (disabled) return
           ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
           fromPointer(e)
         }}
@@ -79,14 +72,9 @@ export function Slider({
         <div className="slider-track" style={track ? { background: track } : undefined}>
           {!track && <div className="slider-fill" style={vertical ? { height: pos } : { width: pos }} />}
         </div>
-        {ticks?.map((t) => (
-          <span key={t} className="slider-tick" style={vertical
-            ? { bottom: `${((t - min) / span) * 100}%` }
-            : { left: `${((t - min) / span) * 100}%` }} />
-        ))}
         <div className="slider-thumb" style={vertical ? { bottom: pos } : { left: pos }} />
       </div>
-      {showValue && <output className="slider-value">{format ? format(value) : value}</output>}
+      {showValue && <output className="slider-value">{value}</output>}
     </div>
   )
 }

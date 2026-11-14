@@ -3,7 +3,6 @@ import type { LightState } from './types'
 export type RGB = [number, number, number] // 0-1
 
 export const clamp = (v: number, lo: number, hi: number) => (v < lo ? lo : v > hi ? hi : v)
-export const lerp = (a: number, b: number, f: number) => a + (b - a) * f
 
 export function kelvinToRgb(kelvin: number): RGB {
   const t = clamp(kelvin, 1000, 40000) / 100
@@ -32,20 +31,7 @@ export function hsvToRgb(h: number, s: number, v = 100): RGB {
   return [r + m, g + m, b + m]
 }
 
-export function rgbToHsv([r, g, b]: RGB): [number, number, number] {
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const d = max - min
-  let h = 0
-  if (d !== 0) {
-    if (max === r) h = 60 * (((g - b) / d) % 6)
-    else if (max === g) h = 60 * ((b - r) / d + 2)
-    else h = 60 * ((r - g) / d + 4)
-  }
-  return [(h + 360) % 360, max === 0 ? 0 : (d / max) * 100, max * 100]
-}
-
-export function hexToRgb(hex: string): RGB {
+function hexToRgb(hex: string): RGB {
   let t = hex.replace('#', '')
   if (t.length === 3) t = t.split('').map((c) => c + c).join('')
   const n = parseInt(t.slice(0, 6), 16)
@@ -53,16 +39,8 @@ export function hexToRgb(hex: string): RGB {
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
 }
 
-export function rgbToHex([r, g, b]: RGB): string {
-  return '#' + [r, g, b].map((c) => Math.round(clamp(c, 0, 1) * 255).toString(16).padStart(2, '0')).join('')
-}
-
 export const rgbCss = ([r, g, b]: RGB, alpha = 1) =>
   `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)} / ${alpha})`
-
-export function isValidHex(v: string) {
-  return /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(v.trim())
-}
 
 /** Green/magenta tint: positive pushes magenta (less green), negative pushes green. */
 function tinted([r, g, b]: RGB, gm: number): RGB {
@@ -73,7 +51,7 @@ function tinted([r, g, b]: RGB, gm: number): RGB {
 }
 
 /** The colour a state emits, at full brightness. Null when it has no fixed colour. */
-export function stateColor(s: LightState): RGB | null {
+function stateColor(s: LightState): RGB | null {
   switch (s.mode) {
     case 'cct':
       return tinted(kelvinToRgb(s.cct.kelvin), s.cct.gm)
@@ -98,14 +76,6 @@ export function emission(s: LightState): { rgb: RGB; level: number } {
   const level = s.power ? Math.pow(clamp(s.brightness, 0, 100) / 100, 0.6) : 0
   return { rgb, level }
 }
-
-/** Relative luminance, for choosing readable text on a swatch. */
-export function luminance([r, g, b]: RGB) {
-  const lin = (c: number) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4))
-  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
-}
-
-export const inkOn = (rgb: RGB) => (luminance(rgb) > 0.45 ? '#16171a' : '#f4f4f2')
 
 export function hueName(h: number): string {
   const names: [number, string][] = [

@@ -293,3 +293,19 @@ test('the 0 key does what the All off / All on button says', async ({ page }) =>
   await page.keyboard.press('0')
   await expect.poll(powers).not.toContain(false)
 })
+
+test('a saved look is a numbered button on the desk, applies, and lights up while it is the current look', async ({ page }) => {
+  const key = (await lights(page)).find((l) => l.name === 'Key light')!
+  const saved = await page.request.post(`${base()}/api/looks`, {
+    data: { name: 'Desk look', fade_seconds: 0, lights: { [key.id]: { power: true, brightness: 37 } } },
+  })
+  expect(saved.ok()).toBe(true)
+  await open(page, 'window')
+  await page.getByRole('button', { name: 'All lights' }).click()
+  const button = desk(page).locator('.d-look[title="Desk look"]')
+  await expect(button).toBeVisible()
+  await expect(button).not.toHaveClass(/\bon\b/)
+  await button.click()
+  await expect.poll(() => levelOf(page, 'Key light')).toBe(37)
+  await expect(button).toHaveClass(/\bon\b/)
+})

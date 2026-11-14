@@ -15,10 +15,8 @@ button { cursor: pointer; }
 h1, h2, h3, h4, p { margin: 0; }
 
 /* Kept for lumen screens still in use (add a light, groups, effects, schedules). */
-.readout { font-stretch: var(--wide); font-weight: 760; letter-spacing: -0.035em; line-height: 0.95; }
 .muted { color: var(--graphite); }
 .dim { color: var(--graphite-dim); }
-.narrow { font-stretch: var(--narrow); }
 .sr-only {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;

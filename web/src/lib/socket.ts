@@ -7,6 +7,8 @@ import type { ServerMessage } from './types'
  */
 export const SOCKET_CLOSED = 'gaffer:socket-closed'
 
+const OFFLINE = 'Gaffer is not connected to the lights service. Wait a moment and try again.'
+
 type Listener = (m: ServerMessage) => void
 type StatusListener = (open: boolean) => void
 
@@ -25,7 +27,7 @@ export class Socket {
   private pendingSet: Record<string, unknown> | null = null
   private pendingPower: Record<string, unknown> | null = null
   private rid = 0
-  private waiters = new Map<number, (m: ServerMessage) => void>()
+  private waiters = new Map<number, { answer: (m: ServerMessage) => void; fail: (e: Error) => void }>()
 
   private url: string
 
@@ -57,12 +59,14 @@ export class Socket {
       }
       const rid = (message as { rid?: number }).rid
       if (rid !== undefined && this.waiters.has(rid)) {
-        this.waiters.get(rid)?.(message)
+        this.waiters.get(rid)?.answer(message)
         this.waiters.delete(rid)
       }
       this.listeners.forEach((l) => l(message))
     }
     ws.onclose = () => {
+      this.waiters.forEach((w) => w.fail(new Error(OFFLINE)))
+      this.waiters.clear()
       this.statusListeners.forEach((l) => l(false))
       window.dispatchEvent(new Event(SOCKET_CLOSED))
       const delay = Math.min(8000, 400 * 2 ** this.retry++)
@@ -86,16 +90,23 @@ export class Socket {
 
   /** Send and wait for the reply carrying the same request id. */
   request(message: Record<string, unknown>, timeoutMs = 6000): Promise<ServerMessage> {
+    if (this.ws?.readyState !== WebSocket.OPEN) return Promise.reject(new Error(OFFLINE))
     const rid = ++this.rid
     return new Promise((resolve, reject) => {
       const timer = window.setTimeout(() => {
         this.waiters.delete(rid)
         reject(new Error('The studio did not answer in time'))
       }, timeoutMs)
-      this.waiters.set(rid, (m) => {
-        window.clearTimeout(timer)
-        if (m.type === 'error') reject(new Error(m.text))
-        else resolve(m)
+      this.waiters.set(rid, {
+        answer: (m) => {
+          window.clearTimeout(timer)
+          if (m.type === 'error') reject(new Error(m.text))
+          else resolve(m)
+        },
+        fail: (e) => {
+          window.clearTimeout(timer)
+          reject(e)
+        },
       })
       this.send({ ...message, rid })
     })

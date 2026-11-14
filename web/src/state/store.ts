@@ -3,7 +3,7 @@ import { Socket, socketUrl } from '../lib/socket'
 import type {
   Caps, Collection, Device, EngineStatus, GelChip, Group, Hello, LightState, LightView, LightsView, LinkSnapshot,
   LogEntry, ModelRow, Nearby, Pairing, PumpStats, Readback, ServerMessage, Settings, SoftEffect, StatePatch,
-  StoreSnapshot, StoredItem,
+  StoreSnapshot,
 } from '../lib/types'
 
 export type TabId =
@@ -81,7 +81,6 @@ interface Studio {
   powerOf: (id: string, on: boolean, fade?: number) => void
   send: (message: Record<string, unknown>) => void
   request: (message: Record<string, unknown>, timeoutMs?: number) => Promise<ServerMessage>
-  upsert: (collection: Collection, item: Partial<StoredItem> & { name: string }) => Promise<StoredItem | null>
   remove: (collection: Collection, id: string) => void
   toast: (text: string, kind?: Toast['kind']) => void
   dismissToast: (id: number) => void
@@ -296,16 +295,6 @@ export const useStudio = create<Studio>()((set, get) => ({
     socket.send(scoped(message))
   },
   request: (message, timeoutMs) => socket.request(scoped(message), timeoutMs),
-
-  upsert: async (collection, item) => {
-    try {
-      const reply = await socket.request(scoped({ type: 'store.upsert', collection, item }))
-      return (reply as { item?: StoredItem }).item ?? null
-    } catch (err) {
-      get().toast((err as Error).message, 'error')
-      return null
-    }
-  },
 
   remove: (collection, id) => socket.send({ type: 'store.delete', collection, id }),
 
